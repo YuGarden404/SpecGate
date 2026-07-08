@@ -338,7 +338,8 @@
   - 回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，21 个测试 OK。
   - Demo：`$env:PYTHONPATH='src'; python -m specgate.cli run-mock-demo examples/knowledge_nav` 退出码为 0。
   - Docker CLI：`docker --version` 返回 `Docker version 29.1.3, build f52814d`，但提示本机 `C:\Users\Lenovo\.docker\config.json` 权限 warning。
-  - Docker build：`docker build -t specgate:local .` 未通过，根因是本机 Docker buildx 配置目录权限：`CreateFile C:\Users\Lenovo\.docker\buildx\instances: Access is denied`。这不是 Dockerfile 语法失败，后续依赖 CI 的 `docker-build` job 在远端环境验证。
+  - Docker build：`docker build -t specgate:local .` 未通过，首次根因是本机 Docker buildx 配置目录权限：`CreateFile C:\Users\Lenovo\.docker\buildx\instances: Access is denied`。
+  - Docker 复测：打开 Docker 后改用临时 `DOCKER_CONFIG` 继续验证，仍因 daemon 管道权限失败：`open //./pipe/docker_engine: Access is denied`。这不是 Dockerfile 语法失败，后续需要使用具备 Docker 权限的本机终端或依赖 CI 的 `docker-build` job 在远端环境验证。
 - 人工参与：
   - 实现前说明了凭据、Docker、CI、README、SPEC_PROCESS 和 REFLECTION 的职责。
   - 明确 `REFLECTION.md` 只创建结构，最终内容需要学生本人完成。
