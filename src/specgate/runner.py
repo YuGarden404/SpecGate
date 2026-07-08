@@ -8,6 +8,7 @@ from specgate.context import build_context_pack
 from specgate.gate import GateResult, run_html_gate
 from specgate.llm import LLMClient
 from specgate.policy import WorkspacePolicy
+from specgate.snapshot import FileSnapshot
 from specgate.tools import ToolDispatcher
 from specgate.trace import TraceStore
 
@@ -25,7 +26,8 @@ class AgentRunner:
         self.llm = llm
         self.policy = policy
         self.max_steps = max_steps
-        self.dispatcher = ToolDispatcher(policy)
+        snapshot = FileSnapshot.capture(root, policy.allowed_write_paths)
+        self.dispatcher = ToolDispatcher(policy, snapshot)
         self.trace = TraceStore(root / "runs" / "latest" / "trace.jsonl")
 
     def run(self) -> RunResult:

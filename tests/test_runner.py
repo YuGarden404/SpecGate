@@ -19,6 +19,27 @@ FIXED_HTML = (
 )
 
 
+class MutatingLLM:
+    def __init__(self, root: Path):
+        self.root = root
+        self.calls = 0
+
+    def complete(self, context: str) -> str:
+        self.calls += 1
+        if self.calls == 1:
+            return (
+                '{"schema_version":"1","action":"write_file",'
+                '"args":{"path":"index.html","content":"<!doctype html><html><body>draft</body></html>"}}'
+            )
+        if self.calls == 2:
+            (self.root / "index.html").write_text("external edit", encoding="utf-8")
+            return (
+                '{"schema_version":"1","action":"replace_file",'
+                '"args":{"path":"index.html","content":"agent overwrite"}}'
+            )
+        return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
+
+
 class RunnerTests(unittest.TestCase):
     def test_gate_failure_feedback_changes_next_action(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -62,6 +83,25 @@ class RunnerTests(unittest.TestCase):
             self.assertFalse(result.passed)
             trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("unknown action", trace_text)
+
+    def test_external_file_change_is_blocked_and_traced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# 页面设计", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            llm = MutatingLLM(root)
+            policy = WorkspacePolicy(
+                root,
+                {"write_file", "replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            AgentRunner(root, llm, policy, max_steps=3).run()
+
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("file changed since run started", trace_text)
+            self.assertEqual((root / "index.html").read_text(encoding="utf-8"), "external edit")
 
 
 if __name__ == "__main__":
