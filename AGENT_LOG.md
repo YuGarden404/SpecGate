@@ -176,3 +176,32 @@
 - 人工参与：
   - 实现前说明了 `tests/test_tools.py` 与 `tools.py` 的职责。
   - 明确该任务只连接 action、policy 和文件读写，不引入 shell、Playwright 或复杂前端。
+
+## 2026-07-08
+
+- Task：Task 5 静态 HTML Gate 与 Checklist 检查。
+- 分支：`feat-task-1-skeleton`。
+- Superpowers：
+  - 使用 `test-driven-development` 执行红-绿流程。
+  - 使用 `executing-plans` 按 `PLAN.md` 执行 Task 5。
+  - 遇到摘要断言失败后使用 `systematic-debugging` 定位根因。
+  - 使用 `verification-before-completion` 在提交前重新验证测试结果。
+- 文件变更：
+  - 新增 `tests/test_gate.py`，定义静态 HTML Gate 的通过和失败行为规格。
+  - 新增 `src/specgate/gate.py`，实现 `GateIssue`、`GateCheck`、`GateResult` 和 `run_html_gate()`。
+- 代码作用：
+  - `GateCheck` 表示每一条确定性检查是否通过。
+  - `GateIssue` 表示失败原因、证据和修复建议，后续会作为反馈传给 agent。
+  - `GateResult` 汇总 Gate 是否通过、检查列表、问题列表和自然语言摘要。
+  - `run_html_gate()` 使用 Python 标准库 `HTMLParser` 静态检查 `index.html`，覆盖 doctype、HTML 基础标签、viewport、搜索/过滤、关系能力、离线资源、疑似密钥、至少 10 个知识节点，以及 `CHECKLIST.md` 中 `- 必须包含 X` 格式的内容要求。
+  - Gate 不运行浏览器、不联网、不做 Playwright，符合 MVP 边界。
+- TDD 证据：
+  - 红灯：`$env:PYTHONPATH='src'; python -m unittest tests.test_gate -v` 失败，原因是 `ModuleNotFoundError: No module named 'specgate.gate'`。
+  - 首次实现后测试失败：`test_missing_nodes_fails_with_repair_hint` 断言摘要缺少“至少 10 个”。
+  - 根因：失败摘要只取前 4 个 issue，`too_few_nodes` 被前面的结构性问题挤出摘要。
+  - 修复：生成失败摘要时优先展示 `too_few_nodes` 的修复建议。
+  - 绿灯：`$env:PYTHONPATH='src'; python -m unittest tests.test_gate -v` 通过，2 个测试 OK。
+  - 回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，13 个测试 OK。
+- 人工参与：
+  - 实现前说明了 `tests/test_gate.py` 与 `gate.py` 的职责。
+  - 明确该任务只做静态 Gate，不扩大到浏览器自动化、联网检查或复杂前端分析。
