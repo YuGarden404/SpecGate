@@ -6,6 +6,7 @@ from typing import Any
 
 from specgate.actions import Action
 from specgate.policy import WorkspacePolicy, check_action
+from specgate.snapshot import FileSnapshot
 
 
 @dataclass(frozen=True)
@@ -18,8 +19,9 @@ class ToolResult:
 
 
 class ToolDispatcher:
-    def __init__(self, policy: WorkspacePolicy):
+    def __init__(self, policy: WorkspacePolicy, snapshot: FileSnapshot | None = None):
         self.policy = policy
+        self.snapshot = snapshot
 
     def dispatch(self, action: Action) -> ToolResult:
         decision = check_action(action, self.policy)
@@ -48,13 +50,27 @@ class ToolDispatcher:
         return self.policy.root / relative
 
     def _write_file(self, action: Action) -> ToolResult:
-        path = self._resolve(action.args["path"])
+        relative_path = action.args["path"]
+        if self.snapshot is not None:
+            snapshot_decision = self.snapshot.check_unchanged(relative_path)
+            if not snapshot_decision.allowed:
+                return ToolResult(
+                    False,
+                    action.action,
+                    snapshot_decision.reason,
+                    {"path": relative_path},
+                    blocked=True,
+                )
+
+        path = self._resolve(relative_path)
         content = action.args.get("content", "")
         if not isinstance(content, str):
             return ToolResult(False, action.action, "content must be a string")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-        return ToolResult(True, action.action, f"wrote {action.args['path']}", {"path": action.args["path"]})
+        if self.snapshot is not None:
+            self.snapshot.update_after_write(relative_path)
+        return ToolResult(True, action.action, f"wrote {relative_path}", {"path": relative_path})
 
     def _read_file(self, action: Action) -> ToolResult:
         path = self._resolve(action.args["path"])
