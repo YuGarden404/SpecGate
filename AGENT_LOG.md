@@ -152,3 +152,27 @@
 - 人工参与：
   - 实现前说明了 `tests/test_policy.py` 与 `policy.py` 的职责。
   - 明确该任务只做“执行前判断”，不真正读写文件；文件工具留到 Task 4。
+
+## 2026-07-08
+
+- Task：Task 4 文件工具与 Dispatcher。
+- 分支：`feat-task-1-skeleton`。
+- Superpowers：
+  - 使用 `test-driven-development` 执行红-绿流程。
+  - 使用 `executing-plans` 按 `PLAN.md` 执行 Task 4。
+  - 使用 `verification-before-completion` 在提交前重新验证测试结果。
+- 文件变更：
+  - 新增 `tests/test_tools.py`，定义 `ToolDispatcher` 的文件读写和 guardrail blocked 行为规格。
+  - 新增 `src/specgate/tools.py`，实现 `ToolResult` 与 `ToolDispatcher`。
+- 代码作用：
+  - `ToolResult` 统一表示工具执行结果，包括是否成功、消息、数据和是否被 guardrail 阻断。
+  - `ToolDispatcher.dispatch()` 先调用 `check_action()`，只有 policy 放行后才执行具体文件工具。
+  - `write_file` / `replace_file` 写入白名单内文件，`read_file` 读取白名单内文件，`list_files` 返回工作区文件列表，`finish` 表示 agent 请求结束。
+  - `run_command` 没有实现，也不会执行；在当前 policy 下会被 `unknown action` 拦截，符合“不开放 shell”的 MVP 边界。
+- TDD 证据：
+  - 红灯：`$env:PYTHONPATH='src'; python -m unittest tests.test_tools -v` 失败，原因是 `ModuleNotFoundError: No module named 'specgate.tools'`。
+  - 绿灯：同一命令通过，2 个测试 OK。
+  - 回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，11 个测试 OK。
+- 人工参与：
+  - 实现前说明了 `tests/test_tools.py` 与 `tools.py` 的职责。
+  - 明确该任务只连接 action、policy 和文件读写，不引入 shell、Playwright 或复杂前端。
