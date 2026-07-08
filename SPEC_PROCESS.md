@@ -86,7 +86,24 @@ Python CLI harness + mock LLM + 静态 HTML 生成/修复
 - 它做出了哪些与原意不一致的解读。
 - 根据反馈对 `SPEC.md` / `PLAN.md` 做了哪些修订。
 
-当前冷启动验证还未执行。`PLAN.md` 已于 2026-07-07 写入，下一步可以让另一个不同类型的 agent 只读取 `SPEC.md` 和 `PLAN.md` 尝试 1-2 个任务。
+冷启动验证已于 2026-07-08 由 Gemini 3.5 思考完成。验证对象只包含 `SPEC.md` 和 `PLAN.md`。
+
+验证结论：
+
+- `SPEC.md` 与运行时输入 `TASK_SPEC.md` 的边界清晰。
+- Task 2 Action parser 可以按红-绿步骤直接执行。
+- Task 3 Workspace Policy / Guardrail 可以按计划执行。
+- Windows PowerShell 的测试命令可执行。
+
+暴露的问题：
+
+- `PLAN.md` Task 3 中后三个测试使用 `Path.cwd()`，虽然能运行，但测试隔离性不如 `tempfile.TemporaryDirectory()`。
+- `SPEC.md` 第 9.1 节描述了完整 `credentials set/status/clear` 交互，而 `PLAN.md` Task 10 的 MVP 实现只做 `credential_status` fail-closed 存根，范围精细度需要对齐。
+
+处理决策：
+
+- 采纳 Task 3 测试隔离建议，统一使用临时目录。
+- 采纳凭据范围说明建议，在 `SPEC.md` 明确 MVP 只要求凭据状态存根和 fail-closed 行为，完整 keyring CLI 属于后续扩展。
 
 ## 6. 当前自检
 

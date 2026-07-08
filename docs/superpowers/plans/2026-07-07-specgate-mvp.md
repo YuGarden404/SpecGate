@@ -413,31 +413,34 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual(decision, GuardrailDecision(True, "allowed"))
 
     def test_blocks_unknown_action(self):
-        policy = WorkspacePolicy(Path.cwd(), {"write_file"}, {"index.html"}, {"index.html"})
-        action = Action("1", "run_command", {"command": "dir"})
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = WorkspacePolicy(Path(tmp), {"write_file"}, {"index.html"}, {"index.html"})
+            action = Action("1", "run_command", {"command": "dir"})
 
-        decision = check_action(action, policy)
+            decision = check_action(action, policy)
 
-        self.assertFalse(decision.allowed)
-        self.assertIn("unknown action", decision.reason)
+            self.assertFalse(decision.allowed)
+            self.assertIn("unknown action", decision.reason)
 
     def test_blocks_path_escape(self):
-        policy = WorkspacePolicy(Path.cwd(), {"write_file"}, {"index.html"}, {"index.html"})
-        action = Action("1", "write_file", {"path": "../outside.txt", "content": "bad"})
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = WorkspacePolicy(Path(tmp), {"write_file"}, {"index.html"}, {"index.html"})
+            action = Action("1", "write_file", {"path": "../outside.txt", "content": "bad"})
 
-        decision = check_action(action, policy)
+            decision = check_action(action, policy)
 
-        self.assertFalse(decision.allowed)
-        self.assertIn("path escapes workspace", decision.reason)
+            self.assertFalse(decision.allowed)
+            self.assertIn("path escapes workspace", decision.reason)
 
     def test_blocks_write_outside_allowlist(self):
-        policy = WorkspacePolicy(Path.cwd(), {"write_file"}, {"index.html"}, {"index.html"})
-        action = Action("1", "write_file", {"path": "secret.txt", "content": "bad"})
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = WorkspacePolicy(Path(tmp), {"write_file"}, {"index.html"}, {"index.html"})
+            action = Action("1", "write_file", {"path": "secret.txt", "content": "bad"})
 
-        decision = check_action(action, policy)
+            decision = check_action(action, policy)
 
-        self.assertFalse(decision.allowed)
-        self.assertIn("write path not allowed", decision.reason)
+            self.assertFalse(decision.allowed)
+            self.assertIn("write path not allowed", decision.reason)
 
 
 if __name__ == "__main__":

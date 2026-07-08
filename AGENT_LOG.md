@@ -69,3 +69,21 @@
   - 计划覆盖 `TASK_SPEC.md`、`MockLLM`、guardrail、Gate、静态报告、Docker、`unit-test` 和冷启动验证。
 - 阻塞：
   - 当前 `.git` 目录为空且 Git 不可用，正式执行任务前需要修复 Git 初始化。
+
+## 2026-07-08
+
+- Task：记录并处理冷启动验证反馈。
+- 外部 agent：Gemini 3.5 思考。
+- 输入限制：
+  - 只提供 `SPEC.md` 和 `PLAN.md`。
+  - 不提供历史对话、`AGENT_LOG.md`、`SPEC_PROCESS.md` 或 `README.md`。
+- 验证结论：
+  - `SPEC.md` 与 `TASK_SPEC.md` 边界清楚。
+  - Task 2 和 Task 3 整体可执行。
+  - Windows PowerShell 测试命令可用。
+- 采纳的修改：
+  - `PLAN.md` Task 3 的后三个测试改为使用 `tempfile.TemporaryDirectory()`，避免依赖 `Path.cwd()`。
+  - `docs/superpowers/plans/2026-07-07-specgate-mvp.md` 同步修改。
+  - `SPEC.md` 第 9.1 节补充 MVP 凭据边界：只实现可测试的 fail-closed 状态存根，完整 keyring CLI 为后续扩展。
+- 判断：
+  - 冷启动验证未发现阻塞正式实现的问题。

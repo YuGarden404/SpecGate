@@ -432,6 +432,8 @@ Mock 模式默认不需要 key。真实 LLM 模式为可选能力，必须通过
 
 如果 OS keyring 不可用，真实 LLM 模式应 fail closed，并提示用户配置方法。`.env` 只允许在明确标注的本地开发模式下使用。
 
+MVP 阶段不要求完整实现动态 keyring 写入命令。MVP 的实现边界是：`MockLLM` 模式无需凭据；真实 provider 默认 fail closed；`credentials.py` 提供可测试的凭据状态存根，证明系统不会在未配置安全凭据时继续调用真实 LLM。完整的 `set/status/clear` 交互命令可作为后续扩展。
+
 ### 9.2 分发
 
 分发形态选择 Docker：
