@@ -449,3 +449,22 @@
   - `$env:PYTHONPATH="src"; python -m specgate.cli run-mock-demo examples/knowledge_nav` 通过。
 - 人工参与：
   - 用户确认默认上下文选择规则和 12000 字符预算可以接受。
+
+## 2026-07-08
+
+- Task：第二阶段安全修改检测。
+- 分支：`main`。
+- 文件变更：
+  - 新增 `src/specgate/snapshot.py`，记录 allowed write paths 的文件快照。
+  - 新增 `tests/test_snapshot.py`，覆盖已存在文件、missing 文件、外部修改和写入后基线更新。
+  - 更新 `src/specgate/tools.py`，写入前检查 snapshot，写入成功后更新 snapshot。
+  - 更新 `src/specgate/runner.py`，run 开始时默认启用文件快照保护。
+  - 更新 `README.md`，说明运行期间用户修改检测。
+- 代码作用：
+  - 防止 agent 在运行期间覆盖用户或外部进程对 allowlist 文件的修改。
+  - 安全拦截以 blocked `ToolResult` 写入 trace，便于报告和复盘。
+- 验证证据：
+  - `$env:PYTHONPATH="src"; python -m unittest discover -s tests -v` 通过。
+  - `$env:PYTHONPATH="src"; python -m specgate.cli run-mock-demo examples/knowledge_nav` 通过。
+- 人工参与：
+  - 用户确认第二阶段采用“先让 Context / Safety / Tooling 都有可测试第一层”的路线。

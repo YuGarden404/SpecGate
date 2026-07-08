@@ -122,6 +122,8 @@ python -m unittest discover -s tests -v
 
 Mock 模式不需要任何凭据。真实 LLM 支持如果后续加入，必须使用 credential manager，不能打印、记录或提交密钥。`.env` 已被忽略，只能作为本地开发 fallback，并且要说明明文风险。
 
+运行期间，SpecGate 会对允许写入的文件建立快照。`write_file` / `replace_file` 写入前会检查目标文件是否被外部修改；如果用户在 run 期间改过文件，harness 会阻止覆盖并在 trace 中记录 blocked tool result。
+
 ## 静态 WebUI
 
 本项目的 WebUI 是一次运行的静态报告，不是复杂前端应用。报告会展示：
