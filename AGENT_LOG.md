@@ -230,3 +230,28 @@
 - 人工参与：
   - 实现前说明了 `tests/test_context.py`、`trace.py` 和 `context.py` 的职责。
   - 明确 Task 6 是反馈闭环的数据准备层，agent 主循环留到 Task 7。
+
+## 2026-07-08
+
+- Task：Task 7 MockLLM 与 Agent Runner 主循环。
+- 分支：`feat-task-1-skeleton`。
+- Superpowers：
+  - 使用 `test-driven-development` 执行红-绿流程。
+  - 使用 `executing-plans` 按 `PLAN.md` 执行 Task 7。
+  - 使用 `verification-before-completion` 在提交前重新验证测试结果。
+- 文件变更：
+  - 新增 `tests/test_runner.py`，定义反馈闭环和 guardrail trace 行为规格。
+  - 新增 `src/specgate/llm.py`，实现 `LLMClient` 协议和 `MockLLM`。
+  - 新增 `src/specgate/runner.py`，实现 `RunResult` 和 `AgentRunner`。
+- 代码作用：
+  - `MockLLM` 按顺序返回预设 JSON action，并记录调用次数，让闭环 demo 可复现。
+  - `AgentRunner.run()` 每轮构造 context、调用 LLM、解析 action、执行工具、对 HTML 写入结果运行 Gate，并写入 trace。
+  - 当 action 是 `finish` 时，runner 使用最近一次 Gate 结果作为最终结果；如果还没有 Gate 结果，则立即运行一次 Gate。
+  - guardrail blocked 的工具结果会写入 `runs/latest/trace.jsonl`，用于证明不允许的动作没有被执行且可追溯。
+- TDD 证据：
+  - 红灯：`$env:PYTHONPATH='src'; python -m unittest tests.test_runner -v` 失败，原因是 `ModuleNotFoundError: No module named 'specgate.llm'`。
+  - 绿灯：同一命令通过，2 个测试 OK。
+  - 回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，17 个测试 OK。
+- 人工参与：
+  - 实现前说明了 `tests/test_runner.py`、`llm.py` 和 `runner.py` 的职责。
+  - 明确 Task 7 只接入 `MockLLM` 主循环，不接真实 LLM、不做 CLI demo、不生成最终报告。
