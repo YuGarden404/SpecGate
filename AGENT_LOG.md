@@ -431,3 +431,21 @@
   - 回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，21 个测试 OK。
 - 人工参与：
   - 用户指出 `TASK_SPEC.md` / `CHECKLIST.md` 太简单，并询问 `reports/latest`、`runs/latest`、`site/` 与 `examples/` 的区别。
+
+## 2026-07-08
+
+- Task：第二阶段上下文管理增强。
+- 分支：`main`。
+- 文件变更：
+  - 新增 `src/specgate/context_selector.py`，实现 Context Manifest 文件选择。
+  - 新增 `tests/test_context_selector.py`，覆盖优先级、跳过规则、预算和非法预算。
+  - 更新 `src/specgate/context.py`，让 context pack 输出 Context Manifest 和 Selected Files。
+  - 更新 `README.md`，说明上下文管理行为。
+- 代码作用：
+  - 将固定拼接上下文升级为按目录扫描、优先级和预算选择上下文。
+  - 默认跳过运行报告、trace 和缓存目录，避免污染后续 LLM 输入。
+- 验证证据：
+  - `$env:PYTHONPATH="src"; python -m unittest discover -s tests -v` 通过。
+  - `$env:PYTHONPATH="src"; python -m specgate.cli run-mock-demo examples/knowledge_nav` 通过。
+- 人工参与：
+  - 用户确认默认上下文选择规则和 12000 字符预算可以接受。
