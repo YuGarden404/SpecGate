@@ -87,3 +87,23 @@
   - `SPEC.md` 第 9.1 节补充 MVP 凭据边界：只实现可测试的 fail-closed 状态存根，完整 keyring CLI 为后续扩展。
 - 判断：
   - 冷启动验证未发现阻塞正式实现的问题。
+
+## 2026-07-08 11:11:14 +08:00
+
+- Task：Task 1 项目骨架与测试入口。
+- 分支：`feat-task-1-skeleton`。
+- Superpowers：
+  - 使用 `using-git-worktrees` 检查隔离工作区；由于工具环境无法创建 worktree，人工确认后改用隔离分支。
+  - 使用 `test-driven-development` 执行红-绿流程。
+  - 使用 `executing-plans` 按 `PLAN.md` 执行 Task 1。
+- 文件变更：
+  - 新增 `tests/test_imports.py`，验证 `specgate` 包能导入且版本号为 `0.1.0`。
+  - 新增 `pyproject.toml`，定义 Python 包元数据和未来 CLI 入口。
+  - 新增 `src/specgate/__init__.py`，提供最小包入口和版本号。
+  - 更新 `README.md`，加入本地测试命令。
+- TDD 证据：
+  - 红灯：`python -m unittest tests.test_imports -v` 失败，原因是 `ModuleNotFoundError: No module named 'specgate'`。
+  - 绿灯：`$env:PYTHONPATH='src'; python -m unittest tests.test_imports -v` 通过，1 个测试 OK。
+- 人工参与：
+  - 人工要求解释每个文件、代码、目的和作用。
+  - 实现前已说明 Task 1 的文件职责和最小实现边界。
