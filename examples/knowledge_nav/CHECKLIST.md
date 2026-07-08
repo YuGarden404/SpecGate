@@ -1,0 +1,3 @@
+- 必须包含 Spec
+- 必须包含 Gate
+- 必须包含 Checklist

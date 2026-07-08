@@ -279,3 +279,34 @@
 - 人工参与：
   - 实现前说明了 `tests/test_report.py` 与 `report.py` 的职责。
   - 明确 Task 8 的报告是静态 HTML，后续 Task 9 再接入 CLI mock demo。
+
+## 2026-07-08
+
+- Task：Task 9 CLI、示例任务与端到端 mock demo。
+- 分支：`feat-task-1-skeleton`。
+- Superpowers：
+  - 使用 `test-driven-development` 执行红-绿流程。
+  - 使用 `executing-plans` 按 `PLAN.md` 执行 Task 9。
+  - 使用 `verification-before-completion` 在提交前重新验证测试结果。
+- 文件变更：
+  - 新增 `tests/test_cli.py`，定义 `run_mock_demo()` 的端到端行为规格。
+  - 新增 `src/specgate/config.py`，实现 `load_policy()`，从 TOML 配置构造 `WorkspacePolicy`。
+  - 新增 `src/specgate/cli.py`，实现 `run_mock_demo()` 和 `specgate run-mock-demo` 命令入口。
+  - 新增根目录 `specgate.toml`，作为默认 policy 配置示例。
+  - 新增 `examples/knowledge_nav/TASK_SPEC.md`、`CHECKLIST.md`、`specgate.toml`，作为演示任务工作区。
+  - 运行 mock demo 后生成 `examples/knowledge_nav/index.html`，作为可检查的最终 artifact。
+  - 更新 `README.md`，加入 Mock Demo 运行命令和报告路径，并刷新当前状态。
+- 代码作用：
+  - `run_mock_demo(root)` 使用 `MockLLM` 先写入不合格 HTML，再根据 Gate 反馈替换为合格 HTML，最后生成静态报告。
+  - `main()` 提供 `python -m specgate.cli run-mock-demo <workspace>` 命令行入口。
+  - 示例任务展示 harness 的真实输入：`TASK_SPEC.md` + `CHECKLIST.md`，不是根目录课程规约 `SPEC.md`。
+  - `runs/latest/trace.jsonl` 作为运行日志保持未提交；示例最终 `index.html` 和 `reports/latest/index.html` 作为课程展示 artifact 一并提交。
+- TDD 与验证证据：
+  - 红灯：`$env:PYTHONPATH='src'; python -m unittest tests.test_cli -v` 失败，原因是 `ModuleNotFoundError: No module named 'specgate.cli'`。
+  - 绿灯：同一命令通过，1 个测试 OK。
+  - Demo：`$env:PYTHONPATH='src'; python -m specgate.cli run-mock-demo examples/knowledge_nav` 退出码为 0。
+  - Demo 产物：`examples/knowledge_nav/index.html`、`examples/knowledge_nav/reports/latest/index.html`、`examples/knowledge_nav/runs/latest/trace.jsonl` 均已生成。
+  - 回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，19 个测试 OK。
+- 人工参与：
+  - 实现前说明了 `tests/test_cli.py`、`config.py`、`cli.py`、示例任务和 README 的职责。
+  - 明确 Task 9 仍使用 `MockLLM`，不接真实 LLM；凭据、Docker、CI 和最终反思留到 Task 10。
