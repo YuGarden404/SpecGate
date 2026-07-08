@@ -129,3 +129,26 @@
 - 人工参与：
   - 实现前说明了 `tests/test_actions.py` 与 `actions.py` 的职责。
   - 明确该任务只处理 action 解析，不提前实现工具分发或 guardrail。
+
+## 2026-07-08 11:32:04 +08:00
+
+- Task：Task 3 Workspace Policy 与 Guardrail。
+- 分支：`feat-task-1-skeleton`。
+- Superpowers：
+  - 使用 `test-driven-development` 执行红-绿流程。
+  - 使用 `executing-plans` 按 `PLAN.md` 执行 Task 3。
+- 文件变更：
+  - 新增 `tests/test_policy.py`，定义工作区策略和 guardrail 的行为规格。
+  - 新增 `src/specgate/policy.py`，实现 `WorkspacePolicy`、`GuardrailDecision`、`check_action()`。
+- 代码作用：
+  - `WorkspacePolicy` 保存允许的 action、读路径和写路径。
+  - `GuardrailDecision` 表示一个 action 是否允许执行，以及拒绝原因。
+  - `check_action()` 在工具执行前拦截未知动作、路径越界、非白名单写入和非白名单读取。
+  - `_normalize_relative()` 把 Windows 路径分隔符标准化，并拒绝绝对路径或包含 `..` 的路径。
+- TDD 证据：
+  - 红灯：`$env:PYTHONPATH='src'; python -m unittest tests.test_policy -v` 失败，原因是 `ModuleNotFoundError: No module named 'specgate.policy'`。
+  - 绿灯：同一命令通过，4 个测试 OK。
+  - 回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，9 个测试 OK。
+- 人工参与：
+  - 实现前说明了 `tests/test_policy.py` 与 `policy.py` 的职责。
+  - 明确该任务只做“执行前判断”，不真正读写文件；文件工具留到 Task 4。
