@@ -408,3 +408,25 @@
   - GitHub Pages workflow 需要 push 后由远端 Actions 验证。
 - 人工参与：
   - 用户需要 push 后在 GitHub Actions 查看 `Pages` workflow，并在 Settings / Pages 确认 source 为 GitHub Actions。
+
+## 2026-07-08
+
+- Task：示例任务输入与目录说明整理。
+- 分支：`main`。
+- Superpowers：
+  - 使用 `verification-before-completion` 验证整理后的示例仍能通过 Gate 和全量测试。
+- 文件变更：
+  - 扩写 `examples/knowledge_nav/TASK_SPEC.md`，把最小占位需求整理为正式 demo 任务规约。
+  - 扩写 `examples/knowledge_nav/CHECKLIST.md`，拆分自动 Gate 必检项、内置 Gate 检查项和人工验收项。
+  - 新增 `examples/knowledge_nav/README.md`，解释输入文件、输出文件、`reports/latest`、`runs/latest` 和 `site/` 的区别。
+  - 重新生成 `examples/knowledge_nav/reports/latest/index.html`。
+  - 更新 `README.md` 和 `site/index.html`，说明 `examples/knowledge_nav/index.html` 与 `site/index.html` 的职责差异。
+- 代码作用：
+  - 本次未修改 Python harness 核心代码。
+  - 示例任务更清楚地表达“用户需求 + 验收清单 -> Harness 控制 LLM 生成/修复 HTML -> Gate 验收 -> 报告/trace 记录证据”的关系。
+- 验证证据：
+  - Demo：`$env:PYTHONPATH='src'; python -m specgate.cli run-mock-demo examples/knowledge_nav` 退出码为 0。
+  - 报告检查：`examples/knowledge_nav/reports/latest/index.html` 中新增 checklist 项均为 PASS。
+  - 回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，21 个测试 OK。
+- 人工参与：
+  - 用户指出 `TASK_SPEC.md` / `CHECKLIST.md` 太简单，并询问 `reports/latest`、`runs/latest`、`site/` 与 `examples/` 的区别。

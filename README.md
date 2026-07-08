@@ -78,6 +78,16 @@ python -m specgate.cli run-mock-demo examples/knowledge_nav
 examples/knowledge_nav/reports/latest/index.html
 ```
 
+示例任务目录说明：
+
+- `examples/knowledge_nav/TASK_SPEC.md`：运行时用户需求，描述要生成的 HTML 页面。
+- `examples/knowledge_nav/CHECKLIST.md`：运行时验收清单，其中 `- 必须包含 ...` 会被 Gate 自动检查。
+- `examples/knowledge_nav/index.html`：SpecGate 生成的最终 HTML 产物。
+- `examples/knowledge_nav/reports/latest/index.html`：一次运行的静态报告。
+- `examples/knowledge_nav/runs/latest/trace.jsonl`：逐步运行日志，每行是一条 JSON 事件。
+
+`site/index.html` 是 GitHub Pages 的公开首页，不是 harness 的运行输入；Pages workflow 会把示例产物复制到公开站点中。
+
 ## Docker
 
 ```powershell
