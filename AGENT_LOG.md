@@ -388,3 +388,23 @@
   - 本地回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，21 个测试 OK。
 - 人工参与：
   - 明确仓库实际托管在 GitHub，因此在课程要求的 `.gitlab-ci.yml` 之外补充 GitHub Actions，方便老师查看远端 pass 记录。
+
+## 2026-07-08
+
+- Task：GitHub Pages 静态 WebUI 部署准备。
+- 分支：`main`。
+- Superpowers：
+  - 使用 `verification-before-completion` 在提交前重新运行本地测试。
+- 文件变更：
+  - 新增 `.github/workflows/pages.yml`，使用 GitHub Actions 发布 `site/`。
+  - 新增 `site/index.html`，作为公开 WebUI 首页。
+  - 更新 `README.md` 的静态 WebUI URL 和 Pages 设置说明。
+- 代码作用：
+  - Pages workflow 会在部署前重新运行 mock demo，复制 `examples/knowledge_nav/index.html` 到 `site/demo/index.html`，复制运行报告到 `site/report/index.html`。
+  - `site/index.html` 提供 WebUI 首页、知识图谱 demo、运行报告和 GitHub 仓库入口。
+- 验证证据：
+  - 本地回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，21 个测试 OK。
+  - 静态检查：`git diff --check` 退出码为 0，仅提示 Windows 行尾转换 warning。
+  - GitHub Pages workflow 需要 push 后由远端 Actions 验证。
+- 人工参与：
+  - 用户需要 push 后在 GitHub Actions 查看 `Pages` workflow，并在 Settings / Pages 确认 source 为 GitHub Actions。

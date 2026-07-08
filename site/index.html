@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SpecGate WebUI</title>
+  <style>
+    :root {
+      --bg: #eef2f6;
+      --ink: #17202a;
+      --muted: #667382;
+      --line: #d8e0ea;
+      --paper: #ffffff;
+      --blue: #2f6fed;
+      --teal: #0f8a83;
+      --orange: #c46a2f;
+      --shadow: 0 24px 70px rgba(18, 28, 42, 0.13);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(180deg, #f4f7fb 0%, #edf2f7 100%);
+      color: var(--ink);
+      font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+    .topbar {
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      background: rgba(250, 252, 255, 0.92);
+      border-bottom: 1px solid var(--line);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; }
+    .brand-mark {
+      width: 44px;
+      height: 30px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      background: linear-gradient(135deg, #17202a, #2f6fed);
+      font-size: 13px;
+    }
+    .progress { height: 4px; background: linear-gradient(90deg, var(--blue), var(--teal), var(--orange)); }
+    main {
+      width: min(1120px, calc(100vw - 48px));
+      margin: 56px auto;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 48px;
+    }
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    h1 { margin: 0; font-size: 42px; line-height: 1.12; }
+    .lead { max-width: 760px; color: var(--muted); font-size: 18px; line-height: 1.6; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 34px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 22px;
+      min-height: 190px;
+      color: inherit;
+      text-decoration: none;
+      transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+    }
+    .card:hover {
+      border-color: var(--blue);
+      box-shadow: 0 12px 24px rgba(47, 111, 237, 0.12);
+      transform: translateY(-1px);
+    }
+    .card strong { display: block; font-size: 22px; margin-bottom: 10px; }
+    .card span { color: var(--muted); line-height: 1.55; }
+    .meta {
+      margin-top: 34px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      line-height: 1.7;
+    }
+    code { color: var(--orange); font-weight: 700; }
+    @media (max-width: 760px) {
+      main { padding: 28px; margin: 24px auto; }
+      h1 { font-size: 32px; }
+      .cards { grid-template-columns: 1fr; }
+      .topbar { align-items: flex-start; height: auto; gap: 8px; flex-direction: column; padding: 14px 18px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">SG</span><span>SpecGate WebUI</span></div>
+    <span>Python CLI Harness · MockLLM · Guardrail · Gate</span>
+  </header>
+  <div class="progress" aria-hidden="true"></div>
+  <main>
+    <p class="eyebrow">AI4SE Coding Agent Harness</p>
+    <h1>SpecGate 静态 HTML 生成与修复闭环</h1>
+    <p class="lead">
+      SpecGate 读取任务规约和检查清单，用可注入的 MockLLM 产生严格 JSON 动作，
+      经过白名单工具与 Guardrail 执行，再用静态 HTML Gate 反馈修复结果。
+    </p>
+    <section class="cards" aria-label="SpecGate WebUI links">
+      <a class="card" href="demo/">
+        <strong>知识图谱 Demo</strong>
+        <span>查看 MockLLM 生成的静态 HTML 页面：搜索知识点、点击模块并查看右侧详情。</span>
+      </a>
+      <a class="card" href="report/">
+        <strong>运行报告</strong>
+        <span>查看一次 harness 运行的 Gate 结果、检查项、通过状态和最终产物链接。</span>
+      </a>
+      <a class="card" href="https://github.com/YuGarden404/SpecGate">
+        <strong>GitHub 仓库</strong>
+        <span>查看 SPEC、PLAN、AGENT_LOG、测试、CI、Dockerfile 和完整实现代码。</span>
+      </a>
+    </section>
+    <div class="meta">
+      <div>核心输入：<code>TASK_SPEC.md</code> + <code>CHECKLIST.md</code> + 当前 <code>index.html</code></div>
+      <div>核心机制：Action Parser、Workspace Guardrail、Tool Dispatcher、HTML Gate、Feedback Loop、Trace / Report。</div>
+    </div>
+  </main>
+</body>
+</html>
