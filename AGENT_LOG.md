@@ -318,7 +318,7 @@
 - Superpowers：
   - 使用 `test-driven-development` 执行凭据边界红-绿流程。
   - 使用 `executing-plans` 按 `PLAN.md` 执行 Task 10。
-  - Docker 本机构建失败后使用 `systematic-debugging` 定位为环境权限问题。
+  - Docker 本机构建失败后使用 `systematic-debugging` 区分权限、daemon 和网络代理问题。
   - 使用 `verification-before-completion` 在提交前重新验证测试结果。
 - 文件变更：
   - 新增 `tests/test_credentials.py`，定义 mock 凭据豁免和真实 provider fail-closed 行为。
@@ -339,7 +339,9 @@
   - Demo：`$env:PYTHONPATH='src'; python -m specgate.cli run-mock-demo examples/knowledge_nav` 退出码为 0。
   - Docker CLI：`docker --version` 返回 `Docker version 29.1.3, build f52814d`，但提示本机 `C:\Users\Lenovo\.docker\config.json` 权限 warning。
   - Docker build：`docker build -t specgate:local .` 未通过，首次根因是本机 Docker buildx 配置目录权限：`CreateFile C:\Users\Lenovo\.docker\buildx\instances: Access is denied`。
-  - Docker 复测：打开 Docker 后改用临时 `DOCKER_CONFIG` 继续验证，仍因 daemon 管道权限失败：`open //./pipe/docker_engine: Access is denied`。这不是 Dockerfile 语法失败，后续需要使用具备 Docker 权限的本机终端或依赖 CI 的 `docker-build` job 在远端环境验证。
+  - Docker 复测：打开 Docker 后改用临时 `DOCKER_CONFIG` 继续验证，曾因 daemon 管道权限失败：`open //./pipe/docker_engine: Access is denied`。
+  - Docker 最终人工验证：用户在本机 PowerShell 设置 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 后，`docker pull python:3.11-slim` 成功，`docker build --build-arg HTTP_PROXY=$env:HTTP_PROXY --build-arg HTTPS_PROXY=$env:HTTPS_PROXY -t specgate:local .` 成功，`docker run --rm specgate:local` 退出码为 0。
+  - Codex 环境复测限制：单元测试可运行，但 Codex 进程访问 Docker daemon 仍返回 `permission denied while trying to connect to the docker API at npipe:////./pipe/docker_engine`，因此 Docker 成功证据以用户本机 PowerShell 输出为准。
 - 人工参与：
   - 实现前说明了凭据、Docker、CI、README、SPEC_PROCESS 和 REFLECTION 的职责。
   - 明确 `REFLECTION.md` 只创建结构，最终内容需要学生本人完成。

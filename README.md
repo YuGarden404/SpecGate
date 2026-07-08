@@ -56,9 +56,7 @@ CLI demo、凭据边界、Dockerfile、`.gitlab-ci.yml` 和示例静态报告已
 
 剩余人工事项：
 
-- 补写 `REFLECTION.md` 的个人反思内容。
 - 合并 PR 后启用 Pages，并记录静态报告部署 URL。
-- 在可用 Docker 环境中重新验证 `docker build`。
 
 ## 本地测试
 
@@ -86,6 +84,8 @@ examples/knowledge_nav/reports/latest/index.html
 docker build -t specgate:local .
 docker run --rm specgate:local
 ```
+
+已由用户在本机 PowerShell 设置代理环境变量后，完成 `python:3.11-slim` 拉取、镜像构建和容器运行验证。
 
 Mock 模式不需要 API key。真实 LLM 模式尚未作为 MVP 默认能力开放。
 

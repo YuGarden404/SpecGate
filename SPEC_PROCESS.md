@@ -175,8 +175,8 @@ Python CLI harness + mock LLM + 静态 HTML 生成/修复
 - 每个实现任务均先写失败测试，再补最小实现。
 - 最终全量测试使用 `$env:PYTHONPATH="src"; python -m unittest discover -s tests -v`。
 - mock demo 使用 `python -m specgate.cli run-mock-demo examples/knowledge_nav`。
+- Docker 由用户在本机 PowerShell 使用代理环境变量完成 `python:3.11-slim` 拉取、`specgate:local` 镜像构建和容器运行验证。
 
 待人工完成：
 
-- `REFLECTION.md` 中的个人反思内容。
 - 远端 CI / Pages 部署后的 URL 记录。

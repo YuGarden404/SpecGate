@@ -38,13 +38,13 @@ Gemini 主要指出了两个问题：第一，Task 3 中部分测试使用 `Path
 
 这个项目的 MVP 使用 mock 模式，因此不需要 API key。真实 LLM 如果后续加入，也不应该随便读取 `.env`，更不能把 key 打印到日志或 trace 里。所以我们在 MVP 中只实现了 `credential_status()` 的 fail-closed 行为：mock provider 可以安全运行，真实 provider 默认不配置、不允许运行。
 
-Docker 和 CI 的要求让我意识到，课程项目不能只是“我本机能跑的脚本”。`Dockerfile`、`.gitlab-ci.yml` 和单元测试让项目更接近一个可交付的软件工程项目。本机 Docker 构建因为 Docker 配置目录权限问题没有验证通过，这一点也被记录在 `AGENT_LOG.md` 里，而不是假装成功。
+Docker 和 CI 的要求让我意识到，课程项目不能只是“我本机能跑的脚本”。`Dockerfile`、`.gitlab-ci.yml` 和单元测试让项目更接近一个可交付的软件工程项目。Docker 验证一开始因为配置目录权限和网络连接失败，但后来在本机打开 Docker 并设置代理环境变量后，`docker pull`、`docker build` 和 `docker run` 都完成了验证。这个过程也被记录在 `AGENT_LOG.md` 里，而不是只保留成功结果。
 
 ## 如果重做会改变什么
 
 如果重做一次，我会更早确定 GitHub Pages 或 GitLab Pages 的部署方式。因为项目最后需要一个静态 Web 报告 URL，而这个和仓库平台、分支、目录结构都有关系，越早确定越容易安排。
 
-我也会更早加入 GitHub Actions。现在仓库实际托管在 GitHub，而 `.gitlab-ci.yml` 主要是满足课程文件要求。如果老师要求在平台上看到真实运行的 CI，GitHub Actions 会更直接。另外，`REFLECTION.md` 应该边做边写，不应该最后才集中补。Docker 也应该更早验证，避免最后才发现本机环境权限问题。
+我也会更早加入 GitHub Actions。现在仓库实际托管在 GitHub，而 `.gitlab-ci.yml` 主要是满足课程文件要求。如果老师要求在平台上看到真实运行的 CI，GitHub Actions 会更直接。另外，`REFLECTION.md` 应该边做边写，不应该最后才集中补。Docker 也应该更早验证，因为权限、代理和镜像拉取问题都属于工程交付的一部分。
 
 ## 对 Superpowers 方法论的批判
 
