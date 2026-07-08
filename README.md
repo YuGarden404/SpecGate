@@ -97,6 +97,8 @@ Mock 模式不需要 API key。真实 LLM 模式尚未作为 MVP 默认能力开
 python -m unittest discover -s tests -v
 ```
 
+因为仓库实际托管在 GitHub，`.github/workflows/ci.yml` 也提供同名 `unit-test` job，并额外执行 Docker 镜像构建检查。
+
 ## 已知限制
 
 - MVP 不开放 shell。

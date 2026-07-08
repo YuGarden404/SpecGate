@@ -371,3 +371,20 @@
 - 人工参与：
   - 用户提供老师演示项目截图和课堂知识搜索页面参考。
   - 明确本次改动只提升评审展示效果，不改变 A 类 Coding Agent Harness 的核心边界。
+
+## 2026-07-08
+
+- Task：GitHub Actions CI 补充。
+- 分支：`main`。
+- Superpowers：
+  - 使用 `verification-before-completion` 在提交前重新运行本地测试。
+- 文件变更：
+  - 新增 `.github/workflows/ci.yml`。
+  - 更新 `README.md` 的 CI 说明。
+- 代码作用：
+  - GitHub `unit-test` job 在 push 和 pull request 时运行 `python -m unittest discover -s tests -v`。
+  - GitHub `docker-build` job 构建 `specgate:ci`，用于补充 GitHub 平台上的分发验证。
+- 验证证据：
+  - 本地回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，21 个测试 OK。
+- 人工参与：
+  - 明确仓库实际托管在 GitHub，因此在课程要求的 `.gitlab-ci.yml` 之外补充 GitHub Actions，方便老师查看远端 pass 记录。
