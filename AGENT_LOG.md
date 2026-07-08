@@ -205,3 +205,28 @@
 - 人工参与：
   - 实现前说明了 `tests/test_gate.py` 与 `gate.py` 的职责。
   - 明确该任务只做静态 Gate，不扩大到浏览器自动化、联网检查或复杂前端分析。
+
+## 2026-07-08
+
+- Task：Task 6 Trace Store 与 Context Builder。
+- 分支：`feat-task-1-skeleton`。
+- Superpowers：
+  - 使用 `test-driven-development` 执行红-绿流程。
+  - 使用 `executing-plans` 按 `PLAN.md` 执行 Task 6。
+  - 使用 `verification-before-completion` 在提交前重新验证测试结果。
+- 文件变更：
+  - 新增 `tests/test_context.py`，定义 trace 脱敏和 context pack 组装行为规格。
+  - 新增 `src/specgate/trace.py`，实现 `TraceStore` 和 `redact()`。
+  - 新增 `src/specgate/context.py`，实现 `build_context_pack()`。
+- 代码作用：
+  - `TraceStore.append()` 将运行事件追加到 `trace.jsonl`，每行一个 JSON 事件，包含 UTC 时间、事件类型和 payload。
+  - `redact()` 在 trace 落盘前递归脱敏疑似密钥，例如 `sk-...` 和 `api_key=...`。
+  - `build_context_pack()` 将 `TASK_SPEC.md`、`CHECKLIST.md`、`index.html` 摘要和最近 Gate 结果拼接为下一轮 LLM 输入。
+  - 本任务只做记录与上下文构造，不接入 MockLLM，也不启动 runner 主循环。
+- TDD 证据：
+  - 红灯：`$env:PYTHONPATH='src'; python -m unittest tests.test_context -v` 失败，原因是 `ModuleNotFoundError: No module named 'specgate.context'`。
+  - 绿灯：同一命令通过，2 个测试 OK。
+  - 回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，15 个测试 OK。
+- 人工参与：
+  - 实现前说明了 `tests/test_context.py`、`trace.py` 和 `context.py` 的职责。
+  - 明确 Task 6 是反馈闭环的数据准备层，agent 主循环留到 Task 7。
