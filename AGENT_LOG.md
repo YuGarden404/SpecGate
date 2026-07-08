@@ -310,3 +310,35 @@
 - 人工参与：
   - 实现前说明了 `tests/test_cli.py`、`config.py`、`cli.py`、示例任务和 README 的职责。
   - 明确 Task 9 仍使用 `MockLLM`，不接真实 LLM；凭据、Docker、CI 和最终反思留到 Task 10。
+
+## 2026-07-08
+
+- Task：Task 10 凭据边界、Docker、CI 与最终文档。
+- 分支：`feat-task-1-skeleton`。
+- Superpowers：
+  - 使用 `test-driven-development` 执行凭据边界红-绿流程。
+  - 使用 `executing-plans` 按 `PLAN.md` 执行 Task 10。
+  - Docker 本机构建失败后使用 `systematic-debugging` 定位为环境权限问题。
+  - 使用 `verification-before-completion` 在提交前重新验证测试结果。
+- 文件变更：
+  - 新增 `tests/test_credentials.py`，定义 mock 凭据豁免和真实 provider fail-closed 行为。
+  - 新增 `src/specgate/credentials.py`，实现 `CredentialStatus` 和 `credential_status()`。
+  - 新增 `Dockerfile`，默认运行 `examples/knowledge_nav` mock demo。
+  - 新增 `.gitlab-ci.yml`，包含课程要求的 `unit-test` job，并提供 `docker-build` job。
+  - 新增 `REFLECTION.md`，只提供学生本人反思结构，不代写最终观点。
+  - 更新 `README.md`，补充 Docker、CI 和已知限制。
+  - 更新 `SPEC_PROCESS.md`，记录 MVP 实现完成情况和待人工完成事项。
+- 代码作用：
+  - `credential_status("mock")` 返回 configured/safe，说明 mock 模式无需凭据。
+  - 非 mock provider 默认返回 configured=False、safe_to_run=False，避免真实 LLM 在无 keyring 支持时被误启用。
+  - Dockerfile 与 CI 只覆盖 mock demo 和测试路径，不引入真实凭据。
+- TDD 与验证证据：
+  - 红灯：`$env:PYTHONPATH='src'; python -m unittest tests.test_credentials -v` 失败，原因是 `ModuleNotFoundError: No module named 'specgate.credentials'`。
+  - 绿灯：同一命令通过，2 个测试 OK。
+  - 回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，21 个测试 OK。
+  - Demo：`$env:PYTHONPATH='src'; python -m specgate.cli run-mock-demo examples/knowledge_nav` 退出码为 0。
+  - Docker CLI：`docker --version` 返回 `Docker version 29.1.3, build f52814d`，但提示本机 `C:\Users\Lenovo\.docker\config.json` 权限 warning。
+  - Docker build：`docker build -t specgate:local .` 未通过，根因是本机 Docker buildx 配置目录权限：`CreateFile C:\Users\Lenovo\.docker\buildx\instances: Access is denied`。这不是 Dockerfile 语法失败，后续依赖 CI 的 `docker-build` job 在远端环境验证。
+- 人工参与：
+  - 实现前说明了凭据、Docker、CI、README、SPEC_PROCESS 和 REFLECTION 的职责。
+  - 明确 `REFLECTION.md` 只创建结构，最终内容需要学生本人完成。

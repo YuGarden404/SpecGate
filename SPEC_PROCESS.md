@@ -151,3 +151,32 @@ Python CLI harness + mock LLM + 静态 HTML 生成/修复
 - 明确 `TASK_SPEC.md` 是 harness 运行输入。
 - 明确 `.gitlab-ci.yml` 必须包含 `unit-test` job。
 - 保留冷启动验证作为实现前下一步。
+
+## 10. MVP 实现记录
+
+2026-07-08 按 `PLAN.md` 完成 Task 1 到 Task 10 的 MVP 实现。
+
+已完成：
+
+- Python 包骨架与 unittest 入口。
+- 严格 JSON `Action` 解析。
+- workspace guardrail 与白名单文件工具。
+- 静态 HTML Gate 与 Checklist 检查。
+- trace 记录、密钥样文本脱敏与 context pack。
+- `MockLLM` 与 `AgentRunner` 主循环。
+- 静态报告生成。
+- CLI mock demo 与示例任务 `examples/knowledge_nav`。
+- 凭据 fail-closed 边界。
+- Dockerfile 与 `.gitlab-ci.yml` 的 `unit-test` job。
+- `REFLECTION.md` 人工反思结构。
+
+验证方式：
+
+- 每个实现任务均先写失败测试，再补最小实现。
+- 最终全量测试使用 `$env:PYTHONPATH="src"; python -m unittest discover -s tests -v`。
+- mock demo 使用 `python -m specgate.cli run-mock-demo examples/knowledge_nav`。
+
+待人工完成：
+
+- `REFLECTION.md` 中的个人反思内容。
+- 远端 CI / Pages 部署后的 URL 记录。

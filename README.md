@@ -74,6 +74,30 @@ python -m specgate.cli run-mock-demo examples/knowledge_nav
 examples/knowledge_nav/reports/latest/index.html
 ```
 
+## Docker
+
+```powershell
+docker build -t specgate:local .
+docker run --rm specgate:local
+```
+
+Mock 模式不需要 API key。真实 LLM 模式尚未作为 MVP 默认能力开放。
+
+## CI
+
+`.gitlab-ci.yml` 包含 `unit-test` job，会运行：
+
+```text
+python -m unittest discover -s tests -v
+```
+
+## 已知限制
+
+- MVP 不开放 shell。
+- MVP 不做 Playwright。
+- MVP 只处理静态单页 HTML 任务。
+- WebUI 是静态报告，不是实时 dashboard。
+
 ## 安全边界
 
 Mock 模式不需要任何凭据。真实 LLM 支持如果后续加入，必须使用 credential manager，不能打印、记录或提交密钥。`.env` 已被忽略，只能作为本地开发 fallback，并且要说明明文风险。

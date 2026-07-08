@@ -1,0 +1,20 @@
+stages:
+  - test
+  - build
+
+unit-test:
+  stage: test
+  image: python:3.11-slim
+  script:
+    - export PYTHONPATH=src
+    - python -m unittest discover -s tests -v
+
+docker-build:
+  stage: build
+  image: docker:26
+  services:
+    - docker:26-dind
+  script:
+    - docker build -t specgate:ci .
+  rules:
+    - if: $CI_COMMIT_BRANCH
