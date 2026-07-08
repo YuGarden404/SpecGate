@@ -33,7 +33,10 @@ class ContextTests(unittest.TestCase):
 
             pack = build_context_pack(root, gate)
 
+            self.assertIn("Context Manifest", pack)
+            self.assertIn("Selected Files", pack)
             self.assertIn("TASK_SPEC.md", pack)
+            self.assertIn("selected", pack)
             self.assertIn("CHECKLIST.md", pack)
             self.assertIn("Gate 失败", pack)
             self.assertIn("index.html 摘要", pack)
