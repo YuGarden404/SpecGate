@@ -107,3 +107,25 @@
 - 人工参与：
   - 人工要求解释每个文件、代码、目的和作用。
   - 实现前已说明 Task 1 的文件职责和最小实现边界。
+
+## 2026-07-08 11:16:07 +08:00
+
+- Task：Task 2 Action 数据结构与严格 JSON 解析。
+- 分支：`feat-task-1-skeleton`。
+- Superpowers：
+  - 使用 `test-driven-development` 执行红-绿流程。
+  - 使用 `executing-plans` 按 `PLAN.md` 执行 Task 2。
+- 文件变更：
+  - 新增 `tests/test_actions.py`，定义 Action parser 的行为规格。
+  - 新增 `src/specgate/actions.py`，实现 `Action`、`ActionParseError`、`parse_action()`。
+- 代码作用：
+  - `Action` 是 LLM 动作的受控数据结构。
+  - `parse_action()` 把不可信 LLM 文本解析为 `Action`，并拒绝非严格 JSON、缺字段、错误类型和非对象 `args`。
+  - `ActionParseError` 让后续 runner 可以把解析失败作为 observation 回灌给 agent。
+- TDD 证据：
+  - 红灯：`$env:PYTHONPATH='src'; python -m unittest tests.test_actions -v` 失败，原因是 `ModuleNotFoundError: No module named 'specgate.actions'`。
+  - 绿灯：同一命令通过，4 个测试 OK。
+  - 回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，5 个测试 OK。
+- 人工参与：
+  - 实现前说明了 `tests/test_actions.py` 与 `actions.py` 的职责。
+  - 明确该任务只处理 action 解析，不提前实现工具分发或 guardrail。
