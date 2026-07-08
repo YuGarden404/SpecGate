@@ -255,3 +255,27 @@
 - 人工参与：
   - 实现前说明了 `tests/test_runner.py`、`llm.py` 和 `runner.py` 的职责。
   - 明确 Task 7 只接入 `MockLLM` 主循环，不接真实 LLM、不做 CLI demo、不生成最终报告。
+
+## 2026-07-08
+
+- Task：Task 8 静态报告生成。
+- 分支：`feat-task-1-skeleton`。
+- Superpowers：
+  - 使用 `test-driven-development` 执行红-绿流程。
+  - 使用 `executing-plans` 按 `PLAN.md` 执行 Task 8。
+  - 使用 `verification-before-completion` 在提交前重新验证测试结果。
+- 文件变更：
+  - 新增 `tests/test_report.py`，定义静态报告生成行为规格。
+  - 新增 `src/specgate/report.py`，实现 `generate_report()`。
+- 代码作用：
+  - `generate_report(root, gate, steps)` 在 `reports/latest/index.html` 生成静态 HTML 报告。
+  - 报告展示运行步数、Gate 摘要、每条 check 的 PASS/FAIL 和 issue 列表。
+  - 报告中的 Gate 文本使用 `html.escape` 转义，避免未处理文本直接进入 HTML。
+  - 本任务只生成静态报告，不负责 CLI 入口、demo 编排或启动 Web 服务。
+- TDD 证据：
+  - 红灯：`$env:PYTHONPATH='src'; python -m unittest tests.test_report -v` 失败，原因是 `ModuleNotFoundError: No module named 'specgate.report'`。
+  - 绿灯：同一命令通过，1 个测试 OK。
+  - 回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，18 个测试 OK。
+- 人工参与：
+  - 实现前说明了 `tests/test_report.py` 与 `report.py` 的职责。
+  - 明确 Task 8 的报告是静态 HTML，后续 Task 9 再接入 CLI mock demo。
