@@ -67,6 +67,9 @@ class FileSnapshot:
 
     def check_unchanged(self, relative_path: str) -> SnapshotDecision:
         ...
+
+    def update_after_write(self, relative_path: str) -> None:
+        ...
 ```
 
 判断规则：
@@ -77,6 +80,7 @@ class FileSnapshot:
 - 启动时不存在，写入前仍不存在：允许。
 - 启动时不存在，写入前出现：阻止。
 - 未在快照中的路径：阻止，原因是路径不在快照范围内。正常情况下这不会发生，因为 `WorkspacePolicy` 已经先检查 allowlist。
+- SpecGate 自己成功写入后，必须调用 `update_after_write()` 更新该文件的快照状态。否则第一次写入后，第二次修复写入会被误判为外部修改。
 
 ## 5. 接入点
 
@@ -108,6 +112,7 @@ ToolResult(
 ```
 
 5. 只有检查通过后才写入文件。
+6. 写入成功后调用 `snapshot.update_after_write(path)`，把 harness 自己刚完成的写入记录为新的可信基线。
 
 ### 5.2 AgentRunner
 
@@ -142,6 +147,7 @@ LLM 输出 write_file / replace_file
 - `relative_path` 不在快照范围内时阻止写入。
 - snapshot 检查失败不会抛异常给 runner，而是转成 `ToolResult`，保持 agent loop 可继续。
 - policy 拒绝优先于 snapshot 拒绝；路径越界和 allowlist 问题仍由 `WorkspacePolicy` 解释。
+- `update_after_write()` 只在工具写入成功后调用；被 policy 或 snapshot 拦截的写入不能更新快照。
 
 ## 8. 测试计划
 
@@ -159,6 +165,7 @@ tests/test_snapshot.py
 - 启动时不存在、写入前仍不存在时允许。
 - 启动时不存在、写入前突然出现时拒绝。
 - 未在快照范围内的路径拒绝。
+- SpecGate 自己成功写入后，后续写入同一路径不应被误判为外部修改。
 
 更新测试：
 
