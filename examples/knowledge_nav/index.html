@@ -1,1 +1,409 @@
-<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>AI for Coding Knowledge Navigator</title></head><body><input type="search"><section class="node" data-related="rel0"><h2>Node 0</h2><p>Spec Gate Checklist 定义 0</p></section><section class="node" data-related="rel1"><h2>Node 1</h2><p>Spec Gate Checklist 定义 1</p></section><section class="node" data-related="rel2"><h2>Node 2</h2><p>Spec Gate Checklist 定义 2</p></section><section class="node" data-related="rel3"><h2>Node 3</h2><p>Spec Gate Checklist 定义 3</p></section><section class="node" data-related="rel4"><h2>Node 4</h2><p>Spec Gate Checklist 定义 4</p></section><section class="node" data-related="rel5"><h2>Node 5</h2><p>Spec Gate Checklist 定义 5</p></section><section class="node" data-related="rel6"><h2>Node 6</h2><p>Spec Gate Checklist 定义 6</p></section><section class="node" data-related="rel7"><h2>Node 7</h2><p>Spec Gate Checklist 定义 7</p></section><section class="node" data-related="rel8"><h2>Node 8</h2><p>Spec Gate Checklist 定义 8</p></section><section class="node" data-related="rel9"><h2>Node 9</h2><p>Spec Gate Checklist 定义 9</p></section><script>function highlightRelations(){} function filterNodes(){}</script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI for Coding 知识图谱</title>
+  <style>
+    :root {
+      --bg: #eef2f6;
+      --ink: #17202a;
+      --muted: #667382;
+      --line: #d8e0ea;
+      --paper: #ffffff;
+      --soft: #f8fafc;
+      --blue: #2f6fed;
+      --teal: #0f8a83;
+      --orange: #c46a2f;
+      --shadow: 0 24px 70px rgba(18, 28, 42, 0.13);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(180deg, #f4f7fb 0%, #edf2f7 100%);
+      color: var(--ink);
+      font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+    .topbar {
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      background: rgba(250, 252, 255, 0.92);
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; }
+    .brand-mark {
+      width: 44px;
+      height: 30px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      background: linear-gradient(135deg, #17202a, #2f6fed);
+      font-size: 13px;
+    }
+    .progress { height: 4px; background: linear-gradient(90deg, var(--blue), var(--teal), var(--orange)); }
+    main {
+      width: min(1480px, calc(100vw - 48px));
+      margin: 34px auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 24px;
+    }
+    .stage {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 44px 52px;
+      min-height: 720px;
+      position: relative;
+    }
+    .stage::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 5px;
+      border-radius: 8px 8px 0 0;
+      background: linear-gradient(90deg, var(--blue), var(--teal), var(--orange), #7556d9);
+    }
+    .hero {
+      display: flex;
+      justify-content: space-between;
+      gap: 28px;
+      align-items: end;
+      margin-bottom: 28px;
+    }
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    h1 { margin: 0; font-size: 42px; line-height: 1.12; }
+    .subtitle { color: var(--muted); font-size: 18px; margin-top: 12px; max-width: 760px; }
+    .search {
+      width: 320px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 11px 12px;
+      font: inherit;
+      background: var(--soft);
+    }
+    .node-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .node {
+      text-align: left;
+      border: 1px solid var(--line);
+      background: white;
+      border-radius: 8px;
+      padding: 18px;
+      min-height: 172px;
+      cursor: pointer;
+      transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+    }
+    .node:hover,
+    .node.active {
+      border-color: var(--blue);
+      box-shadow: 0 12px 24px rgba(47, 111, 237, 0.12);
+      transform: translateY(-1px);
+    }
+    .node.related { border-color: var(--teal); background: #f2fbfa; }
+    .node[hidden] { display: none; }
+    .layer {
+      color: var(--blue);
+      font-weight: 800;
+      font-size: 13px;
+    }
+    .node h2 { margin: 10px 0 8px; font-size: 21px; }
+    .node p { color: var(--muted); margin: 0 0 12px; line-height: 1.5; }
+    .node small { color: var(--orange); font-weight: 700; }
+    .knowledge-detail {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 14px 34px rgba(18, 28, 42, 0.08);
+      padding: 24px;
+      align-self: start;
+      position: sticky;
+      top: 82px;
+    }
+    .knowledge-detail h2 { margin: 0 0 8px; font-size: 28px; }
+    .knowledge-detail .meta { color: var(--blue); font-weight: 800; margin-bottom: 16px; }
+    .knowledge-detail p { color: var(--muted); line-height: 1.65; }
+    .detail-list { margin: 18px 0 0; padding: 0; list-style: none; }
+    .detail-list li {
+      border-top: 1px solid var(--line);
+      padding: 12px 0;
+      color: var(--muted);
+    }
+    .empty { color: var(--muted); margin-top: 20px; }
+    @media (max-width: 980px) {
+      main { grid-template-columns: 1fr; }
+      .hero { align-items: stretch; flex-direction: column; }
+      .search { width: 100%; }
+      .node-grid { grid-template-columns: 1fr; }
+      .stage { padding: 34px 24px; }
+      h1 { font-size: 34px; }
+      .knowledge-detail { position: static; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">SG</span><span>SpecGate 静态 HTML Harness</span></div>
+    <span>MockLLM · Guardrail · Gate · Report</span>
+  </header>
+  <div class="progress" aria-hidden="true"></div>
+  <main>
+    <section class="stage">
+      <div class="hero">
+        <div>
+          <p class="eyebrow">AI4SE Knowledge Navigator</p>
+          <h1>AI for Coding 知识图谱</h1>
+          <p class="subtitle">根据 TASK_SPEC.md 与 CHECKLIST.md 生成的静态页面，用于展示 SpecGate 如何把规约、工具、护栏和 Gate 反馈闭环串起来。</p>
+        </div>
+        <input id="searchBox" class="search" type="search" placeholder="搜索知识点、层级或文件" oninput="filterNodes()">
+      </div>
+      <div id="nodeGrid" class="node-grid">
+        
+        <button class="node" type="button" data-id="spec" data-related="checklist,context" onclick="showDetail('spec')">
+          <span class="layer">规约层</span>
+          <h2>Spec 规范文档</h2>
+          <p>定义目标、范围、输入输出和验收边界，是 agent 开始行动前的任务契约。</p>
+          <small>SPEC.md / TASK_SPEC.md</small>
+        </button>
+
+        <button class="node" type="button" data-id="checklist" data-related="spec,gate" onclick="showDetail('checklist')">
+          <span class="layer">规约层</span>
+          <h2>Checklist 检查清单</h2>
+          <p>把主观需求变成可执行检查项，用于自动验收页面是否符合任务要求。</p>
+          <small>CHECKLIST.md</small>
+        </button>
+
+        <button class="node" type="button" data-id="action" data-related="mockllm,guardrail" onclick="showDetail('action')">
+          <span class="layer">决策层</span>
+          <h2>Action Protocol</h2>
+          <p>要求模型只输出严格 JSON 动作，避免自然语言直接驱动文件系统。</p>
+          <small>src/specgate/actions.py</small>
+        </button>
+
+        <button class="node" type="button" data-id="mockllm" data-related="action,runner" onclick="showDetail('mockllm')">
+          <span class="layer">决策层</span>
+          <h2>MockLLM</h2>
+          <p>用脚本化响应替代真实模型，让主循环、失败反馈和修复行为可以离线测试。</p>
+          <small>src/specgate/llm.py</small>
+        </button>
+
+        <button class="node" type="button" data-id="guardrail" data-related="action,tools" onclick="showDetail('guardrail')">
+          <span class="layer">治理层</span>
+          <h2>Guardrail 护栏</h2>
+          <p>在工具执行前拦截未知动作、路径越界和未授权写入，安全逻辑由代码保证。</p>
+          <small>src/specgate/policy.py</small>
+        </button>
+
+        <button class="node" type="button" data-id="tools" data-related="guardrail,runner" onclick="showDetail('tools')">
+          <span class="layer">执行层</span>
+          <h2>Tool Dispatcher</h2>
+          <p>只分发白名单文件工具，把执行结果结构化回传给 agent loop。</p>
+          <small>src/specgate/tools.py</small>
+        </button>
+
+        <button class="node" type="button" data-id="gate" data-related="checklist,feedback" onclick="showDetail('gate')">
+          <span class="layer">反馈层</span>
+          <h2>HTML Gate</h2>
+          <p>解析 index.html，检查结构、节点数量、搜索过滤、关系高亮和 checklist 词项。</p>
+          <small>src/specgate/gate.py</small>
+        </button>
+
+        <button class="node" type="button" data-id="feedback" data-related="gate,context" onclick="showDetail('feedback')">
+          <span class="layer">反馈层</span>
+          <h2>Feedback Loop</h2>
+          <p>Gate 失败摘要进入下一轮上下文，推动 MockLLM 从失败草稿改成合格页面。</p>
+          <small>src/specgate/runner.py</small>
+        </button>
+
+        <button class="node" type="button" data-id="context" data-related="spec,feedback,trace" onclick="showDetail('context')">
+          <span class="layer">记忆层</span>
+          <h2>Context Pack</h2>
+          <p>组合任务文档、当前产物摘要和最近 Gate 结果，让模型获得必要上下文。</p>
+          <small>src/specgate/context.py</small>
+        </button>
+
+        <button class="node" type="button" data-id="trace" data-related="context,credentials" onclick="showDetail('trace')">
+          <span class="layer">可观测层</span>
+          <h2>Trace / Report</h2>
+          <p>记录模型输出、工具结果、护栏决策和 Gate 结果，并生成静态运行报告。</p>
+          <small>src/specgate/trace.py / src/specgate/report.py</small>
+        </button>
+
+        <button class="node" type="button" data-id="credentials" data-related="trace,docker" onclick="showDetail('credentials')">
+          <span class="layer">安全层</span>
+          <h2>Credentials</h2>
+          <p>Mock 模式不需要密钥；真实 provider 默认 fail closed，避免误用未配置凭据。</p>
+          <small>src/specgate/credentials.py</small>
+        </button>
+
+        <button class="node" type="button" data-id="docker" data-related="credentials,gate" onclick="showDetail('docker')">
+          <span class="layer">分发层</span>
+          <h2>Docker / CI</h2>
+          <p>用容器和 CI 证明项目可以在新环境中运行测试与 mock demo。</p>
+          <small>Dockerfile / .gitlab-ci.yml</small>
+        </button>
+      </div>
+      <p id="emptyState" class="empty" hidden>没有找到匹配的知识点。</p>
+    </section>
+    <aside class="knowledge-detail" id="knowledgeDetail" aria-label="知识点详情">
+      <p class="eyebrow">Knowledge Detail</p>
+      <h2>Spec 规范文档</h2>
+      <div class="meta">规约层</div>
+      <p>定义目标、范围、输入输出和验收边界，是 agent 开始行动前的任务契约。</p>
+      <ul class="detail-list">
+        <li><strong>对应文件：</strong><span>SPEC.md / TASK_SPEC.md</span></li>
+        <li><strong>关联节点：</strong><span>checklist, context</span></li>
+      </ul>
+    </aside>
+  </main>
+  <script>
+    const knowledge = {
+      "spec": {
+      title: "Spec 规范文档",
+      layer: "规约层",
+      detail: "定义目标、范围、输入输出和验收边界，是 agent 开始行动前的任务契约。",
+      artifact: "SPEC.md / TASK_SPEC.md",
+      related: "checklist,context"
+    },
+"checklist": {
+      title: "Checklist 检查清单",
+      layer: "规约层",
+      detail: "把主观需求变成可执行检查项，用于自动验收页面是否符合任务要求。",
+      artifact: "CHECKLIST.md",
+      related: "spec,gate"
+    },
+"action": {
+      title: "Action Protocol",
+      layer: "决策层",
+      detail: "要求模型只输出严格 JSON 动作，避免自然语言直接驱动文件系统。",
+      artifact: "src/specgate/actions.py",
+      related: "mockllm,guardrail"
+    },
+"mockllm": {
+      title: "MockLLM",
+      layer: "决策层",
+      detail: "用脚本化响应替代真实模型，让主循环、失败反馈和修复行为可以离线测试。",
+      artifact: "src/specgate/llm.py",
+      related: "action,runner"
+    },
+"guardrail": {
+      title: "Guardrail 护栏",
+      layer: "治理层",
+      detail: "在工具执行前拦截未知动作、路径越界和未授权写入，安全逻辑由代码保证。",
+      artifact: "src/specgate/policy.py",
+      related: "action,tools"
+    },
+"tools": {
+      title: "Tool Dispatcher",
+      layer: "执行层",
+      detail: "只分发白名单文件工具，把执行结果结构化回传给 agent loop。",
+      artifact: "src/specgate/tools.py",
+      related: "guardrail,runner"
+    },
+"gate": {
+      title: "HTML Gate",
+      layer: "反馈层",
+      detail: "解析 index.html，检查结构、节点数量、搜索过滤、关系高亮和 checklist 词项。",
+      artifact: "src/specgate/gate.py",
+      related: "checklist,feedback"
+    },
+"feedback": {
+      title: "Feedback Loop",
+      layer: "反馈层",
+      detail: "Gate 失败摘要进入下一轮上下文，推动 MockLLM 从失败草稿改成合格页面。",
+      artifact: "src/specgate/runner.py",
+      related: "gate,context"
+    },
+"context": {
+      title: "Context Pack",
+      layer: "记忆层",
+      detail: "组合任务文档、当前产物摘要和最近 Gate 结果，让模型获得必要上下文。",
+      artifact: "src/specgate/context.py",
+      related: "spec,feedback,trace"
+    },
+"trace": {
+      title: "Trace / Report",
+      layer: "可观测层",
+      detail: "记录模型输出、工具结果、护栏决策和 Gate 结果，并生成静态运行报告。",
+      artifact: "src/specgate/trace.py / src/specgate/report.py",
+      related: "context,credentials"
+    },
+"credentials": {
+      title: "Credentials",
+      layer: "安全层",
+      detail: "Mock 模式不需要密钥；真实 provider 默认 fail closed，避免误用未配置凭据。",
+      artifact: "src/specgate/credentials.py",
+      related: "trace,docker"
+    },
+"docker": {
+      title: "Docker / CI",
+      layer: "分发层",
+      detail: "用容器和 CI 证明项目可以在新环境中运行测试与 mock demo。",
+      artifact: "Dockerfile / .gitlab-ci.yml",
+      related: "credentials,gate"
+    }
+    };
+
+    function allNodes() {
+      return Array.from(document.querySelectorAll(".node"));
+    }
+
+    function showDetail(id) {
+      const item = knowledge[id];
+      if (!item) return;
+      const panel = document.getElementById("knowledgeDetail");
+      panel.innerHTML = `
+        <p class="eyebrow">Knowledge Detail</p>
+        <h2>${item.title}</h2>
+        <div class="meta">${item.layer}</div>
+        <p>${item.detail}</p>
+        <ul class="detail-list">
+          <li><strong>对应文件：</strong><span>${item.artifact}</span></li>
+          <li><strong>关联节点：</strong><span>${item.related}</span></li>
+        </ul>`;
+      allNodes().forEach((node) => node.classList.toggle("active", node.dataset.id === id));
+      highlightRelations(id);
+    }
+
+    function highlightRelations(id) {
+      const item = knowledge[id];
+      const related = item ? item.related.split(",") : [];
+      allNodes().forEach((node) => {
+        node.classList.toggle("related", related.includes(node.dataset.id));
+      });
+    }
+
+    function filterNodes() {
+      const query = document.getElementById("searchBox").value.trim().toLowerCase();
+      let visible = 0;
+      allNodes().forEach((node) => {
+        const text = node.textContent.toLowerCase();
+        const match = !query || text.includes(query);
+        node.hidden = !match;
+        if (match) visible += 1;
+      });
+      document.getElementById("emptyState").hidden = visible !== 0;
+    }
+  </script>
+</body>
+</html>

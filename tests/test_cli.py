@@ -18,6 +18,15 @@ class CliTests(unittest.TestCase):
             self.assertTrue((root / "index.html").exists())
             self.assertTrue((root / "reports" / "latest" / "index.html").exists())
 
+            html = (root / "index.html").read_text(encoding="utf-8")
+            self.assertIn("AI for Coding 知识图谱", html)
+            self.assertIn('type="search"', html)
+            self.assertIn("knowledgeDetail", html)
+            self.assertGreaterEqual(html.count('class="node'), 10)
+            self.assertIn("function filterNodes", html)
+            self.assertIn("function showDetail", html)
+            self.assertIn("function highlightRelations", html)
+
 
 if __name__ == "__main__":
     unittest.main()

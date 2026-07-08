@@ -345,3 +345,29 @@
 - 人工参与：
   - 实现前说明了凭据、Docker、CI、README、SPEC_PROCESS 和 REFLECTION 的职责。
   - 明确 `REFLECTION.md` 只创建结构，最终内容需要学生本人完成。
+
+## 2026-07-08
+
+- Task：Demo showcase 展示增强。
+- 分支：`main`。
+- Superpowers：
+  - 使用 `brainstorming` 先对齐边界：只增强静态 demo 展示，不扩展复杂前端、不引入 npm/React/Vue。
+  - 使用 `test-driven-development` 先写失败测试，再修改 mock demo HTML。
+  - 使用 `verification-before-completion` 在说明完成前运行测试。
+- 文件变更：
+  - 新增 `docs/superpowers/plans/2026-07-08-demo-showcase.md`，记录小步实现计划。
+  - 更新 `tests/test_cli.py`，要求 demo 产物包含中文知识图谱标题、搜索框、右侧详情面板、至少 10 个知识节点和交互函数。
+  - 更新 `src/specgate/cli.py` 的 `_fixed_demo_html()`，让 `MockLLM` 生成更像课程知识导航器的单文件静态 HTML。
+  - 重新生成 `examples/knowledge_nav/index.html`。
+- 代码作用：
+  - demo 页面从占位 `Node 0` 列表升级为 `AI for Coding 知识图谱`。
+  - 页面包含 Spec、Checklist、Action Protocol、MockLLM、Guardrail、Tool Dispatcher、HTML Gate、Feedback Loop、Context Pack、Trace / Report、Credentials、Docker / CI 等知识节点。
+  - 点击节点时右侧显示知识详情，并高亮关联节点；搜索框支持本地过滤。
+- TDD 与验证证据：
+  - 红灯：`$env:PYTHONPATH='src'; python -m unittest tests.test_cli -v` 失败，原因是旧 demo HTML 不包含 `AI for Coding 知识图谱`。
+  - 绿灯：同一命令通过，1 个测试 OK。
+  - Demo：`$env:PYTHONPATH='src'; python -m specgate.cli run-mock-demo examples/knowledge_nav` 退出码为 0。
+  - 回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，21 个测试 OK。
+- 人工参与：
+  - 用户提供老师演示项目截图和课堂知识搜索页面参考。
+  - 明确本次改动只提升评审展示效果，不改变 A 类 Coding Agent Harness 的核心边界。
