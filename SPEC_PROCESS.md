@@ -177,6 +177,10 @@ Python CLI harness + mock LLM + 静态 HTML 生成/修复
 - mock demo 使用 `python -m specgate.cli run-mock-demo examples/knowledge_nav`。
 - Docker 由用户在本机 PowerShell 使用代理环境变量完成 `python:3.11-slim` 拉取、`specgate:local` 镜像构建和容器运行验证。
 
-待人工完成：
+远端发布记录：
 
-- 远端 CI / Pages 部署后的 URL 记录。
+- GitHub Actions CI 已通过。
+- GitHub Pages 已通过 Actions 部署。
+- WebUI 首页：`https://yugarden404.github.io/SpecGate/`。
+- 知识图谱 demo：`https://yugarden404.github.io/SpecGate/demo/`。
+- 运行报告：`https://yugarden404.github.io/SpecGate/report/`。

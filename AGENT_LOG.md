@@ -405,9 +405,10 @@
 - 验证证据：
   - 本地回归：`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，21 个测试 OK。
   - 静态检查：`git diff --check` 退出码为 0，仅提示 Windows 行尾转换 warning。
-  - GitHub Pages workflow 需要 push 后由远端 Actions 验证。
+  - GitHub Pages workflow 已在远端 Actions 通过，`build-pages` 和 `deploy-pages` 均为 Success。
+  - 已部署 WebUI 首页：`https://yugarden404.github.io/SpecGate/`。
 - 人工参与：
-  - 用户需要 push 后在 GitHub Actions 查看 `Pages` workflow，并在 Settings / Pages 确认 source 为 GitHub Actions。
+  - 用户在 GitHub Settings / Pages 中确认 source 为 GitHub Actions，并重新运行 Pages workflow 完成部署验证。
 
 ## 2026-07-08
 
