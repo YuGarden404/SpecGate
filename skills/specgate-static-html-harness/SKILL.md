@@ -1,76 +1,76 @@
 ---
 name: specgate-static-html-harness
-description: Use when working on a SpecGate static HTML task that has TASK_SPEC.md, CHECKLIST.md, an optional existing index.html, and needs a controlled coding-agent harness flow with context selection, registered file tools, guardrails, gate feedback, trace logs, and a static report.
+description: "当处理 SpecGate 静态 HTML 任务时使用：任务包含 TASK_SPEC.md、CHECKLIST.md、可选 index.html，并需要通过受控 Coding Agent Harness 完成上下文选择、注册工具调用、安全护栏、Gate 反馈、trace 日志和静态报告。"
 ---
 
-# SpecGate Static HTML Harness
+# SpecGate 静态 HTML Harness
 
-## Purpose
+## 目的
 
-Use this skill to run or review a SpecGate task as a small coding-agent harness, not as an unrestricted coding session.
+使用这个 Skill 时，应把 SpecGate 任务当作一个受控的 Coding Agent Harness 流程，而不是普通的自由编码任务。
 
-The target task is a static HTML workspace that usually contains:
+目标任务通常是一个静态 HTML 工作区，包含：
 
-- `TASK_SPEC.md`: user-facing page requirements.
-- `CHECKLIST.md`: deterministic acceptance checks.
-- `index.html`: generated or repaired static HTML artifact.
-- `specgate.toml`: allowed tools and file allowlists.
+- `TASK_SPEC.md`：用户侧页面需求。
+- `CHECKLIST.md`：确定性验收清单。
+- `index.html`：已经生成或需要修复的静态 HTML 产物。
+- `specgate.toml`：允许使用的工具和文件白名单配置。
 
-## Workflow
+## 工作流
 
-1. Read `TASK_SPEC.md`, `CHECKLIST.md`, `specgate.toml`, and any existing `index.html`.
-2. Treat root project docs such as `SPEC.md` and `PLAN.md` as harness design docs, not as the runtime task input.
-3. Build context from task-relevant files first. Prefer `TASK_SPEC.md`, `CHECKLIST.md`, `README.md`, and `index.html`; skip `runs/`, `reports/`, `.git/`, caches, and binary files.
-4. Use only registered tools from the SpecGate Tool Registry:
+1. 读取 `TASK_SPEC.md`、`CHECKLIST.md`、`specgate.toml`，以及已有的 `index.html`。
+2. 将根目录的 `SPEC.md`、`PLAN.md` 等文件视为 harness 项目设计文档，不要当作运行时任务输入。
+3. 优先从任务相关文件构建上下文。优先选择 `TASK_SPEC.md`、`CHECKLIST.md`、`README.md`、`index.html`；跳过 `runs/`、`reports/`、`.git/`、缓存目录和二进制文件。
+4. 只使用 SpecGate Tool Registry 中注册过的工具：
    - `read_file`
    - `write_file`
    - `replace_file`
    - `list_files`
    - `finish`
-5. Never introduce shell, browser automation, network tools, MCP tools, or arbitrary filesystem access for the MVP path.
-6. Before writing, respect `WorkspacePolicy` allowlists and file snapshot protection.
-7. After a write, run the static HTML Gate and feed any failure message back into the next action.
-8. Stop when the Gate passes or when the configured step budget is exhausted.
-9. Preserve traceability: the run should leave trace events and a static report.
+5. MVP 路径中不要引入 shell、浏览器自动化、网络工具、MCP 工具或任意文件系统访问。
+6. 写入文件前必须遵守 `WorkspacePolicy` 白名单和文件快照保护。
+7. 每次写入后运行静态 HTML Gate，并把失败信息反馈给下一轮 action。
+8. 当 Gate 通过，或达到配置的最大步数后停止。
+9. 保留可追踪证据：一次运行应留下 trace 事件和静态报告。
 
-## Decision Rules
+## 决策规则
 
-- If the user asks to generate or repair a static HTML page, operate through `TASK_SPEC.md` and `CHECKLIST.md`.
-- If the user asks about project architecture, use root docs such as `SPEC.md`, `PLAN.md`, `SPEC_PROCESS.md`, and `AGENT_LOG.md`.
-- If a requested change needs shell, Playwright, browser MCP, or broad file access, mark it outside the current MVP boundary unless the project scope has explicitly changed.
-- If a file was externally modified during a run, do not overwrite it; report the safety block.
-- If a real LLM provider is requested, keep `mock` as the default and require explicit provider configuration.
+- 如果用户要求生成或修复静态 HTML 页面，通过 `TASK_SPEC.md` 和 `CHECKLIST.md` 执行。
+- 如果用户询问项目架构，阅读根目录的 `SPEC.md`、`PLAN.md`、`SPEC_PROCESS.md`、`AGENT_LOG.md`。
+- 如果用户需求需要 shell、Playwright、Browser MCP 或宽泛文件访问，除非项目范围已经明确改变，否则标记为超出当前 MVP 边界。
+- 如果运行期间文件被外部修改，不要覆盖它；报告安全拦截结果。
+- 如果用户要求真实 LLM provider，保持 `mock` 为默认路径，并要求显式 provider 配置。
 
-## Verification
+## 验证方式
 
-For normal project verification, run:
+常规项目验证运行：
 
 ```powershell
 $env:PYTHONPATH="src"
 python -m unittest discover -s tests -v
 ```
 
-For the built-in demo, run:
+内置 demo 运行：
 
 ```powershell
 $env:PYTHONPATH="src"
 python -m specgate.cli run-mock-demo examples/knowledge_nav
 ```
 
-The expected result is:
+预期结果：
 
-- unit tests pass;
-- `examples/knowledge_nav/index.html` exists;
-- `examples/knowledge_nav/runs/latest/trace.jsonl` exists;
-- `examples/knowledge_nav/reports/latest/index.html` exists.
+- 单元测试通过；
+- `examples/knowledge_nav/index.html` 存在；
+- `examples/knowledge_nav/runs/latest/trace.jsonl` 存在；
+- `examples/knowledge_nav/reports/latest/index.html` 存在。
 
-## Reporting
+## 汇报格式
 
-When summarizing a SpecGate run, include:
+总结一次 SpecGate 运行时，说明：
 
-- selected context and skipped runtime artifacts;
-- model action count and tool calls;
-- blocked guardrail decisions, if any;
-- Gate result and repair hints;
-- final HTML artifact path;
-- static report path or published URL.
+- 选择了哪些上下文，跳过了哪些运行产物；
+- model action 数量和 tool call 情况；
+- 是否出现 guardrail 拦截；
+- Gate 结果和修复提示；
+- 最终 HTML 产物路径；
+- 静态报告路径或发布 URL。

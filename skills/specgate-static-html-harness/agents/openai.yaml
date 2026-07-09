@@ -1,7 +1,7 @@
 interface:
   display_name: "SpecGate Static HTML Harness"
-  short_description: "Guide controlled SpecGate HTML runs"
-  default_prompt: "Use $specgate-static-html-harness to run or review a controlled static HTML task with SpecGate."
+  short_description: "受控运行和复盘 SpecGate 静态 HTML 任务"
+  default_prompt: "使用 $specgate-static-html-harness 运行或复盘一个受控的 SpecGate 静态 HTML 任务。"
 
 policy:
   allow_implicit_invocation: true

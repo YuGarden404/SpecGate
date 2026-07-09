@@ -510,3 +510,20 @@
   - `$env:PYTHONPATH='src'; python -m specgate.cli run-mock-demo examples/knowledge_nav` 通过，退出码为 0。
 - 人工参与：
   - 用户确认真实 LLM 先不接入，先完成 Lab 10 Skill 和 Lab 对齐文档。
+
+## 2026-07-09
+
+- Task：SpecGate Skill 中文化。
+- 分支：`main`。
+- 文件变更：
+  - 更新 `skills/specgate-static-html-harness/SKILL.md`，将说明正文改为中文，保留必要英文标识、文件名、命令和工具名。
+  - 更新 `skills/specgate-static-html-harness/agents/openai.yaml`，将 Skill UI 描述和默认提示改为中文。
+- 代码作用：
+  - 本次不修改 Python harness 核心代码。
+  - Skill 仍然描述同一套受控静态 HTML harness 流程，方便中文阅读和课程展示。
+- 验证证据：
+  - `$env:PYTHONUTF8='1'; python C:\Users\Lenovo\.codex\skills\.system\skill-creator\scripts\quick_validate.py skills\specgate-static-html-harness` 通过。
+  - `$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，39 个测试 OK。
+  - `$env:PYTHONPATH='src'; python -m specgate.cli run-mock-demo examples/knowledge_nav` 通过，退出码为 0。
+- 说明：
+  - Windows 下 `quick_validate.py` 默认编码可能是 GBK，直接读取中文 UTF-8 Skill 会报 `UnicodeDecodeError`；设置 `PYTHONUTF8=1` 后校验通过。
