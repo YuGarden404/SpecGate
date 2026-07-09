@@ -9,6 +9,7 @@ htmlcov/
 .env.*
 !.env.example
 runs/
+memory.json
 reports/latest/
 !examples/knowledge_nav/reports/
 !examples/knowledge_nav/reports/latest/

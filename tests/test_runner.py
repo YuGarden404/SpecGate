@@ -65,6 +65,8 @@ class RunnerTests(unittest.TestCase):
             self.assertTrue(result.passed)
             self.assertEqual(llm.calls, 3)
             self.assertIn("Node 9", (root / "index.html").read_text(encoding="utf-8"))
+            self.assertTrue((root / "memory.json").exists())
+            self.assertIn("Gate", (root / "memory.json").read_text(encoding="utf-8"))
 
     def test_guardrail_block_is_recorded(self):
         with tempfile.TemporaryDirectory() as tmp:

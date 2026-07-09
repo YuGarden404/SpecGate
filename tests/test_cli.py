@@ -1,8 +1,10 @@
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
-from specgate.cli import run_mock_demo
+from specgate.cli import main, run_mock_demo
 
 
 class CliTests(unittest.TestCase):
@@ -50,6 +52,19 @@ class CliTests(unittest.TestCase):
             self.assertFalse((root / "index.html").exists())
             trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("write path not allowed", trace_text)
+
+    def test_credentials_cli_status_set_and_clear(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    main(["credentials", "set", "openai", "--value", "sk-test-secret-123456", "--env-file", str(env_file)]),
+                    0,
+                )
+                self.assertEqual(main(["credentials", "status", "openai", "--env-file", str(env_file)]), 0)
+                self.assertEqual(main(["credentials", "clear", "openai", "--env-file", str(env_file)]), 0)
+            self.assertFalse(env_file.exists() and "OPENAI_API_KEY" in env_file.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

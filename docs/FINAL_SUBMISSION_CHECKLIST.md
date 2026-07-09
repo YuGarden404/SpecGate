@@ -50,10 +50,10 @@ MVP 范围：
 | Action 协议 | `src/specgate/actions.py` | 只接受严格 JSON object，拒绝 Markdown code fence、缺字段和非法参数。 |
 | 工具管理 | `src/specgate/tool_registry.py`、`src/specgate/tools.py` | Tool Registry 描述工具名称、权限、参数和结果，dispatcher 只执行注册工具。 |
 | 安全边界 | `src/specgate/policy.py`、`src/specgate/snapshot.py` | 阻止未知动作、路径越界、allowlist 外写入和运行期间外部修改覆盖。 |
-| 上下文管理 | `src/specgate/context_selector.py`、`src/specgate/context.py` | 优先选择任务文件，跳过运行产物，生成 Context Manifest。 |
+| 上下文与记忆 | `src/specgate/context_selector.py`、`src/specgate/context.py`、`src/specgate/memory.py` | 优先选择任务文件，跳过运行产物，生成 Context Manifest，并用 `memory.json` 保留跨会话运行摘要。 |
 | Gate 闭环 | `src/specgate/gate.py`、`src/specgate/runner.py` | Gate 失败摘要回灌给下一轮，驱动 MockLLM 生成修复动作。 |
 | trace 与报告 | `src/specgate/trace.py`、`src/specgate/report.py` | 记录运行事件并生成静态报告。 |
-| 凭据边界 | `src/specgate/credentials.py` | Mock 模式不需要凭据，真实 provider 默认 fail-closed。 |
+| 凭据边界 | `src/specgate/credentials.py` | Mock 模式不需要凭据，真实 provider 支持 `.env` fallback 的 status/set/clear，且不回显密钥明文。 |
 | 提交前防线示例 | `hooks/pre-commit.sample` | 可选 Hook sample，用于疑似密钥扫描、必要文件检查和测试提示。 |
 
 ## 4. 推荐评审路径

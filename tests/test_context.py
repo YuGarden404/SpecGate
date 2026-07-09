@@ -44,6 +44,21 @@ class ContextTests(unittest.TestCase):
             self.assertIn("Gate 失败", pack)
             self.assertIn("index.html 摘要", pack)
 
+    def test_context_pack_includes_cross_session_memory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "memory.json").write_text(
+                '{"runs":[{"passed":true,"steps":3,"gate_summary":"reuse search layout"}]}',
+                encoding="utf-8",
+            )
+
+            pack = build_context_pack(root, None)
+
+            self.assertIn("Memory", pack)
+            self.assertIn("reuse search layout", pack)
+
 
 if __name__ == "__main__":
     unittest.main()

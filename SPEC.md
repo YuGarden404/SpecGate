@@ -122,15 +122,15 @@ Guardrail 返回结构化 refusal event。该事件会写入 trace，并作为 o
 
 ### 4.5 Memory / Context
 
-MVP 不做复杂向量记忆，而是使用显式、可测试的小型 context pack：
+MVP 不做复杂向量记忆，而是使用显式、可测试的小型 memory/context 机制：
 
 - `trace.jsonl`：追加式运行事件。
-- `stage_summary.md`：当前阶段已完成动作和决策摘要。
+- `memory.json`：跨会话运行摘要，保留最近几次运行的通过状态、步数和 Gate 摘要。
 - 当前产物摘要：`index.html` 的结构摘要。
 - 最近 Gate 结果：失败项和修复提示。
 - 任务文档：当前任务的 `TASK_SPEC.md` 和 `CHECKLIST.md`。
 
-每次 LLM 调用前，由 Context Builder 组装这些信息。context pack 必须有边界、可预测、可在测试中断言。
+每次 LLM 调用前，由 Context Builder 组装这些信息。每次运行结束后，由 Memory Store 更新 `memory.json`。context pack 必须有边界、可预测、可在测试中断言。
 
 ### 4.6 主要贡献维度
 
@@ -431,9 +431,9 @@ Mock 模式默认不需要 key。真实 LLM 模式为可选能力，必须通过
 - `specgate credentials status`：只显示是否存在 key，不打印明文。
 - `specgate credentials clear <provider>`：清除 key。
 
-如果 OS keyring 不可用，真实 LLM 模式应 fail closed，并提示用户配置方法。`.env` 只允许在明确标注的本地开发模式下使用。
+如果 OS keyring 不可用，真实 LLM 模式应 fail closed，并提示用户配置方法。当前 MVP 提供 `credentials status/set/clear` 的最低 CLI，实现 `.env` 本地开发 fallback；`.env` 必须进入 `.gitignore`，命令不得回显密钥明文。
 
-MVP 阶段不要求完整实现动态 keyring 写入命令。MVP 的实现边界是：`MockLLM` 模式无需凭据；真实 provider 默认 fail closed；`credentials.py` 提供可测试的凭据状态存根，证明系统不会在未配置安全凭据时继续调用真实 LLM。完整的 `set/status/clear` 交互命令可作为后续扩展。
+MVP 的实现边界是：`MockLLM` 模式无需凭据；真实 provider 默认只有在检测到凭据时才标记为 safe；`.env` fallback 用于演示安全录入、查看状态和清除流程，不代表生产级密钥库。
 
 ### 9.2 分发
 

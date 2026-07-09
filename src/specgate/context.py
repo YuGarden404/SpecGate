@@ -4,6 +4,7 @@ from pathlib import Path
 
 from specgate.context_selector import ContextSelection, select_context_files
 from specgate.gate import GateResult
+from specgate.memory import load_memory_summary
 from specgate.tool_registry import render_tool_registry_for_context
 
 
@@ -45,6 +46,7 @@ def build_context_pack(root: Path, latest_gate: GateResult | None) -> str:
             "你是 SpecGate harness 中的 coding agent。只输出严格 JSON action。",
             "## Tool Registry\n" + render_tool_registry_for_context(),
             "## Context Manifest\n" + _render_manifest(selection),
+            "## Memory\n" + load_memory_summary(root),
             "## Selected Files\n" + _render_selected_files(selection),
             "## " + _artifact_summary(root / "index.html"),
             "## 最近 Gate 结果\n" + gate_summary,

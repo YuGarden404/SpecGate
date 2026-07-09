@@ -7,6 +7,7 @@ from specgate.actions import ActionParseError, parse_action
 from specgate.context import build_context_pack
 from specgate.gate import GateResult, run_html_gate
 from specgate.llm import LLMClient
+from specgate.memory import append_memory
 from specgate.policy import WorkspacePolicy
 from specgate.snapshot import FileSnapshot
 from specgate.tools import ToolDispatcher
@@ -56,8 +57,12 @@ class AgentRunner:
             if action.action == "finish":
                 if latest_gate is None:
                     latest_gate = run_html_gate(self.root / "index.html", self.root / "CHECKLIST.md")
-                return RunResult(latest_gate.passed, step, latest_gate)
+                result = RunResult(latest_gate.passed, step, latest_gate)
+                append_memory(self.root, result.passed, result.steps, latest_gate.summary)
+                return result
 
         if latest_gate is None:
             latest_gate = run_html_gate(self.root / "index.html", self.root / "CHECKLIST.md")
-        return RunResult(latest_gate.passed, self.max_steps, latest_gate)
+        result = RunResult(latest_gate.passed, self.max_steps, latest_gate)
+        append_memory(self.root, result.passed, result.steps, latest_gate.summary)
+        return result

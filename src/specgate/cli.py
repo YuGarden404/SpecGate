@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 from pathlib import Path
 
 from specgate.config import load_policy
+from specgate.credentials import clear_credential, credential_status_from_env, set_credential
 from specgate.gate import run_html_gate
 from specgate.llm import MockLLM
 from specgate.policy import WorkspacePolicy
@@ -415,9 +417,34 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     demo = sub.add_parser("run-mock-demo")
     demo.add_argument("workspace")
+    credentials = sub.add_parser("credentials")
+    credentials_sub = credentials.add_subparsers(dest="credentials_command", required=True)
+    for command in ("status", "clear"):
+        item = credentials_sub.add_parser(command)
+        item.add_argument("provider")
+        item.add_argument("--env-file", default=".env")
+    set_parser = credentials_sub.add_parser("set")
+    set_parser.add_argument("provider")
+    set_parser.add_argument("--env-file", default=".env")
+    set_parser.add_argument("--value")
     args = parser.parse_args(argv)
     if args.command == "run-mock-demo":
         return run_mock_demo(Path(args.workspace))
+    if args.command == "credentials":
+        env_file = Path(args.env_file)
+        if args.credentials_command == "status":
+            status = credential_status_from_env(args.provider, env_file)
+            print(status.message)
+            return 0 if status.safe_to_run else 1
+        if args.credentials_command == "set":
+            secret = args.value if args.value is not None else getpass.getpass("API key: ")
+            set_credential(args.provider, secret, env_file)
+            print(f"{args.provider} credential saved to {env_file}; secret value hidden")
+            return 0
+        if args.credentials_command == "clear":
+            clear_credential(args.provider, env_file)
+            print(f"{args.provider} credential cleared from {env_file}")
+            return 0
     return 2
 
 

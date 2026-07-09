@@ -5,6 +5,7 @@ from html import escape
 from pathlib import Path
 
 from specgate.gate import GateResult
+from specgate.memory import load_memory_summary
 from specgate.tool_registry import default_tool_registry
 
 
@@ -44,6 +45,7 @@ def generate_report(root: Path, gate: GateResult, steps: int) -> Path:
         for tool in default_tool_registry().values()
     )
     events = _render_run_events(root)
+    memory = escape(load_memory_summary(root))
     html = f"""<!doctype html>
 <html>
 <head>
@@ -64,6 +66,8 @@ def generate_report(root: Path, gate: GateResult, steps: int) -> Path:
   <ul>{tools}</ul>
   <h2>Run Events</h2>
   {events}
+  <h2>Memory Summary</h2>
+  <pre>{memory}</pre>
   <p><a href="../../index.html">Final artifact</a></p>
 </body>
 </html>"""

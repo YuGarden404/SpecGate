@@ -18,6 +18,10 @@ class ReportTests(unittest.TestCase):
                 '{"event_type":"tool_result","payload":{"step":1,"result":{"blocked":false}}}\n',
                 encoding="utf-8",
             )
+            (root / "memory.json").write_text(
+                '{"runs":[{"passed":true,"steps":3,"gate_summary":"remembered layout"}]}',
+                encoding="utf-8",
+            )
 
             output = generate_report(root, gate, steps=3)
 
@@ -32,6 +36,8 @@ class ReportTests(unittest.TestCase):
             self.assertIn("Run Events", html)
             self.assertIn("llm_response", html)
             self.assertIn("tool_result", html)
+            self.assertIn("Memory Summary", html)
+            self.assertIn("remembered layout", html)
 
 
 if __name__ == "__main__":
