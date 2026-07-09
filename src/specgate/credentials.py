@@ -7,6 +7,7 @@ from pathlib import Path
 
 ENV_NAMES = {
     "openai": "OPENAI_API_KEY",
+    "openai-compatible": "OPENAI_COMPATIBLE_API_KEY",
     "gemini": "GEMINI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
 }
@@ -109,6 +110,18 @@ def credential_status_from_env(provider: str, env_file: Path | None = None) -> C
         safe_to_run=False,
         message=f"{provider} credential is not configured; use credentials set or OS keyring before enabling this provider",
     )
+
+
+def read_credential(provider: str, env_file: Path | None = None) -> str | None:
+    if provider not in SUPPORTED_PROVIDERS:
+        return None
+    env_name = _env_name(provider)
+    value = os.environ.get(env_name)
+    if value:
+        return value
+    if env_file is not None:
+        return _read_env_file(env_file).get(env_name)
+    return None
 
 
 def set_credential(provider: str, secret: str, env_file: Path) -> None:

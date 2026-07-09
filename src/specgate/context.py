@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from specgate.context_selector import ContextSelection, select_context_files
@@ -37,17 +38,43 @@ def _render_selected_files(selection: ContextSelection) -> str:
     return "\n\n".join(blocks)
 
 
-def build_context_pack(root: Path, latest_gate: GateResult | None) -> str:
+def _action_protocol() -> str:
+    return "\n".join(
+        [
+            "Return exactly one JSON object and nothing else.",
+            'Required shape: {"schema_version":"1","action":"write_file|replace_file|read_file|list_files|finish","args":{...}}',
+            'For write_file/replace_file args must include {"path":"index.html","content":"..."} unless policy allows another path.',
+            'For finish args must include {"summary":"short summary"}.',
+            "Do not use Markdown fences. Do not explain outside JSON.",
+        ]
+    )
+
+
+def _render_runtime_feedback(events: list[dict] | None) -> str:
+    if not events:
+        return "No runtime feedback yet."
+    lines: list[str] = []
+    for event in events[-5:]:
+        payload = json.dumps(event, ensure_ascii=False, sort_keys=True)
+        if len(payload) > 1200:
+            payload = payload[:1200] + "...[truncated]"
+        lines.append(f"- {payload}")
+    return "\n".join(lines)
+
+
+def build_context_pack(root: Path, latest_gate: GateResult | None, runtime_feedback: list[dict] | None = None) -> str:
     selection = select_context_files(root)
     gate_summary = latest_gate.summary if latest_gate else "尚未运行 Gate"
 
     return "\n\n".join(
         [
             "你是 SpecGate harness 中的 coding agent。只输出严格 JSON action。",
+            "## Action Protocol\n" + _action_protocol(),
             "## Tool Registry\n" + render_tool_registry_for_context(),
             "## Context Manifest\n" + _render_manifest(selection),
             "## Memory\n" + load_memory_summary(root),
             "## Selected Files\n" + _render_selected_files(selection),
+            "## Runtime Feedback\n" + _render_runtime_feedback(runtime_feedback),
             "## " + _artifact_summary(root / "index.html"),
             "## 最近 Gate 结果\n" + gate_summary,
         ]

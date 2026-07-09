@@ -1,10 +1,13 @@
 import io
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
-from specgate.cli import main, run_mock_demo
+from specgate.cli import main, run_mock_demo, run_real_llm
+from specgate.llm import LLMProviderError
 
 
 class CliTests(unittest.TestCase):
@@ -65,6 +68,148 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["credentials", "status", "openai", "--env-file", str(env_file)]), 0)
                 self.assertEqual(main(["credentials", "clear", "openai", "--env-file", str(env_file)]), 0)
             self.assertFalse(env_file.exists() and "OPENAI_API_KEY" in env_file.read_text(encoding="utf-8"))
+
+    def test_real_run_fails_closed_without_credential(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "specgate.toml").write_text(
+                "\n".join(
+                    [
+                        "[policy]",
+                        'allowed_actions = ["write_file", "replace_file", "read_file", "list_files", "finish"]',
+                        'allowed_read_paths = ["TASK_SPEC.md", "CHECKLIST.md", "index.html"]',
+                        'allowed_write_paths = ["index.html"]',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {}, clear=True), redirect_stdout(io.StringIO()) as output:
+                exit_code = main(
+                    [
+                        "run",
+                        str(root),
+                        "--provider",
+                        "openai-compatible",
+                        "--model",
+                        "test-model",
+                        "--base-url",
+                        "https://api.example.test/v1",
+                        "--env-file",
+                        str(root / ".env"),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn("not configured", output.getvalue())
+            self.assertFalse((root / "runs" / "latest" / "trace.jsonl").exists())
+
+    def test_real_run_uses_provider_inside_existing_runner(self):
+        class FakeRealLLM:
+            def __init__(self, base_url, api_key, model, user_agent="", timeout=60):
+                self.calls = 0
+
+            def complete(self, context: str) -> str:
+                self.calls += 1
+                if self.calls == 1:
+                    return (
+                        '{"schema_version":"1","action":"write_file",'
+                        '"args":{"path":"index.html","content":"<!doctype html><html><body>draft</body></html>"}}'
+                    )
+                return (
+                    '{"schema_version":"1","action":"replace_file",'
+                    '"args":{"path":"index.html","content":"'
+                    '<!doctype html><html><head><meta name=\\"viewport\\" content=\\"width=device-width, initial-scale=1\\">'
+                    '<title>AI for Coding Knowledge Navigator</title></head><body><input type=\\"search\\">'
+                    + "".join(
+                        f'<section class=\\"node\\" data-related=\\"rel{i}\\"><h2>Node {i}</h2><p>Spec Gate Checklist {i}</p></section>'
+                        for i in range(10)
+                    )
+                    + '<script>function highlightRelations(){} function filterNodes(){}</script></body></html>"}}'
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env_file = root / ".env"
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("- 必须包含 Spec\n- 必须包含 Gate\n", encoding="utf-8")
+            (root / "specgate.toml").write_text(
+                "\n".join(
+                    [
+                        "[policy]",
+                        'allowed_actions = ["write_file", "replace_file", "read_file", "list_files", "finish"]',
+                        'allowed_read_paths = ["TASK_SPEC.md", "CHECKLIST.md", "index.html"]',
+                        'allowed_write_paths = ["index.html"]',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            env_file.write_text("OPENAI_COMPATIBLE_API_KEY=sk-test-secret\n", encoding="utf-8")
+
+            with patch("specgate.cli.OpenAICompatibleLLM", FakeRealLLM), redirect_stdout(io.StringIO()):
+                exit_code = run_real_llm(
+                    root=root,
+                    provider="openai-compatible",
+                    model="test-model",
+                    base_url="https://api.example.test/v1",
+                    env_file=env_file,
+                    max_steps=3,
+                    user_agent="SpecGate/0.1 OpenAI-Compatible",
+                    timeout=60,
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((root / "index.html").exists())
+            self.assertTrue((root / "reports" / "latest" / "index.html").exists())
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertNotIn("sk-test-secret", trace_text)
+
+    def test_real_run_reports_provider_error_without_traceback(self):
+        class FailingRealLLM:
+            def __init__(self, base_url, api_key, model, user_agent="", timeout=60):
+                pass
+
+            def complete(self, context: str) -> str:
+                raise LLMProviderError("HTTP 403 Forbidden: model not allowed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env_file = root / ".env"
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "specgate.toml").write_text(
+                "\n".join(
+                    [
+                        "[policy]",
+                        'allowed_actions = ["write_file", "replace_file", "read_file", "list_files", "finish"]',
+                        'allowed_read_paths = ["TASK_SPEC.md", "CHECKLIST.md", "index.html"]',
+                        'allowed_write_paths = ["index.html"]',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            env_file.write_text("OPENAI_COMPATIBLE_API_KEY=sk-test-secret\n", encoding="utf-8")
+
+            with patch("specgate.cli.OpenAICompatibleLLM", FailingRealLLM), redirect_stdout(io.StringIO()) as output:
+                exit_code = run_real_llm(
+                    root=root,
+                    provider="openai-compatible",
+                    model="test-model",
+                    base_url="https://api.example.test/v1",
+                    env_file=env_file,
+                    max_steps=3,
+                    user_agent="SpecGate/0.1 OpenAI-Compatible",
+                    timeout=60,
+                )
+
+            self.assertEqual(exit_code, 1)
+            text = output.getvalue()
+            self.assertIn("provider request failed", text)
+            self.assertIn("HTTP 403", text)
+            self.assertNotIn("Traceback", text)
+            self.assertNotIn("sk-test-secret", text)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
+import re
 
 from specgate.security import contains_secret_like_text
 
@@ -65,15 +66,32 @@ def _check(code: str, passed: bool, message: str) -> GateCheck:
     return GateCheck(code, passed, message)
 
 
-def _checklist_terms(checklist_path: Path) -> list[str]:
+def _read_checklist(checklist_path: Path) -> str:
     if not checklist_path.exists():
-        return []
+        return ""
+    return checklist_path.read_text(encoding="utf-8-sig")
+
+
+def _checklist_terms(checklist_path: Path) -> list[str]:
     terms: list[str] = []
-    for line in checklist_path.read_text(encoding="utf-8").splitlines():
+    for line in _read_checklist(checklist_path).splitlines():
         line = line.strip()
         if line.startswith("- 必须包含 "):
             terms.append(line.removeprefix("- 必须包含 ").strip())
     return [term for term in terms if term]
+
+
+def _requires_knowledge_graph(checklist_text: str) -> bool:
+    lowered = checklist_text.lower()
+    markers = ("class=node", "class=\"node\"", "知识节点", "data-related", "关系高亮")
+    return any(marker in lowered for marker in markers)
+
+
+def _required_node_count(checklist_text: str) -> int:
+    match = re.search(r"至少\s*(\d+)\s*个.*(?:class=node|class=\"node\"|知识节点)", checklist_text, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return 10
 
 
 def run_html_gate(html_path: Path, checklist_path: Path) -> GateResult:
@@ -84,11 +102,12 @@ def run_html_gate(html_path: Path, checklist_path: Path) -> GateResult:
         issue = _issue("missing_artifact", "index.html 不存在", str(html_path), "写入 index.html")
         return GateResult(False, [_check("exists", False, "index.html missing")], [issue], "index.html 不存在")
 
-    content = html_path.read_text(encoding="utf-8")
+    content = html_path.read_text(encoding="utf-8-sig")
+    checklist_text = _read_checklist(checklist_path)
     parser = _HtmlFeatureParser()
     parser.feed(content)
     lower = content.lower()
-    text = "\n".join(parser.text_parts)
+    text = "\n".join(parser.text_parts + [content])
 
     requirements = [
         ("doctype", "<!doctype html" in lower, "需要 <!doctype html>", "添加 <!doctype html>"),
@@ -98,20 +117,38 @@ def run_html_gate(html_path: Path, checklist_path: Path) -> GateResult:
         ("body_tag", "body" in parser.tags, "需要 body 标签", "添加 body"),
         ("viewport", parser.has_viewport, "需要 viewport meta", "添加移动端 viewport meta"),
         ("search", parser.has_search or "filter" in lower, "需要搜索或过滤 UI", "添加 search input 或 filter 控件"),
-        ("relations", "highlightrelations" in lower or "data-related" in lower, "需要关系高亮能力", "添加 data-related 和关系高亮脚本"),
         ("offline", "https://" not in lower and "http://" not in lower, "不能依赖外部网络资源", "移除外部脚本和样式"),
         ("no_secret", not contains_secret_like_text(content), "不能包含疑似密钥", "移除密钥样文本"),
     ]
+
+    if _requires_knowledge_graph(checklist_text):
+        requirements.append(
+            (
+                "relations",
+                "highlightrelations" in lower or "data-related" in lower,
+                "需要关系高亮能力",
+                "添加 data-related 和关系高亮脚本",
+            )
+        )
 
     for code, passed, message, hint in requirements:
         checks.append(_check(code, passed, message))
         if not passed:
             issues.append(_issue(code, message, code, hint))
 
-    enough_nodes = parser.node_count >= 10
-    checks.append(_check("node_count", enough_nodes, "至少 10 个知识节点"))
-    if not enough_nodes:
-        issues.append(_issue("too_few_nodes", "知识节点不足", str(parser.node_count), "添加至少 10 个 class=node 的知识节点"))
+    if _requires_knowledge_graph(checklist_text):
+        min_nodes = _required_node_count(checklist_text)
+        enough_nodes = parser.node_count >= min_nodes
+        checks.append(_check("node_count", enough_nodes, f"至少 {min_nodes} 个知识节点"))
+        if not enough_nodes:
+            issues.append(
+                _issue(
+                    "too_few_nodes",
+                    "知识节点不足",
+                    str(parser.node_count),
+                    f"添加至少 {min_nodes} 个 class=node 的知识节点",
+                )
+            )
 
     for term in _checklist_terms(checklist_path):
         passed = term in text

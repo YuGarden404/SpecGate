@@ -5,9 +5,9 @@ import getpass
 from pathlib import Path
 
 from specgate.config import load_policy
-from specgate.credentials import clear_credential, credential_status_from_env, set_credential
+from specgate.credentials import clear_credential, credential_status_from_env, read_credential, set_credential
 from specgate.gate import run_html_gate
-from specgate.llm import MockLLM
+from specgate.llm import LLMProviderError, MockLLM, OpenAICompatibleLLM
 from specgate.policy import WorkspacePolicy
 from specgate.report import generate_report
 from specgate.runner import AgentRunner
@@ -412,11 +412,61 @@ def run_mock_demo(root: Path) -> int:
     return 0 if result.passed else 1
 
 
+def run_real_llm(
+    root: Path,
+    provider: str,
+    model: str,
+    base_url: str,
+    env_file: Path,
+    max_steps: int,
+    user_agent: str,
+    timeout: float,
+) -> int:
+    status = credential_status_from_env(provider, env_file)
+    if not status.safe_to_run:
+        print(status.message)
+        return 1
+    if provider != "openai-compatible":
+        print(f"{provider} is configured, but SpecGate run currently supports openai-compatible only")
+        return 1
+    api_key = read_credential(provider, env_file)
+    if not api_key:
+        print(status.message)
+        return 1
+
+    llm = OpenAICompatibleLLM(
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        user_agent=user_agent,
+        timeout=timeout,
+    )
+    policy = _load_demo_policy(root)
+    try:
+        result = AgentRunner(root, llm, policy, max_steps=max_steps).run()
+    except LLMProviderError as exc:
+        print(f"provider request failed: {exc}")
+        return 1
+    gate = result.final_gate or run_html_gate(root / "index.html", root / "CHECKLIST.md")
+    generate_report(root, gate, result.steps)
+    print(f"SpecGate run finished: passed={result.passed}, steps={result.steps}")
+    return 0 if result.passed else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="specgate")
     sub = parser.add_subparsers(dest="command", required=True)
     demo = sub.add_parser("run-mock-demo")
     demo.add_argument("workspace")
+    real_run = sub.add_parser("run")
+    real_run.add_argument("workspace")
+    real_run.add_argument("--provider", default="openai-compatible")
+    real_run.add_argument("--model", required=True)
+    real_run.add_argument("--base-url", required=True)
+    real_run.add_argument("--env-file", default=".env")
+    real_run.add_argument("--max-steps", type=int, default=5)
+    real_run.add_argument("--user-agent", default="SpecGate/0.1 OpenAI-Compatible")
+    real_run.add_argument("--timeout", type=float, default=60)
     credentials = sub.add_parser("credentials")
     credentials_sub = credentials.add_subparsers(dest="credentials_command", required=True)
     for command in ("status", "clear"):
@@ -430,6 +480,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "run-mock-demo":
         return run_mock_demo(Path(args.workspace))
+    if args.command == "run":
+        return run_real_llm(
+            root=Path(args.workspace),
+            provider=args.provider,
+            model=args.model,
+            base_url=args.base_url,
+            env_file=Path(args.env_file),
+            max_steps=args.max_steps,
+            user_agent=args.user_agent,
+            timeout=args.timeout,
+        )
     if args.command == "credentials":
         env_file = Path(args.env_file)
         if args.credentials_command == "status":

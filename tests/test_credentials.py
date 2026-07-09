@@ -52,6 +52,18 @@ class CredentialTests(unittest.TestCase):
             self.assertFalse(cleared.configured)
             self.assertFalse(cleared.safe_to_run)
 
+    def test_openai_compatible_provider_uses_dedicated_env_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+
+            set_credential("openai-compatible", "sk-compatible-secret", env_file)
+            status = credential_status("openai-compatible", env_file)
+
+            self.assertTrue(status.configured)
+            self.assertTrue(status.safe_to_run)
+            self.assertIn("OPENAI_COMPATIBLE_API_KEY=", env_file.read_text(encoding="utf-8"))
+            self.assertNotIn("sk-compatible-secret", status.message)
+
     def test_env_file_updates_preserve_unrelated_content(self):
         with tempfile.TemporaryDirectory() as tmp:
             env_file = Path(tmp) / ".env"
