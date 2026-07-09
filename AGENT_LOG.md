@@ -488,3 +488,25 @@
   - `$env:PYTHONPATH="src"; python -m specgate.cli run-mock-demo examples/knowledge_nav` 通过。
 - 人工参与：
   - 用户确认先让 Context / Safety / Tooling 三个方向都有可测试第一层，再考虑深挖。
+
+## 2026-07-09
+
+- Task：AgentOS / Superpowers 对齐层。
+- 分支：`main`。
+- 文件变更：
+  - 新增 `skills/specgate-static-html-harness/SKILL.md`，记录 SpecGate 静态 HTML harness 的可复用执行流程。
+  - 新增 `skills/specgate-static-html-harness/agents/openai.yaml`，补充 Skill UI 元数据。
+  - 新增 `docs/AI4SE_Lab_9_12_Alignment.md`，说明 Lab 9-12 的取舍。
+  - 新增 `docs/superpowers/specs/2026-07-09-agentos-alignment-design.md`，记录本阶段设计。
+  - 新增 `docs/superpowers/plans/2026-07-09-agentos-alignment.md`，记录本阶段实施计划。
+  - 更新 `README.md`，加入 AgentOS / Superpowers 对齐说明。
+- 代码作用：
+  - 本次不修改 Python harness 核心代码。
+  - 将当前上下文管理、安全性和工具管理机制沉淀为可复用 Skill。
+  - 明确本阶段选择 Lab 10 Skill，暂不接入 Lab 9 MCP、Lab 11 Hook、Lab 12 AgentPack 和真实 LLM。
+- 验证证据：
+  - `python C:\Users\Lenovo\.codex\skills\.system\skill-creator\scripts\quick_validate.py skills\specgate-static-html-harness` 通过。
+  - `$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，39 个测试 OK。
+  - `$env:PYTHONPATH='src'; python -m specgate.cli run-mock-demo examples/knowledge_nav` 通过，退出码为 0。
+- 人工参与：
+  - 用户确认真实 LLM 先不接入，先完成 Lab 10 Skill 和 Lab 对齐文档。
