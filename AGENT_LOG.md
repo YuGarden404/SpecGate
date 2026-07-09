@@ -547,3 +547,25 @@
   - `$env:PYTHONUTF8='1'; python C:\Users\Lenovo\.codex\skills\.system\skill-creator\scripts\quick_validate.py skills\specgate-static-html-harness` 通过。
 - 人工参与：
   - 用户确认先做方向 A：最终交付材料打磨。
+
+## 2026-07-09
+
+- Task：Lab 11 Hook sample。
+- 分支：`main`。
+- 文件变更：
+  - 新增 `hooks/pre-commit.sample`，提供可选提交前检查示例。
+  - 新增 `tests/test_hook_sample.py`，验证 Hook sample 包含密钥扫描、必要文件检查、测试提示和 runtime 边界说明。
+  - 新增 `docs/superpowers/specs/2026-07-09-hook-sample-design.md`，记录 Hook sample 设计。
+  - 新增 `docs/superpowers/plans/2026-07-09-hook-sample.md`，记录实施计划。
+  - 更新 `docs/AI4SE_Lab_9_12_Alignment.md`、`docs/FINAL_SUBMISSION_CHECKLIST.md` 和 `README.md`，把 Lab 11 状态更新为已提供可选 sample。
+- 代码作用：
+  - 本次不修改 SpecGate runtime。
+  - Hook sample 只作为 HE / Lab 11 证据，不会自动安装到 `.git/hooks`。
+  - 不向 LLM 开放 shell、网络或额外文件权限。
+- 验证证据：
+  - `$env:PYTHONPATH='src'; python -m unittest tests.test_hook_sample -v` 通过，1 个测试 OK。
+  - `$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，40 个测试 OK。
+  - `$env:PYTHONPATH='src'; python -m specgate.cli run-mock-demo examples/knowledge_nav` 通过，退出码为 0。
+  - `$env:PYTHONUTF8='1'; python C:\Users\Lenovo\.codex\skills\.system\skill-creator\scripts\quick_validate.py skills\specgate-static-html-harness` 通过。
+- 人工参与：
+  - 用户确认忽略老师的进阶应用项目文档，继续沿 SpecGate 当前方向推进。

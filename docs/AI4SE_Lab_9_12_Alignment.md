@@ -58,19 +58,26 @@ skills/specgate-static-html-harness/SKILL.md
 
 课程方向：密钥扫描、Gate 文件存在性检查、提交前提示。
 
-SpecGate 当前决策：暂不实现，作为下一阶段候选。
+SpecGate 当前决策：已提供可选 sample，不强制安装。
 
-原因：
+交付物：
 
-- 当前已有 CI、单元测试、Docker 和静态报告验证。
-- Hook 是很合适的质量底线，但不是当前最缺的交付证据。
-- 如果现在加入，也应保持为 `hooks/pre-commit.sample`，不强制安装到用户环境。
+```text
+hooks/pre-commit.sample
+```
 
-后续可做：
+该 Hook sample 说明：
 
-- 检查 `.env`、API key 字样和疑似密钥。
-- 检查 `TASK_SPEC.md`、`CHECKLIST.md`、`specgate.toml` 是否存在。
-- 提示运行 `python -m unittest discover -s tests -v`。
+- 检查 staged 文件中的疑似 API key 或私钥。
+- 检查 demo 任务关键文件 `TASK_SPEC.md`、`CHECKLIST.md`、`specgate.toml` 是否存在。
+- 提示提交前运行 `python -m unittest discover -s tests -v`。
+- 明确它不是 SpecGate runtime 的一部分，不能理解为给 LLM 开放 shell 工具。
+
+价值：
+
+- 补充 Lab 11 / HE 的确定性防线证据。
+- 把密钥和必要文件检查前移到提交前。
+- 保持可选安装，不影响 Windows 用户和 CI 主路径。
 
 ## 5. Lab 12：AgentPack / LambdAgentPaaS
 
@@ -109,6 +116,6 @@ SpecGate 当前决策：暂不实现，作为后续轻量草案。
 - 做 Lab 10 Skill；
 - 做 Lab 9-12 对齐说明；
 - 继续保留 Mock LLM 作为默认路径；
-- 暂不扩大到 MCP、Hook、AgentPack 和真实 LLM。
+- 暂不扩大到 MCP、AgentPack 和真实 LLM；Hook 只提供可选 sample，不强制安装。
 
 这样能在不破坏 MVP 边界的前提下，明确说明 SpecGate 接入了 AgentOS 栈中的“Skill / 可复用流程”这一层。

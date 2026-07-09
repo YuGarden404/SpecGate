@@ -41,6 +41,7 @@ MVP 范围：
 | 静态 Web 报告 | 已完成 | `examples/knowledge_nav/reports/latest/index.html` |
 | 公开 WebUI URL | 已完成 | `https://yugarden404.github.io/SpecGate/` |
 | AgentOS / Superpowers 对齐 | 已完成 | `skills/specgate-static-html-harness/SKILL.md`、`docs/AI4SE_Lab_9_12_Alignment.md` |
+| Lab 11 Hook sample | 已完成 | `hooks/pre-commit.sample`、`tests/test_hook_sample.py` |
 
 ## 3. 核心机制对照
 
@@ -53,6 +54,7 @@ MVP 范围：
 | Gate 闭环 | `src/specgate/gate.py`、`src/specgate/runner.py` | Gate 失败摘要回灌给下一轮，驱动 MockLLM 生成修复动作。 |
 | trace 与报告 | `src/specgate/trace.py`、`src/specgate/report.py` | 记录运行事件并生成静态报告。 |
 | 凭据边界 | `src/specgate/credentials.py` | Mock 模式不需要凭据，真实 provider 默认 fail-closed。 |
+| 提交前防线示例 | `hooks/pre-commit.sample` | 可选 Hook sample，用于疑似密钥扫描、必要文件检查和测试提示。 |
 
 ## 4. 推荐评审路径
 
@@ -111,4 +113,4 @@ docker run --rm specgate:local
 - 有上下文、安全、工具三条工程主线。
 - 有 Lab 10 Skill 与 Lab 9-12 取舍说明。
 
-后续可选增强是 Lab 11 Hook sample、真实 LLM provider 设计、AgentPack 草案，但这些不是当前最终提交的必要条件。
+后续可选增强是真实 LLM provider 设计和 AgentPack 草案；Lab 11 Hook sample 已作为可选示例补齐。

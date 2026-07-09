@@ -112,6 +112,8 @@ SpecGate 使用 `Tool Registry` 结构化描述可用工具。当前注册的工
 
 Lab 9-12 的取舍记录见 `docs/AI4SE_Lab_9_12_Alignment.md`。当前结论是：Lab 10 已作为本阶段交付；Lab 9 MCP 暂不做；Lab 11 Hook 和 Lab 12 AgentPack 作为后续候选方向。
 
+Lab 11 Hook 已补充为可选示例：`hooks/pre-commit.sample`。它用于提交前疑似密钥扫描、demo 必要文件检查和测试提示，不会自动安装，也不是 SpecGate runtime 的一部分。
+
 ## Docker
 
 ```powershell
