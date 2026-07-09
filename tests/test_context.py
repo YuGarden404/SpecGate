@@ -35,6 +35,9 @@ class ContextTests(unittest.TestCase):
 
             self.assertIn("Context Manifest", pack)
             self.assertIn("Selected Files", pack)
+            self.assertIn("Tool Registry", pack)
+            self.assertIn("write_file", pack)
+            self.assertIn("finish", pack)
             self.assertIn("TASK_SPEC.md", pack)
             self.assertIn("selected", pack)
             self.assertIn("CHECKLIST.md", pack)
