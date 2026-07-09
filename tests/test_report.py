@@ -19,6 +19,9 @@ class ReportTests(unittest.TestCase):
             self.assertIn("SpecGate Run Report", html)
             self.assertIn("Gate 通过", html)
             self.assertIn("3", html)
+            self.assertIn("Tools", html)
+            self.assertIn("write_file", html)
+            self.assertIn("finish", html)
 
 
 if __name__ == "__main__":

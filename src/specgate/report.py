@@ -4,6 +4,7 @@ from html import escape
 from pathlib import Path
 
 from specgate.gate import GateResult
+from specgate.tool_registry import default_tool_registry
 
 
 def generate_report(root: Path, gate: GateResult, steps: int) -> Path:
@@ -12,6 +13,10 @@ def generate_report(root: Path, gate: GateResult, steps: int) -> Path:
     output = report_dir / "index.html"
     issues = "\n".join(f"<li>{escape(issue.code)}: {escape(issue.message)}</li>" for issue in gate.issues)
     checks = "\n".join(f"<li>{escape(check.code)}: {'PASS' if check.passed else 'FAIL'}</li>" for check in gate.checks)
+    tools = "\n".join(
+        f"<li><strong>{escape(tool.name)}</strong> [{escape(tool.permission)}]: {escape(tool.description)}</li>"
+        for tool in default_tool_registry().values()
+    )
     html = f"""<!doctype html>
 <html>
 <head>
@@ -28,6 +33,8 @@ def generate_report(root: Path, gate: GateResult, steps: int) -> Path:
   <ul>{checks}</ul>
   <h2>Issues</h2>
   <ul>{issues}</ul>
+  <h2>Tools</h2>
+  <ul>{tools}</ul>
   <p><a href="../../index.html">Final artifact</a></p>
 </body>
 </html>"""
