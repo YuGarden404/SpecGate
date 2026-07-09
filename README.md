@@ -96,6 +96,8 @@ examples/knowledge_nav/reports/latest/index.html
 - `examples/knowledge_nav/reports/latest/index.html`：一次运行的静态报告。
 - `examples/knowledge_nav/runs/latest/trace.jsonl`：逐步运行日志，每行是一条 JSON 事件。
 
+仓库会保留一个示例 `reports/latest/index.html` 方便评审直接查看；`runs/latest/trace.jsonl` 是本地运行产物，不进入 Git，可通过 Mock Demo 重新生成。
+
 `site/index.html` 是 GitHub Pages 的公开首页，不是 harness 的运行输入；Pages workflow 会把示例产物复制到公开站点中。
 
 ## 上下文管理

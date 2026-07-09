@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 
+from specgate.security import contains_secret_like_text
+
 
 @dataclass(frozen=True)
 class GateIssue:
@@ -98,7 +100,7 @@ def run_html_gate(html_path: Path, checklist_path: Path) -> GateResult:
         ("search", parser.has_search or "filter" in lower, "需要搜索或过滤 UI", "添加 search input 或 filter 控件"),
         ("relations", "highlightrelations" in lower or "data-related" in lower, "需要关系高亮能力", "添加 data-related 和关系高亮脚本"),
         ("offline", "https://" not in lower and "http://" not in lower, "不能依赖外部网络资源", "移除外部脚本和样式"),
-        ("no_secret", "sk-" not in content and "api_key" not in lower, "不能包含疑似密钥", "移除密钥样文本"),
+        ("no_secret", not contains_secret_like_text(content), "不能包含疑似密钥", "移除密钥样文本"),
     ]
 
     for code, passed, message, hint in requirements:

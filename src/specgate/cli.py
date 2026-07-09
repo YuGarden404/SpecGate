@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from specgate.config import load_policy
 from specgate.gate import run_html_gate
 from specgate.llm import MockLLM
 from specgate.policy import WorkspacePolicy
@@ -374,6 +375,22 @@ def _fixed_demo_html() -> str:
 </html>"""
 
 
+def _default_demo_policy(root: Path) -> WorkspacePolicy:
+    return WorkspacePolicy(
+        root=root,
+        allowed_actions={"write_file", "replace_file", "read_file", "list_files", "finish"},
+        allowed_read_paths={"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+        allowed_write_paths={"index.html"},
+    )
+
+
+def _load_demo_policy(root: Path) -> WorkspacePolicy:
+    config_path = root / "specgate.toml"
+    if config_path.exists():
+        return load_policy(config_path)
+    return _default_demo_policy(root)
+
+
 def run_mock_demo(root: Path) -> int:
     llm = MockLLM(
         [
@@ -386,12 +403,7 @@ def run_mock_demo(root: Path) -> int:
             {"schema_version": "1", "action": "finish", "args": {"summary": "done"}},
         ]
     )
-    policy = WorkspacePolicy(
-        root=root,
-        allowed_actions={"write_file", "replace_file", "read_file", "list_files", "finish"},
-        allowed_read_paths={"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
-        allowed_write_paths={"index.html"},
-    )
+    policy = _load_demo_policy(root)
     result = AgentRunner(root, llm, policy, max_steps=5).run()
     gate = result.final_gate or run_html_gate(root / "index.html", root / "CHECKLIST.md")
     generate_report(root, gate, result.steps)

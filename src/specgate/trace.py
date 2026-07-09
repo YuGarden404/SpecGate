@@ -3,14 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-import re
 from typing import Any
 
-
-SECRET_PATTERNS = [
-    re.compile(r"sk-[A-Za-z0-9_-]{8,}"),
-    re.compile(r"(?i)(api[_-]?key['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9_-]{8,}"),
-]
+from specgate.security import SECRET_PATTERNS
 
 
 def redact(value: Any) -> Any:

@@ -27,6 +27,30 @@ class CliTests(unittest.TestCase):
             self.assertIn("function showDetail", html)
             self.assertIn("function highlightRelations", html)
 
+    def test_run_mock_demo_uses_workspace_config_when_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "specgate.toml").write_text(
+                "\n".join(
+                    [
+                        "[policy]",
+                        'allowed_actions = ["write_file", "replace_file", "read_file", "list_files", "finish"]',
+                        'allowed_read_paths = ["TASK_SPEC.md", "CHECKLIST.md", "index.html"]',
+                        'allowed_write_paths = ["other.html"]',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            exit_code = run_mock_demo(root)
+
+            self.assertEqual(exit_code, 1)
+            self.assertFalse((root / "index.html").exists())
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("write path not allowed", trace_text)
+
 
 if __name__ == "__main__":
     unittest.main()

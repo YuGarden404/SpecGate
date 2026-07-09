@@ -54,6 +54,18 @@ class HtmlGateTests(unittest.TestCase):
             self.assertTrue(any(issue.code == "too_few_nodes" for issue in result.issues))
             self.assertIn("至少 10 个", result.summary)
 
+    def test_secret_like_google_api_key_fails_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            html = VALID_HTML.replace("</body>", "<p>AIzaSyDUMMYTOKEN1234567890</p></body>")
+            (root / "index.html").write_text(html, encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+
+            result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
+
+            self.assertFalse(result.passed)
+            self.assertTrue(any(issue.code == "no_secret" for issue in result.issues))
+
 
 if __name__ == "__main__":
     unittest.main()

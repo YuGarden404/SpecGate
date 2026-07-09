@@ -18,6 +18,8 @@ class HookSampleTests(unittest.TestCase):
         self.assertIn("examples/knowledge_nav/specgate.toml", text)
         self.assertIn("python -m unittest discover -s tests -v", text)
         self.assertIn("not part of the SpecGate runtime", text)
+        self.assertIn("while IFS= read -r staged_file", text)
+        self.assertIn('"$staged_file"', text)
 
 
 if __name__ == "__main__":
