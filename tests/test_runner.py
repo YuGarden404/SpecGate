@@ -40,6 +40,17 @@ class MutatingLLM:
         return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
 
 
+class FeedbackAwareLLM:
+    def __init__(self):
+        self.contexts: list[str] = []
+
+    def complete(self, context: str) -> str:
+        self.contexts.append(context)
+        if len(self.contexts) == 1:
+            return "not json"
+        return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
+
+
 class RunnerTests(unittest.TestCase):
     def test_gate_failure_feedback_changes_next_action(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -102,6 +113,21 @@ class RunnerTests(unittest.TestCase):
             trace_text = trace_path.read_text(encoding="utf-8")
             self.assertNotIn("old event", trace_text)
             self.assertIn("unknown action", trace_text)
+
+    def test_parse_error_feedback_reaches_next_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            llm = FeedbackAwareLLM()
+            policy = WorkspacePolicy(root, {"finish"}, {"TASK_SPEC.md", "CHECKLIST.md", "index.html"}, {"index.html"})
+
+            AgentRunner(root, llm, policy, max_steps=2).run()
+
+            self.assertEqual(len(llm.contexts), 2)
+            self.assertIn("Runtime Feedback", llm.contexts[1])
+            self.assertIn("parse_error", llm.contexts[1])
+            self.assertIn("model output must be one strict JSON object", llm.contexts[1])
 
     def test_external_file_change_is_blocked_and_traced(self):
         with tempfile.TemporaryDirectory() as tmp:

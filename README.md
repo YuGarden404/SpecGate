@@ -88,6 +88,28 @@ python -m specgate.cli run-mock-demo examples/knowledge_nav
 examples/knowledge_nav/reports/latest/index.html
 ```
 
+## 真实 LLM 运行
+
+真实 LLM 是可选能力，默认演示仍然使用 `MockLLM`。当前实现支持 OpenAI Chat Completions 兼容接口，适合第三方聚合平台。
+
+先在本机隐藏录入 API key，不要把 key 粘贴到聊天记录或提交到 Git：
+
+```powershell
+$env:PYTHONPATH="src"
+python -m specgate.cli credentials set openai-compatible --env-file .env
+```
+
+然后运行：
+
+```powershell
+$env:PYTHONPATH="src"
+python -m specgate.cli run examples/knowledge_nav --provider openai-compatible --model <模型名> --base-url <平台的 /v1 地址> --env-file .env --max-steps 5
+```
+
+如果第三方平台按请求指纹拦截，可以追加 `--user-agent "<另一个可用客户端的 User-Agent>"` 做兼容性排查。
+
+真实模型只负责输出下一步 JSON Action。文件读写仍然经过 `Tool Registry`、`WorkspacePolicy`、快照保护和 HTML Gate；缺少凭据时 CLI 会 fail closed，不会启动 runner，也不会生成 trace。
+
 示例任务目录说明：
 
 - `examples/knowledge_nav/TASK_SPEC.md`：运行时用户需求，描述要生成的 HTML 页面。

@@ -33,22 +33,44 @@ class AgentRunner:
 
     def run(self) -> RunResult:
         latest_gate: GateResult | None = None
+        runtime_feedback: list[dict] = []
         for step in range(1, self.max_steps + 1):
-            context = build_context_pack(self.root, latest_gate)
+            context = build_context_pack(self.root, latest_gate, runtime_feedback)
             raw = self.llm.complete(context)
             self.trace.append("llm_response", {"step": step, "text": raw})
 
             try:
                 action = parse_action(raw)
             except ActionParseError as exc:
-                self.trace.append("parse_error", {"step": step, "error": str(exc)})
+                event = {"step": step, "type": "parse_error", "error": str(exc)}
+                runtime_feedback.append(event)
+                self.trace.append("parse_error", event)
                 continue
 
             tool_result = self.dispatcher.dispatch(action)
+            runtime_feedback.append(
+                {
+                    "step": step,
+                    "type": "tool_result",
+                    "action": tool_result.action,
+                    "ok": tool_result.ok,
+                    "blocked": tool_result.blocked,
+                    "message": tool_result.message,
+                    "data": tool_result.data,
+                }
+            )
             self.trace.append("tool_result", {"step": step, "result": tool_result.__dict__})
 
             if action.action in {"write_file", "replace_file"} and not tool_result.blocked:
                 latest_gate = run_html_gate(self.root / "index.html", self.root / "CHECKLIST.md")
+                runtime_feedback.append(
+                    {
+                        "step": step,
+                        "type": "gate_result",
+                        "passed": latest_gate.passed,
+                        "summary": latest_gate.summary,
+                    }
+                )
                 self.trace.append(
                     "gate_result",
                     {"step": step, "passed": latest_gate.passed, "summary": latest_gate.summary},

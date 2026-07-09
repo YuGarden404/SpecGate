@@ -38,6 +38,8 @@ class ContextTests(unittest.TestCase):
             self.assertIn("Tool Registry", pack)
             self.assertIn("write_file", pack)
             self.assertIn("finish", pack)
+            self.assertIn("schema_version", pack)
+            self.assertIn('"action"', pack)
             self.assertIn("TASK_SPEC.md", pack)
             self.assertIn("selected", pack)
             self.assertIn("CHECKLIST.md", pack)
