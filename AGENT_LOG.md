@@ -527,3 +527,23 @@
   - `$env:PYTHONPATH='src'; python -m specgate.cli run-mock-demo examples/knowledge_nav` 通过，退出码为 0。
 - 说明：
   - Windows 下 `quick_validate.py` 默认编码可能是 GBK，直接读取中文 UTF-8 Skill 会报 `UnicodeDecodeError`；设置 `PYTHONUTF8=1` 后校验通过。
+
+## 2026-07-09
+
+- Task：最终交付材料打磨。
+- 分支：`main`。
+- 文件变更：
+  - 新增 `docs/FINAL_SUBMISSION_CHECKLIST.md`，整理课程交付物、核心机制、评审路径和复现命令。
+  - 新增 `docs/PROJECT_WALKTHROUGH.md`，提供项目讲解稿、数据流、模块说明和演示脚本。
+  - 新增 `docs/superpowers/plans/2026-07-09-final-delivery-polish.md`，记录最终材料打磨计划。
+  - 更新 `README.md`，增加评审快速入口。
+  - 更新 `REFLECTION.md`，补充最终交付阶段反思。
+- 代码作用：
+  - 本次不修改 Python harness 核心代码。
+  - 将现有实现整理成面向期末评审的入口材料。
+- 验证证据：
+  - `$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，39 个测试 OK。
+  - `$env:PYTHONPATH='src'; python -m specgate.cli run-mock-demo examples/knowledge_nav` 通过，退出码为 0。
+  - `$env:PYTHONUTF8='1'; python C:\Users\Lenovo\.codex\skills\.system\skill-creator\scripts\quick_validate.py skills\specgate-static-html-harness` 通过。
+- 人工参与：
+  - 用户确认先做方向 A：最终交付材料打磨。

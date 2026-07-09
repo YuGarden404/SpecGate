@@ -4,6 +4,18 @@ SpecGate 是 AI4SE 期末项目的 A 类选题：一个从零实现的小型 `Co
 
 MVP 是 Python CLI harness，使用可注入的 `MockLLM`，围绕静态 HTML 生成/修复任务运行 Checklist/Gate 反馈闭环，并生成静态 Web 报告。
 
+## 评审快速入口
+
+- 最终提交清单：`docs/FINAL_SUBMISSION_CHECKLIST.md`
+- 项目讲解稿：`docs/PROJECT_WALKTHROUGH.md`
+- Lab 9-12 对齐说明：`docs/AI4SE_Lab_9_12_Alignment.md`
+- SpecGate Skill：`skills/specgate-static-html-harness/SKILL.md`
+- 公开 WebUI 首页：`https://yugarden404.github.io/SpecGate/`
+- 知识图谱 demo：`https://yugarden404.github.io/SpecGate/demo/`
+- 运行报告：`https://yugarden404.github.io/SpecGate/report/`
+
+推荐评审顺序：先看最终提交清单，再看项目讲解稿，然后运行本地测试或打开公开报告。
+
 ## 两类 SPEC
 
 这里有两个层级，不能混在一起：
