@@ -38,6 +38,19 @@ class ToolDispatcherTests(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertTrue(result.blocked)
             self.assertIn("unknown action", result.message)
+            self.assertEqual(result.action, "run_command")
+
+    def test_custom_registry_blocks_tools_not_registered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            policy = WorkspacePolicy(root, {"write_file"}, {"index.html"}, {"index.html"})
+            dispatcher = ToolDispatcher(policy, registry={})
+
+            result = dispatcher.dispatch(Action("1", "write_file", {"path": "index.html", "content": "x"}))
+
+            self.assertFalse(result.ok)
+            self.assertTrue(result.blocked)
+            self.assertIn("unknown action", result.message)
 
     def test_snapshot_blocks_write_after_external_change(self):
         with tempfile.TemporaryDirectory() as tmp:

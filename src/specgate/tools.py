@@ -7,6 +7,7 @@ from typing import Any
 from specgate.actions import Action
 from specgate.policy import WorkspacePolicy, check_action
 from specgate.snapshot import FileSnapshot
+from specgate.tool_registry import ToolSpec, default_tool_registry
 
 
 @dataclass(frozen=True)
@@ -19,11 +20,20 @@ class ToolResult:
 
 
 class ToolDispatcher:
-    def __init__(self, policy: WorkspacePolicy, snapshot: FileSnapshot | None = None):
+    def __init__(
+        self,
+        policy: WorkspacePolicy,
+        snapshot: FileSnapshot | None = None,
+        registry: dict[str, ToolSpec] | None = None,
+    ):
         self.policy = policy
         self.snapshot = snapshot
+        self.registry = default_tool_registry() if registry is None else registry
 
     def dispatch(self, action: Action) -> ToolResult:
+        if action.action not in self.registry:
+            return ToolResult(False, action.action, f"unknown action: {action.action}", blocked=True)
+
         decision = check_action(action, self.policy)
         if not decision.allowed:
             return ToolResult(False, action.action, decision.reason, blocked=True)
