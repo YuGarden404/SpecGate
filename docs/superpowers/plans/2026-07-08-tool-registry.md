@@ -1,4 +1,4 @@
-# Tool Registry Implementation Plan
+# Tool Registry 实施计划
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -10,7 +10,7 @@
 
 ---
 
-## File Structure
+## 文件结构
 
 - Create: `src/specgate/tool_registry.py`
   - 定义 `ToolSpec`。
@@ -38,13 +38,13 @@
 
 ---
 
-## Task 1: 新增 Tool Registry
+## Task 1：新增 Tool Registry
 
-**Files:**
+**文件：**
 - Create: `tests/test_tool_registry.py`
 - Create: `src/specgate/tool_registry.py`
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **Step 1：写失败测试**
 
 Create `tests/test_tool_registry.py`:
 
@@ -82,7 +82,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run tests to verify failure**
+- [ ] **Step 2：运行测试确认失败**
 
 Run:
 
@@ -91,13 +91,13 @@ $env:PYTHONPATH="src"
 python -m unittest tests.test_tool_registry -v
 ```
 
-Expected:
+预期：
 
 ```text
 ModuleNotFoundError: No module named 'specgate.tool_registry'
 ```
 
-- [ ] **Step 3: Implement tool registry**
+- [ ] **Step 3：实现工具注册表**
 
 Create `src/specgate/tool_registry.py`:
 
@@ -170,7 +170,7 @@ def render_tool_registry_for_context(registry: dict[str, ToolSpec] | None = None
     return "\n".join(lines)
 ```
 
-- [ ] **Step 4: Run registry tests**
+- [ ] **Step 4：运行注册表测试**
 
 Run:
 
@@ -179,13 +179,13 @@ $env:PYTHONPATH="src"
 python -m unittest tests.test_tool_registry -v
 ```
 
-Expected:
+预期：
 
 ```text
 Ran 3 tests ... OK
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5：提交**
 
 Run:
 
@@ -196,13 +196,13 @@ git commit -m "feat: 新增工具注册表"
 
 ---
 
-## Task 2: ToolDispatcher 使用 Registry 判断未知工具
+## Task 2：ToolDispatcher 使用 Registry 判断未知工具
 
-**Files:**
+**文件：**
 - Modify: `src/specgate/tools.py`
 - Modify: `tests/test_tools.py`
 
-- [ ] **Step 1: Update test expectation**
+- [ ] **Step 1：更新测试期望**
 
 Modify `tests/test_tools.py`, in `test_blocked_action_returns_tool_result`, keep the existing assertion:
 
@@ -216,7 +216,7 @@ Add this assertion:
 self.assertEqual(result.action, "run_command")
 ```
 
-This test already passes by behavior, but after registry integration it proves action identity is preserved. Add a custom registry test:
+这个测试目前已经能通过；接入 registry 后，它用于证明被拦截 action 的名称仍然被保留。继续添加一个自定义 registry 测试：
 
 ```python
     def test_custom_registry_blocks_tools_not_registered(self):
@@ -232,7 +232,7 @@ This test already passes by behavior, but after registry integration it proves a
             self.assertIn("unknown action", result.message)
 ```
 
-- [ ] **Step 2: Run tests to verify failure**
+- [ ] **Step 2：运行测试确认失败**
 
 Run:
 
@@ -241,13 +241,13 @@ $env:PYTHONPATH="src"
 python -m unittest tests.test_tools -v
 ```
 
-Expected:
+预期：
 
 ```text
 TypeError: ToolDispatcher.__init__() got an unexpected keyword argument 'registry'
 ```
 
-- [ ] **Step 3: Update ToolDispatcher**
+- [ ] **Step 3：更新 ToolDispatcher**
 
 Modify `src/specgate/tools.py`, add import:
 
@@ -255,7 +255,7 @@ Modify `src/specgate/tools.py`, add import:
 from specgate.tool_registry import ToolSpec, default_tool_registry
 ```
 
-Change initializer:
+修改初始化函数：
 
 ```python
 class ToolDispatcher:
@@ -270,16 +270,16 @@ class ToolDispatcher:
         self.registry = default_tool_registry() if registry is None else registry
 ```
 
-At the top of `dispatch()` add:
+在 `dispatch()` 开头加入：
 
 ```python
         if action.action not in self.registry:
             return ToolResult(False, action.action, f"unknown action: {action.action}", blocked=True)
 ```
 
-Leave the existing policy check immediately after registry check.
+保留现有 policy 检查，但让它位于 registry 检查之后。
 
-- [ ] **Step 4: Run tool tests**
+- [ ] **Step 4：运行工具测试**
 
 Run:
 
@@ -288,13 +288,13 @@ $env:PYTHONPATH="src"
 python -m unittest tests.test_tools -v
 ```
 
-Expected:
+预期：
 
 ```text
 Ran 5 tests ... OK
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5：提交**
 
 Run:
 
@@ -305,13 +305,13 @@ git commit -m "feat: 让工具分发器使用注册表"
 
 ---
 
-## Task 3: Context Pack 输出 Tool Registry
+## Task 3：Context Pack 输出 Tool Registry
 
-**Files:**
+**文件：**
 - Modify: `src/specgate/context.py`
 - Modify: `tests/test_context.py`
 
-- [ ] **Step 1: Write failing context assertions**
+- [ ] **Step 1：写失败断言**
 
 Modify `tests/test_context.py`, in `test_context_pack_contains_task_docs_and_gate_summary`, add:
 
@@ -321,7 +321,7 @@ self.assertIn("write_file", pack)
 self.assertIn("finish", pack)
 ```
 
-- [ ] **Step 2: Run test to verify failure**
+- [ ] **Step 2：运行测试确认失败**
 
 Run:
 
@@ -330,13 +330,13 @@ $env:PYTHONPATH="src"
 python -m unittest tests.test_context -v
 ```
 
-Expected:
+预期：
 
 ```text
 AssertionError: 'Tool Registry' not found in ...
 ```
 
-- [ ] **Step 3: Update context rendering**
+- [ ] **Step 3：更新 context 渲染**
 
 Modify `src/specgate/context.py`, add import:
 
@@ -344,13 +344,13 @@ Modify `src/specgate/context.py`, add import:
 from specgate.tool_registry import render_tool_registry_for_context
 ```
 
-In `build_context_pack()`, insert this section after the fixed agent instruction:
+在 `build_context_pack()` 中，把下面这段插入固定 agent 指令之后：
 
 ```python
             "## Tool Registry\n" + render_tool_registry_for_context(),
 ```
 
-- [ ] **Step 4: Run context tests**
+- [ ] **Step 4：运行 context 测试**
 
 Run:
 
@@ -359,13 +359,13 @@ $env:PYTHONPATH="src"
 python -m unittest tests.test_context tests.test_tool_registry -v
 ```
 
-Expected:
+预期：
 
 ```text
 OK
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5：提交**
 
 Run:
 
@@ -376,13 +376,13 @@ git commit -m "feat: 在context pack中加入工具注册表"
 
 ---
 
-## Task 4: Report 展示 Tool Registry
+## Task 4：Report 展示 Tool Registry
 
-**Files:**
+**文件：**
 - Modify: `src/specgate/report.py`
 - Modify: `tests/test_report.py`
 
-- [ ] **Step 1: Write failing report assertions**
+- [ ] **Step 1：写失败断言**
 
 Modify `tests/test_report.py`, in `test_generate_static_report`, add:
 
@@ -392,7 +392,7 @@ self.assertIn("write_file", html)
 self.assertIn("finish", html)
 ```
 
-- [ ] **Step 2: Run test to verify failure**
+- [ ] **Step 2：运行测试确认失败**
 
 Run:
 
@@ -401,13 +401,13 @@ $env:PYTHONPATH="src"
 python -m unittest tests.test_report -v
 ```
 
-Expected:
+预期：
 
 ```text
 AssertionError: 'Tools' not found in ...
 ```
 
-- [ ] **Step 3: Update report generation**
+- [ ] **Step 3：更新报告生成逻辑**
 
 Modify `src/specgate/report.py`, add import:
 
@@ -415,7 +415,7 @@ Modify `src/specgate/report.py`, add import:
 from specgate.tool_registry import default_tool_registry
 ```
 
-Inside `generate_report()`, before `html = ...`, add:
+在 `generate_report()` 内部、`html = ...` 之前加入：
 
 ```python
     tools = "\n".join(
@@ -424,14 +424,14 @@ Inside `generate_report()`, before `html = ...`, add:
     )
 ```
 
-Add this block before `Final artifact`:
+在 `Final artifact` 链接之前加入：
 
 ```html
   <h2>Tools</h2>
   <ul>{tools}</ul>
 ```
 
-- [ ] **Step 4: Run report tests**
+- [ ] **Step 4：运行 report 测试**
 
 Run:
 
@@ -440,13 +440,13 @@ $env:PYTHONPATH="src"
 python -m unittest tests.test_report -v
 ```
 
-Expected:
+预期：
 
 ```text
 Ran 1 test ... OK
 ```
 
-- [ ] **Step 5: Run CLI regression**
+- [ ] **Step 5：运行 CLI 回归测试**
 
 Run:
 
@@ -455,13 +455,13 @@ $env:PYTHONPATH="src"
 python -m unittest tests.test_cli -v
 ```
 
-Expected:
+预期：
 
 ```text
 Ran 1 test ... OK
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6：提交**
 
 Run:
 
@@ -472,15 +472,15 @@ git commit -m "feat: 在静态报告中展示工具注册表"
 
 ---
 
-## Task 5: 文档、日志与全量验证
+## Task 5：文档、日志与全量验证
 
-**Files:**
+**文件：**
 - Modify: `README.md`
 - Modify: `AGENT_LOG.md`
 
-- [ ] **Step 1: Update README**
+- [ ] **Step 1：更新 README**
 
-In `README.md`, after the `## 上下文管理` section, add:
+在 `README.md` 的 `## 上下文管理` 小节后加入：
 
 ```markdown
 ## 工具管理
@@ -488,7 +488,7 @@ In `README.md`, after the `## 上下文管理` section, add:
 SpecGate 使用 `Tool Registry` 结构化描述可用工具。当前注册的工具包括 `read_file`、`write_file`、`replace_file`、`list_files` 和 `finish`。注册表会进入 context pack，并展示在静态报告中；实际权限仍由 `WorkspacePolicy` 和文件快照保护共同执行。
 ```
 
-- [ ] **Step 2: Update AGENT_LOG**
+- [ ] **Step 2：更新 AGENT_LOG**
 
 Append to `AGENT_LOG.md`:
 
@@ -514,7 +514,7 @@ Append to `AGENT_LOG.md`:
   - 用户确认先让 Context / Safety / Tooling 三个方向都有可测试第一层，再考虑深挖。
 ```
 
-- [ ] **Step 3: Run full test suite**
+- [ ] **Step 3：运行全量测试**
 
 Run:
 
@@ -523,13 +523,13 @@ $env:PYTHONPATH="src"
 python -m unittest discover -s tests -v
 ```
 
-Expected:
+预期：
 
 ```text
 OK
 ```
 
-- [ ] **Step 4: Run mock demo**
+- [ ] **Step 4：运行 mock demo**
 
 Run:
 
@@ -538,15 +538,15 @@ $env:PYTHONPATH="src"
 python -m specgate.cli run-mock-demo examples/knowledge_nav
 ```
 
-Expected:
+预期：
 
 ```text
 exit code 0
 ```
 
-The CLI may print no output. If so, verify `examples/knowledge_nav/reports/latest/index.html` exists.
+CLI 可能没有输出。若无输出，确认 `examples/knowledge_nav/reports/latest/index.html` 存在即可。
 
-- [ ] **Step 5: Check diff hygiene**
+- [ ] **Step 5：检查 diff 卫生**
 
 Run:
 
@@ -555,7 +555,7 @@ git diff --check
 git status --short
 ```
 
-Expected:
+预期：
 
 ```text
 git diff --check
@@ -566,9 +566,9 @@ git status --short
  M README.md
 ```
 
-Windows LF/CRLF warnings are acceptable if no whitespace errors are reported.
+如果没有 whitespace error，Windows 的 LF/CRLF warning 可以接受。
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6：提交**
 
 Run:
 
@@ -579,9 +579,9 @@ git commit -m "docs: 记录工具注册表验证结果"
 
 ---
 
-## Final Verification
+## 最终验证
 
-After all tasks:
+所有任务完成后运行：
 
 ```powershell
 $env:PYTHONPATH="src"
@@ -591,7 +591,7 @@ git log --oneline -8
 git status
 ```
 
-Expected:
+预期：
 
 - 全量测试通过。
 - mock demo 通过。
