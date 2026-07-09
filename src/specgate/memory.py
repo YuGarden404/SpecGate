@@ -5,9 +5,20 @@ import json
 from pathlib import Path
 from typing import Any
 
+from specgate.trace import redact
+
 
 MEMORY_FILE = "memory.json"
 MAX_MEMORY_RUNS = 5
+MAX_SUMMARY_CHARS = 500
+
+
+def _safe_summary(summary: str) -> str:
+    redacted = redact(summary)
+    text = redacted if isinstance(redacted, str) else str(redacted)
+    if len(text) > MAX_SUMMARY_CHARS:
+        return text[:MAX_SUMMARY_CHARS] + "...[truncated]"
+    return text
 
 
 def _memory_path(root: Path) -> Path:
@@ -35,7 +46,7 @@ def append_memory(root: Path, passed: bool, steps: int, gate_summary: str) -> Pa
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "passed": passed,
             "steps": steps,
-            "gate_summary": gate_summary,
+            "gate_summary": _safe_summary(gate_summary),
         }
     )
     data["runs"] = runs[-MAX_MEMORY_RUNS:]
@@ -58,7 +69,7 @@ def load_memory_summary(root: Path) -> str:
                     f"run {index}",
                     f"passed={item.get('passed')}",
                     f"steps={item.get('steps')}",
-                    f"gate={item.get('gate_summary', '')}",
+                    f"gate={_safe_summary(str(item.get('gate_summary', '')))}",
                 ]
             )
         )

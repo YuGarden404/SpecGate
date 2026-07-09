@@ -6,6 +6,7 @@ from pathlib import Path
 
 TEXT_SUFFIXES = {".md", ".html", ".css", ".js", ".txt", ".toml", ".json", ".jsonl"}
 EXCLUDED_DIRS = {".git", "__pycache__", "runs", "reports"}
+EXCLUDED_FILES = {"memory.json"}
 DEFAULT_BUDGET_CHARS = 12000
 TRUNCATION_SUFFIX = "\n...[truncated by SpecGate context budget]\n"
 
@@ -68,6 +69,9 @@ def select_context_files(root: Path, budget_chars: int = DEFAULT_BUDGET_CHARS) -
     for path in _scan_files(root):
         rel = _relative(path, root)
         priority = _priority(rel)
+        if rel in EXCLUDED_FILES:
+            skipped.append(ContextFile(rel, "skipped", "managed memory file", 0, priority))
+            continue
         if _is_under_excluded_dir(path, root):
             skipped.append(ContextFile(rel, "skipped", "excluded runtime or hidden directory", 0, priority))
             continue

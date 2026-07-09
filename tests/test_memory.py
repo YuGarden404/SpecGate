@@ -17,6 +17,16 @@ class MemoryTests(unittest.TestCase):
             self.assertIn("passed=True", summary)
             self.assertTrue((root / "memory.json").exists())
 
+    def test_memory_redacts_secret_like_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            append_memory(root, passed=False, steps=1, gate_summary="bad sk-secret123456")
+            summary = load_memory_summary(root)
+
+            self.assertNotIn("sk-secret123456", summary)
+            self.assertIn("[REDACTED]", summary)
+
 
 if __name__ == "__main__":
     unittest.main()

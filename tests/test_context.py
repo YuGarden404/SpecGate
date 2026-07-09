@@ -58,6 +58,7 @@ class ContextTests(unittest.TestCase):
 
             self.assertIn("Memory", pack)
             self.assertIn("reuse search layout", pack)
+            self.assertNotIn("### memory.json", pack)
 
 
 if __name__ == "__main__":
