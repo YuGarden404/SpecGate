@@ -40,6 +40,24 @@ class ToolDispatcherTests(unittest.TestCase):
             self.assertIn("unknown action", result.message)
             self.assertEqual(result.action, "run_command")
 
+    def test_file_action_without_path_returns_blocked_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = WorkspacePolicy(
+                Path(tmp),
+                {"read_file", "write_file", "replace_file"},
+                {"index.html"},
+                {"index.html"},
+            )
+            dispatcher = ToolDispatcher(policy)
+
+            for action_name in ("read_file", "write_file", "replace_file"):
+                with self.subTest(action_name=action_name):
+                    result = dispatcher.dispatch(Action("1", action_name, {}))
+
+                    self.assertFalse(result.ok)
+                    self.assertTrue(result.blocked)
+                    self.assertIn("missing required path", result.message)
+
     def test_custom_registry_blocks_tools_not_registered(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

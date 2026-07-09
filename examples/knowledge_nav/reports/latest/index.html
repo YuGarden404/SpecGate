@@ -45,6 +45,15 @@
 <li><strong>replace_file</strong> [write]: Replace a UTF-8 text file allowed by workspace policy and snapshot protection.</li>
 <li><strong>list_files</strong> [inspect]: List files inside the workspace.</li>
 <li><strong>finish</strong> [control]: Finish the agent loop with a short summary.</li></ul>
+  <h2>Run Events</h2>
+  <ol><li><strong>llm_response</strong>: <code>{&quot;step&quot;: 1, &quot;text&quot;: &quot;{\&quot;schema_version\&quot;: \&quot;1\&quot;, \&quot;action\&quot;: \&quot;write_file\&quot;, \&quot;args\&quot;: {\&quot;path\&quot;: \&quot;index.html\&quot;, \&quot;content\&quot;: \&quot;&lt;html&gt;&lt;head&gt;&lt;title&gt;x&lt;/title&gt;&lt;/head&gt;&lt;body&gt;&lt;/body&gt;&lt;/html&gt;\&quot;}}&quot;}</code></li>
+<li><strong>tool_result</strong>: <code>{&quot;step&quot;: 1, &quot;result&quot;: {&quot;ok&quot;: true, &quot;action&quot;: &quot;write_file&quot;, &quot;message&quot;: &quot;wrote index.html&quot;, &quot;data&quot;: {&quot;path&quot;: &quot;index.html&quot;}, &quot;blocked&quot;: false}}</code></li>
+<li><strong>gate_result</strong>: <code>{&quot;step&quot;: 1, &quot;passed&quot;: false, &quot;summary&quot;: &quot;Gate 失败：添加至少 10 个 class=node 的知识节点；添加 &lt;!doctype html&gt;；添加移动端 viewport meta；添加 search input 或 filter 控件&quot;}</code></li>
+<li><strong>llm_response</strong>: <code>{&quot;step&quot;: 2, &quot;text&quot;: &quot;{\&quot;schema_version\&quot;: \&quot;1\&quot;, \&quot;action\&quot;: \&quot;replace_file\&quot;, \&quot;args\&quot;: {\&quot;path\&quot;: \&quot;index.html\&quot;, \&quot;content\&quot;: \&quot;&lt;!doctype html&gt;\\n&lt;html lang=\\\&quot;zh-CN\\\&quot;&gt;\\n&lt;head&gt;\\n  &lt;meta charset=\\\&quot;utf-8\\\&quot;&gt;\\n  &lt;meta name=\\\&quot;viewport\\\&quot; content=\\\&quot;width=device-width, initial-scale=1\\\&quot;&gt;\\n  &lt;title&gt;AI for Coding 知识图谱&lt;/title&gt;\\n  &lt;style&gt;\\n    :root {\\n      --bg: #eef2f6;\\n      --ink: #17202a;\\n      --muted: #667382;\\n      --line: #d8e0ea;\\n      --paper: #ffffff;\\n      --...[truncated]</code></li>
+<li><strong>tool_result</strong>: <code>{&quot;step&quot;: 2, &quot;result&quot;: {&quot;ok&quot;: true, &quot;action&quot;: &quot;replace_file&quot;, &quot;message&quot;: &quot;wrote index.html&quot;, &quot;data&quot;: {&quot;path&quot;: &quot;index.html&quot;}, &quot;blocked&quot;: false}}</code></li>
+<li><strong>gate_result</strong>: <code>{&quot;step&quot;: 2, &quot;passed&quot;: true, &quot;summary&quot;: &quot;Gate 通过&quot;}</code></li>
+<li><strong>llm_response</strong>: <code>{&quot;step&quot;: 3, &quot;text&quot;: &quot;{\&quot;schema_version\&quot;: \&quot;1\&quot;, \&quot;action\&quot;: \&quot;finish\&quot;, \&quot;args\&quot;: {\&quot;summary\&quot;: \&quot;done\&quot;}}&quot;}</code></li>
+<li><strong>tool_result</strong>: <code>{&quot;step&quot;: 3, &quot;result&quot;: {&quot;ok&quot;: true, &quot;action&quot;: &quot;finish&quot;, &quot;message&quot;: &quot;finish requested&quot;, &quot;data&quot;: {&quot;summary&quot;: &quot;done&quot;}, &quot;blocked&quot;: false}}</code></li></ol>
   <p><a href="../../index.html">Final artifact</a></p>
 </body>
 </html>

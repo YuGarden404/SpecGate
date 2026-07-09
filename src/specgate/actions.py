@@ -36,6 +36,8 @@ def parse_action(raw: str) -> Action:
 
     if not isinstance(payload["schema_version"], str):
         raise ActionParseError("schema_version must be a string")
+    if payload["schema_version"] != "1":
+        raise ActionParseError(f"unsupported schema_version: {payload['schema_version']}")
     if not isinstance(payload["action"], str):
         raise ActionParseError("action must be a string")
     if not isinstance(payload["args"], dict):

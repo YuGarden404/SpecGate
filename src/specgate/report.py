@@ -1,10 +1,36 @@
 from __future__ import annotations
 
+import json
 from html import escape
 from pathlib import Path
 
 from specgate.gate import GateResult
 from specgate.tool_registry import default_tool_registry
+
+
+def _render_run_events(root: Path) -> str:
+    trace_path = root / "runs" / "latest" / "trace.jsonl"
+    if not trace_path.exists():
+        return "<p>No trace events found.</p>"
+
+    items: list[str] = []
+    for line in trace_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            items.append(f"<li><strong>invalid_trace_line</strong>: <code>{escape(line[:240])}</code></li>")
+            continue
+        event_type = str(event.get("event_type", "unknown"))
+        payload = json.dumps(event.get("payload", {}), ensure_ascii=False)
+        if len(payload) > 500:
+            payload = payload[:500] + "...[truncated]"
+        items.append(f"<li><strong>{escape(event_type)}</strong>: <code>{escape(payload)}</code></li>")
+
+    if not items:
+        return "<p>No trace events found.</p>"
+    return "<ol>" + "\n".join(items) + "</ol>"
 
 
 def generate_report(root: Path, gate: GateResult, steps: int) -> Path:
@@ -17,6 +43,7 @@ def generate_report(root: Path, gate: GateResult, steps: int) -> Path:
         f"<li><strong>{escape(tool.name)}</strong> [{escape(tool.permission)}]: {escape(tool.description)}</li>"
         for tool in default_tool_registry().values()
     )
+    events = _render_run_events(root)
     html = f"""<!doctype html>
 <html>
 <head>
@@ -35,6 +62,8 @@ def generate_report(root: Path, gate: GateResult, steps: int) -> Path:
   <ul>{issues}</ul>
   <h2>Tools</h2>
   <ul>{tools}</ul>
+  <h2>Run Events</h2>
+  {events}
   <p><a href="../../index.html">Final artifact</a></p>
 </body>
 </html>"""

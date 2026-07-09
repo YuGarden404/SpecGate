@@ -52,6 +52,26 @@ class PolicyTests(unittest.TestCase):
             self.assertFalse(decision.allowed)
             self.assertIn("write path not allowed", decision.reason)
 
+    def test_blocks_file_action_without_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = WorkspacePolicy(Path(tmp), {"read_file"}, {"index.html"}, {"index.html"})
+            action = Action("1", "read_file", {})
+
+            decision = check_action(action, policy)
+
+            self.assertFalse(decision.allowed)
+            self.assertIn("missing required path", decision.reason)
+
+    def test_blocks_file_action_with_non_string_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = WorkspacePolicy(Path(tmp), {"write_file"}, {"index.html"}, {"index.html"})
+            action = Action("1", "write_file", {"path": 123, "content": "bad"})
+
+            decision = check_action(action, policy)
+
+            self.assertFalse(decision.allowed)
+            self.assertIn("path must be a non-empty string", decision.reason)
+
 
 if __name__ == "__main__":
     unittest.main()

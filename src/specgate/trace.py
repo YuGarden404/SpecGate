@@ -27,9 +27,11 @@ def redact(value: Any) -> Any:
 
 
 class TraceStore:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, reset: bool = False):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if reset:
+            self.path.write_text("", encoding="utf-8")
 
     def append(self, event_type: str, payload: dict[str, Any]) -> None:
         event = {

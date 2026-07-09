@@ -84,6 +84,23 @@ class RunnerTests(unittest.TestCase):
             trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("unknown action", trace_text)
 
+    def test_latest_trace_is_reset_for_each_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            trace_path = root / "runs" / "latest" / "trace.jsonl"
+            trace_path.parent.mkdir(parents=True)
+            trace_path.write_text("old event\n", encoding="utf-8")
+            llm = MockLLM([{"schema_version": "1", "action": "run_command", "args": {"command": "dir"}}])
+            policy = WorkspacePolicy(root, {"write_file"}, {"TASK_SPEC.md"}, {"index.html"})
+
+            AgentRunner(root, llm, policy, max_steps=1).run()
+
+            trace_text = trace_path.read_text(encoding="utf-8")
+            self.assertNotIn("old event", trace_text)
+            self.assertIn("unknown action", trace_text)
+
     def test_external_file_change_is_blocked_and_traced(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

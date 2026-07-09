@@ -43,6 +43,14 @@ class ActionParserTests(unittest.TestCase):
 
         self.assertIn("args must be an object", str(ctx.exception))
 
+    def test_rejects_unsupported_schema_version(self):
+        raw = '{"schema_version":"2","action":"finish","args":{}}'
+
+        with self.assertRaises(ActionParseError) as ctx:
+            parse_action(raw)
+
+        self.assertIn("unsupported schema_version", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

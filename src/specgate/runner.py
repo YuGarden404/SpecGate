@@ -28,7 +28,7 @@ class AgentRunner:
         self.max_steps = max_steps
         snapshot = FileSnapshot.capture(root, policy.allowed_write_paths)
         self.dispatcher = ToolDispatcher(policy, snapshot)
-        self.trace = TraceStore(root / "runs" / "latest" / "trace.jsonl")
+        self.trace = TraceStore(root / "runs" / "latest" / "trace.jsonl", reset=True)
 
     def run(self) -> RunResult:
         latest_gate: GateResult | None = None

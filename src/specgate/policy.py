@@ -34,8 +34,12 @@ def check_action(action: Action, policy: WorkspacePolicy) -> GuardrailDecision:
         return GuardrailDecision(False, f"unknown action: {action.action}")
 
     path_value = action.args.get("path")
+    if action.action in {"read_file", "write_file", "replace_file"} and path_value is None:
+        return GuardrailDecision(False, f"missing required path for {action.action}")
     if path_value is None:
         return GuardrailDecision(True, "allowed")
+    if not isinstance(path_value, str) or not path_value:
+        return GuardrailDecision(False, "path must be a non-empty string")
 
     normalized = _normalize_relative(path_value)
     if normalized is None:

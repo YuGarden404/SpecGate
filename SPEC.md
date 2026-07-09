@@ -76,8 +76,9 @@ MVP 的 Tool Registry 只包含确定性白名单工具：
 - `write_file`：写入允许范围内的文本文件，主要是 `index.html` 和报告文件。
 - `replace_file`：原子替换允许范围内的文本文件。
 - `list_files`：列出允许范围内的工作区文件。
-- `run_gate`：运行配置好的确定性 Gate。
 - `finish`：请求结束循环并提交最终摘要。
+
+Gate 是 runner 内部的确定性检查步骤，不作为 LLM 可直接调用的工具开放。
 
 MVP 明确没有 `run_command` 或 shell 工具。如果后续版本加入命令执行，必须作为单独白名单工具，并配套审批、限制和测试。
 
