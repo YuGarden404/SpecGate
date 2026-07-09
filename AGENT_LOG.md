@@ -468,3 +468,23 @@
   - `$env:PYTHONPATH="src"; python -m specgate.cli run-mock-demo examples/knowledge_nav` 通过。
 - 人工参与：
   - 用户确认第二阶段采用“先让 Context / Safety / Tooling 都有可测试第一层”的路线。
+
+## 2026-07-09
+
+- Task：第二阶段工具注册表。
+- 分支：`main`。
+- 文件变更：
+  - 新增 `src/specgate/tool_registry.py`，定义现有工具的名称、权限、参数和结果说明。
+  - 新增 `tests/test_tool_registry.py`，覆盖默认工具集合、权限和 context 渲染。
+  - 更新 `src/specgate/tools.py`，让工具分发器先检查 registry。
+  - 更新 `src/specgate/context.py`，让 context pack 输出 Tool Registry。
+  - 更新 `src/specgate/report.py`，让静态报告展示工具列表。
+  - 更新 `README.md`，说明工具管理边界。
+- 代码作用：
+  - 将工具能力从硬编码分支提升为可测试、可展示的结构化注册表。
+  - 不新增 shell、网络、MCP 或浏览器工具。
+- 验证证据：
+  - `$env:PYTHONPATH="src"; python -m unittest discover -s tests -v` 通过。
+  - `$env:PYTHONPATH="src"; python -m specgate.cli run-mock-demo examples/knowledge_nav` 通过。
+- 人工参与：
+  - 用户确认先让 Context / Safety / Tooling 三个方向都有可测试第一层，再考虑深挖。
