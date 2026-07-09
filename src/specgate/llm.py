@@ -92,6 +92,8 @@ class OpenAICompatibleLLM:
             raise LLMProviderError(f"HTTP {exc.code} {exc.reason}{detail}") from exc
         except error.URLError as exc:
             raise LLMProviderError(f"network error: {exc.reason}") from exc
+        except TimeoutError as exc:
+            raise LLMProviderError(f"request timed out after {self.timeout} seconds") from exc
         try:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:

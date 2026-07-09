@@ -83,6 +83,24 @@ class OpenAICompatibleLLMTests(unittest.TestCase):
         self.assertIn("model not allowed", message)
         self.assertNotIn("sk-test-secret", message)
 
+    def test_timeout_is_wrapped_as_provider_error(self):
+        def timeout(request, timeout):
+            raise TimeoutError("The read operation timed out")
+
+        llm = OpenAICompatibleLLM(
+            base_url="https://api.example.test/v1",
+            api_key="sk-test-secret",
+            model="test-model",
+            opener=timeout,
+        )
+
+        with self.assertRaises(LLMProviderError) as caught:
+            llm.complete("context pack")
+
+        message = str(caught.exception)
+        self.assertIn("timed out", message)
+        self.assertNotIn("sk-test-secret", message)
+
 
 if __name__ == "__main__":
     unittest.main()

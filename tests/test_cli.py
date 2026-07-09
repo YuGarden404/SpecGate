@@ -108,7 +108,7 @@ class CliTests(unittest.TestCase):
 
     def test_real_run_uses_provider_inside_existing_runner(self):
         class FakeRealLLM:
-            def __init__(self, base_url, api_key, model, user_agent=""):
+            def __init__(self, base_url, api_key, model, user_agent="", timeout=60):
                 self.calls = 0
 
             def complete(self, context: str) -> str:
@@ -157,6 +157,7 @@ class CliTests(unittest.TestCase):
                     env_file=env_file,
                     max_steps=3,
                     user_agent="SpecGate/0.1 OpenAI-Compatible",
+                    timeout=60,
                 )
 
             self.assertEqual(exit_code, 0)
@@ -167,7 +168,7 @@ class CliTests(unittest.TestCase):
 
     def test_real_run_reports_provider_error_without_traceback(self):
         class FailingRealLLM:
-            def __init__(self, base_url, api_key, model, user_agent=""):
+            def __init__(self, base_url, api_key, model, user_agent="", timeout=60):
                 pass
 
             def complete(self, context: str) -> str:
@@ -200,6 +201,7 @@ class CliTests(unittest.TestCase):
                     env_file=env_file,
                     max_steps=3,
                     user_agent="SpecGate/0.1 OpenAI-Compatible",
+                    timeout=60,
                 )
 
             self.assertEqual(exit_code, 1)

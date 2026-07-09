@@ -46,13 +46,46 @@ class HtmlGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "index.html").write_text("<html><head><title>x</title></head><body></body></html>", encoding="utf-8")
-            (root / "CHECKLIST.md").write_text("- 必须包含 Spec\n", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("- 至少 10 个 class=node 知识节点\n", encoding="utf-8")
 
             result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
 
             self.assertFalse(result.passed)
             self.assertTrue(any(issue.code == "too_few_nodes" for issue in result.issues))
             self.assertIn("至少 10 个", result.summary)
+
+    def test_generic_static_dashboard_does_not_require_knowledge_graph_nodes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            html = """<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI 学习计划看板</title>
+</head>
+<body>
+  <header><h1>AI 学习计划</h1></header>
+  <input type="search" aria-label="搜索">
+  <main>
+    <section class="module-card"><h2>Python</h2><p>详情：基础语法</p></section>
+    <section class="module-card"><h2>LLM</h2><p>详情：提示词与上下文</p></section>
+    <section class="module-card"><h2>Gate</h2><p>详情：验收反馈</p></section>
+  </main>
+  <aside>详情</aside>
+  <script>function showDetail(){ return true; }</script>
+</body>
+</html>"""
+            (root / "index.html").write_text(html, encoding="utf-8")
+            (root / "CHECKLIST.md").write_text(
+                "- 必须包含 AI 学习计划\n- 必须包含 搜索\n- 必须包含 详情\n- 必须包含 Python\n- 必须包含 LLM\n- 必须包含 Gate\n",
+                encoding="utf-8",
+            )
+
+            result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
+
+            self.assertTrue(result.passed)
+            self.assertFalse(any(issue.code == "too_few_nodes" for issue in result.issues))
+            self.assertFalse(any(issue.code == "relations" for issue in result.issues))
 
     def test_secret_like_google_api_key_fails_gate(self):
         with tempfile.TemporaryDirectory() as tmp:

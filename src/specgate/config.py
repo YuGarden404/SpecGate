@@ -7,7 +7,7 @@ from specgate.policy import WorkspacePolicy
 
 
 def load_policy(config_path: Path) -> WorkspacePolicy:
-    data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    data = tomllib.loads(config_path.read_text(encoding="utf-8-sig"))
     root = config_path.parent
     return WorkspacePolicy(
         root=root,

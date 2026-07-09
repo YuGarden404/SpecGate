@@ -420,6 +420,7 @@ def run_real_llm(
     env_file: Path,
     max_steps: int,
     user_agent: str,
+    timeout: float,
 ) -> int:
     status = credential_status_from_env(provider, env_file)
     if not status.safe_to_run:
@@ -433,7 +434,13 @@ def run_real_llm(
         print(status.message)
         return 1
 
-    llm = OpenAICompatibleLLM(base_url=base_url, api_key=api_key, model=model, user_agent=user_agent)
+    llm = OpenAICompatibleLLM(
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        user_agent=user_agent,
+        timeout=timeout,
+    )
     policy = _load_demo_policy(root)
     try:
         result = AgentRunner(root, llm, policy, max_steps=max_steps).run()
@@ -459,6 +466,7 @@ def main(argv: list[str] | None = None) -> int:
     real_run.add_argument("--env-file", default=".env")
     real_run.add_argument("--max-steps", type=int, default=5)
     real_run.add_argument("--user-agent", default="SpecGate/0.1 OpenAI-Compatible")
+    real_run.add_argument("--timeout", type=float, default=60)
     credentials = sub.add_parser("credentials")
     credentials_sub = credentials.add_subparsers(dest="credentials_command", required=True)
     for command in ("status", "clear"):
@@ -481,6 +489,7 @@ def main(argv: list[str] | None = None) -> int:
             env_file=Path(args.env_file),
             max_steps=args.max_steps,
             user_agent=args.user_agent,
+            timeout=args.timeout,
         )
     if args.command == "credentials":
         env_file = Path(args.env_file)
