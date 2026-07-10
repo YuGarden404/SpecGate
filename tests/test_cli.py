@@ -148,6 +148,7 @@ class CliTests(unittest.TestCase):
     def test_approvals_list_prints_pending_approval_details(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            secret = "sk-test-secret-1234567890"
             ApprovalQueue(
                 [
                     PendingApproval(
@@ -158,6 +159,7 @@ class CliTests(unittest.TestCase):
                         risk_level="review",
                         reason="replace_file on protected path requires human review",
                         profile="review",
+                        arguments_preview={"content": secret},
                     )
                 ]
             ).write(approval_queue_path(root))
@@ -177,13 +179,19 @@ class CliTests(unittest.TestCase):
             self.assertIn("replace_file", stdout)
             self.assertIn("README.md", stdout)
             self.assertIn("requires human review", stdout)
+            self.assertNotIn("arguments_preview", stdout)
+            self.assertNotIn("content", stdout)
+            self.assertNotIn("sk-test-secret", stdout)
 
     def test_approvals_list_malformed_queue_reports_clean_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             queue_path = approval_queue_path(root)
             queue_path.parent.mkdir(parents=True)
-            queue_path.write_text("{not-json", encoding="utf-8")
+            queue_path.write_text(
+                json.dumps({"approvals": [{"sk-test-secret-1234567890": "value"}]}),
+                encoding="utf-8",
+            )
 
             stdout = io.StringIO()
             stderr = io.StringIO()
@@ -193,6 +201,7 @@ class CliTests(unittest.TestCase):
             text = stdout.getvalue() + stderr.getvalue()
             self.assertNotEqual(code, 0)
             self.assertIn("could not read pending approvals", text)
+            self.assertNotIn("sk-test-secret", text)
             self.assertNotIn("Traceback", text)
 
     def test_credentials_cli_status_set_and_clear(self):

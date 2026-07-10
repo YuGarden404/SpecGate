@@ -407,8 +407,8 @@ def _load_workspace_settings(root: Path) -> WorkspaceConfig:
 def list_approvals(root: Path) -> int:
     try:
         queue = ApprovalQueue.read(approval_queue_path(root))
-    except (json.JSONDecodeError, TypeError, ValueError) as exc:
-        print(f"could not read pending approvals: {exc}")
+    except (json.JSONDecodeError, TypeError, ValueError):
+        print("could not read pending approvals: malformed queue")
         return 1
 
     if not queue.approvals:
