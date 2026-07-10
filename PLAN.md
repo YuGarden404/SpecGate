@@ -1962,6 +1962,14 @@ git commit -m "chore: add distribution ci and credential boundary"
 
 ---
 
+## 后续深化：Context Eval Harness
+
+- [x] 新增 context strategy：`baseline`、`compressed`、`injection-safe`。
+- [x] 新增 eval runner，批量运行 mock eval cases。
+- [x] 新增 prompt injection 与路径越权评估样例。
+- [x] 输出 `eval-runs/latest/results.json`。
+- [ ] 先用 MockLLM / StubLLM 完成确定性测试后，再考虑真实 LLM 实验。
+
 ## 2. 依赖与并行关系
 
 必须顺序执行：

@@ -569,3 +569,18 @@
   - `$env:PYTHONUTF8='1'; python C:\Users\Lenovo\.codex\skills\.system\skill-creator\scripts\quick_validate.py skills\specgate-static-html-harness` 通过。
 - 人工参与：
   - 用户确认忽略老师的进阶应用项目文档，继续沿 SpecGate 当前方向推进。
+
+## 2026-07-10 Context Eval Harness
+
+- Task：Context Eval Harness 设计、计划、实现与文档收口。
+- Superpowers：
+  - 使用 `brainstorming` 对齐深化方向：把上下文策略评估做成确定性 harness，而不是只写提示词经验。
+  - 使用 `writing-plans` 产出可执行实现计划。
+  - 使用 `subagent-driven-development` 按任务拆分推进实现与复核。
+- 分支：`feat-context-eval-harness`。
+- 设计文档：`docs/superpowers/specs/2026-07-10-context-eval-harness-design.md`。
+- 实现计划：`docs/superpowers/plans/2026-07-10-context-eval-harness.md`。
+- 决策：
+  - 先用 MockLLM / StubLLM 完成确定性评估。
+  - 不把真实 LLM 成功率作为核心验收；真实 LLM 只作为后续实验扩展。
+  - 用 eval cases 比较 `baseline`、`compressed`、`injection-safe`，并把结果写入 `eval-runs/latest/results.json`。
