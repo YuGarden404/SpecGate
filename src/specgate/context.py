@@ -46,7 +46,8 @@ def _render_selected_files(selection: ContextSelection, strategy: str = "baselin
                 "</untrusted_data>"
             )
         else:
-            blocks.append(f"### {item.path}\n```text\n{item.content}\n```")
+            content = _compress_selected_content(item.content) if strategy == "compressed" else item.content
+            blocks.append(f"### {item.path}\n```text\n{content}\n```")
     if not blocks:
         return "没有文件进入上下文。"
     return "\n\n".join(blocks)
@@ -74,6 +75,12 @@ def _compress_payload(value: object, limit: int = 420) -> object:
     if isinstance(value, list):
         return [_compress_payload(item, limit) for item in value]
     return value
+
+
+def _compress_selected_content(content: str, limit: int = 900) -> str:
+    if len(content) <= limit:
+        return content
+    return content[:limit] + f"...[compressed selected file {len(content) - limit} chars]"
 
 
 def _select_compressed_events(events: list[dict], limit: int = 5) -> list[dict]:

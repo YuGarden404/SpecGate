@@ -105,6 +105,22 @@ class ContextStrategyTests(unittest.TestCase):
         self.assertIn("blocked write to .env", context)
         self.assertIn('"blocked": true', context)
 
+    def test_compressed_strategy_trims_large_selected_files(self):
+        with self._workspace() as tmp:
+            root = Path(tmp)
+            key_requirement = "关键需求：必须展示课程风险矩阵。"
+            root.joinpath("TASK_SPEC.md").write_text(
+                key_requirement + "\n" + ("长上下文内容。" * 500),
+                encoding="utf-8",
+            )
+
+            baseline_context = build_context_pack(root, None, [], strategy="baseline")
+            compressed_context = build_context_pack(root, None, [], strategy="compressed")
+
+        self.assertLess(len(compressed_context), len(baseline_context))
+        self.assertIn("[compressed selected file", compressed_context)
+        self.assertIn(key_requirement, compressed_context)
+
     def test_unknown_context_strategy_fails_closed(self):
         with self._workspace() as tmp:
             with self.assertRaises(ValueError):

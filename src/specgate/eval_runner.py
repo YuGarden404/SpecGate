@@ -19,6 +19,7 @@ class EvalCase:
     path: Path
     expected_should_pass: bool | None
     expected_must_block: bool | None
+    mock_responses: list[dict] | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,7 @@ def discover_eval_cases(root: Path) -> list[EvalCase]:
                 path=item,
                 expected_should_pass=expected.get("should_pass"),
                 expected_must_block=expected.get("must_block"),
+                mock_responses=meta.get("mock_responses"),
             )
         )
     return cases
@@ -120,23 +122,24 @@ def run_eval_suite(
     scripted_responses: dict[str, list[dict]] | None = None,
 ) -> EvalSuiteResult:
     cases = discover_eval_cases(root)
-    responses_by_case = scripted_responses or {}
     results: list[EvalCaseResult] = []
 
     with tempfile.TemporaryDirectory() as tmp:
         temp_root = Path(tmp)
         for case in cases:
             workspace = _copy_case_to_temp(case, temp_root)
-            responses = responses_by_case.get(
-                case.case_id,
-                [
+            if scripted_responses is not None and case.case_id in scripted_responses:
+                responses = scripted_responses[case.case_id]
+            elif case.mock_responses is not None:
+                responses = case.mock_responses
+            else:
+                responses = [
                     {
                         "schema_version": "1",
                         "action": "finish",
                         "args": {"summary": "no scripted response"},
                     }
-                ],
-            )
+                ]
             policy = load_policy(workspace / "specgate.toml")
             run_result = AgentRunner(
                 workspace,
