@@ -2034,3 +2034,27 @@ SPEC 覆盖：
 
 - `Action`、`ToolResult`、`GateResult`、`TraceStore`、`MockLLM`、`AgentRunner` 在各任务中命名一致。
 - 测试命令统一使用 `$env:PYTHONPATH="src"` 和 `python -m unittest`。
+# 2026-07-10 Context Harness Deepening Implementation Plan
+
+本轮新增的正式实现计划见：
+
+`docs/superpowers/plans/2026-07-10-context-harness-deepening.md`
+
+目标是在 `feat-context-harness-deepening` 分支上按阶段完成：
+
+1. Lightweight Retrieval Core
+2. RAG Select Context Strategy
+3. Retrieval Evidence in Trace, Metrics, Report, and Eval
+4. Deterministic Context Lifecycle Compression
+5. Role Isolation Core
+6. Multi-Strategy Benchmark Aggregation
+7. Mock Eval Cases and Documentation
+8. Final Review, Process Evidence, and Verification
+
+执行约束：
+
+- 使用 mock/stub LLM 作为核心验收路径。
+- 每个任务遵循 TDD。
+- 每个任务完成后进行 spec review 和 code quality review。
+- 每个任务独立提交，并把 commit hash 记录回本文件、`SPEC_PROCESS.md` 和 `AGENT_LOG.md`。
+- 不提交 `examples/eval_cases/eval-runs/` 运行产物。

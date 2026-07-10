@@ -197,3 +197,14 @@ Python CLI harness + mock LLM + 静态 HTML 生成/修复
 - 所有核心验收以 mock/stub LLM 为主，真实 LLM 只作为后续可选人工实验。
 
 本轮重新参考了课程通用要求、A 类 Coding Agent Harness 要求和 `pecehe-with-notes.pptx`。课件中 PE ⊂ CE ⊂ HE、Write/Select/Compress/Isolate、Agent = Model x Harness、Workflow 优先、先减法再加法等原则，被映射为本轮设计约束：先实现轻量可测机制，不引入向量库、真实并发沙箱或真实 LLM 评测主线。
+
+## 2026-07-10 Context Harness Deepening 计划记录
+
+在规格确认后，使用 Superpowers `writing-plans` 将大工程拆分为 8 个可执行任务。计划保存到 `docs/superpowers/plans/2026-07-10-context-harness-deepening.md`，并同步在根目录 `PLAN.md` 追加摘要。
+
+计划设计原则：
+
+- 不并行派发实现任务，因为多个任务会共同修改 `context.py`、`metrics.py`、`report.py`、`cli.py` 和 `eval_runner.py`。
+- 每个任务都以失败测试开头，再写最小实现，再跑聚焦测试和完整测试。
+- 所有新增机制以 mock/stub LLM 或纯单元测试验证。
+- 最终 benchmark 比较 harness strategy，而不是比较真实 LLM 能力。
