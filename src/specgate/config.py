@@ -8,6 +8,16 @@ from specgate.approvals import GovernanceConfig
 from specgate.policy import WorkspacePolicy
 
 
+def _string_set(value: object, field_name: str) -> set[str]:
+    if isinstance(value, str) or not isinstance(value, list | tuple | set):
+        raise ValueError(f"governance.{field_name} must be a list of strings")
+
+    if not all(isinstance(item, str) for item in value):
+        raise ValueError(f"governance.{field_name} must be a list of strings")
+
+    return set(value)
+
+
 @dataclass(frozen=True)
 class WorkspaceConfig:
     policy: WorkspacePolicy
@@ -27,11 +37,22 @@ def load_workspace_config(config_path: Path) -> WorkspaceConfig:
     governance_data = data.get("governance", {})
     governance_kwargs = {
         "profile": governance_data.get("profile", "strict"),
-        "review_actions": set(governance_data.get("review_actions", [])),
-        "review_paths": set(governance_data.get("review_paths", [])),
     }
+    if "review_actions" in governance_data:
+        governance_kwargs["review_actions"] = _string_set(
+            governance_data["review_actions"],
+            "review_actions",
+        )
+    if "review_paths" in governance_data:
+        governance_kwargs["review_paths"] = _string_set(
+            governance_data["review_paths"],
+            "review_paths",
+        )
     if "blocked_paths" in governance_data:
-        governance_kwargs["blocked_paths"] = set(governance_data["blocked_paths"])
+        governance_kwargs["blocked_paths"] = _string_set(
+            governance_data["blocked_paths"],
+            "blocked_paths",
+        )
 
     return WorkspaceConfig(
         policy=policy,

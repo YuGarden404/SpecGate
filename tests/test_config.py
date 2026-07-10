@@ -6,6 +6,26 @@ from specgate.config import load_policy, load_workspace_config
 
 
 class ConfigTests(unittest.TestCase):
+    def write_config(self, governance_lines):
+        tmp = tempfile.TemporaryDirectory()
+        path = Path(tmp.name) / "specgate.toml"
+        path.write_text(
+            "\n".join(
+                [
+                    "[policy]",
+                    'allowed_actions = ["read_file", "replace_file", "finish"]',
+                    'allowed_read_paths = ["README.md"]',
+                    'allowed_write_paths = ["README.md"]',
+                    "",
+                    "[governance]",
+                    *governance_lines,
+                ]
+            ),
+            encoding="utf-8-sig",
+        )
+        self.addCleanup(tmp.cleanup)
+        return path
+
     def test_load_workspace_config_reads_policy_and_governance(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "specgate.toml"
@@ -36,6 +56,30 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.governance.review_actions, {"write_file"})
             self.assertEqual(config.governance.review_paths, {"src/**"})
             self.assertEqual(config.governance.blocked_paths, {".env", "secrets/**"})
+
+    def test_load_workspace_config_rejects_bare_string_review_actions(self):
+        path = self.write_config(['review_actions = "replace_file"'])
+
+        with self.assertRaises((ValueError, TypeError)):
+            load_workspace_config(path)
+
+    def test_load_workspace_config_rejects_bare_string_review_paths(self):
+        path = self.write_config(['review_paths = "README.md"'])
+
+        with self.assertRaises((ValueError, TypeError)):
+            load_workspace_config(path)
+
+    def test_load_workspace_config_rejects_bare_string_blocked_paths(self):
+        path = self.write_config(['blocked_paths = ".env"'])
+
+        with self.assertRaises((ValueError, TypeError)):
+            load_workspace_config(path)
+
+    def test_load_workspace_config_rejects_non_string_review_actions(self):
+        path = self.write_config(['review_actions = ["replace_file", 123]'])
+
+        with self.assertRaises((ValueError, TypeError)):
+            load_workspace_config(path)
 
     def test_load_workspace_config_rejects_unknown_governance_profile(self):
         with tempfile.TemporaryDirectory() as tmp:
