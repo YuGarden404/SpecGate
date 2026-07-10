@@ -51,6 +51,15 @@ class FeedbackAwareLLM:
         return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
 
 
+class RecordingLLM:
+    def __init__(self):
+        self.contexts: list[str] = []
+
+    def complete(self, context: str) -> str:
+        self.contexts.append(context)
+        return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
+
+
 class RunnerTests(unittest.TestCase):
     def test_gate_failure_feedback_changes_next_action(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -147,6 +156,34 @@ class RunnerTests(unittest.TestCase):
             trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("file changed since run started", trace_text)
             self.assertEqual((root / "index.html").read_text(encoding="utf-8"), "external edit")
+
+
+class RunnerContextStrategyTests(unittest.TestCase):
+    def test_runner_passes_context_strategy_and_records_context_size(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("- must include Task\n", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                "<title>Task</title></head><body>Task Search Detail</body></html>",
+                encoding="utf-8",
+            )
+            policy = WorkspacePolicy(
+                root=root,
+                allowed_actions={"finish"},
+                allowed_read_paths={"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                allowed_write_paths={"index.html"},
+            )
+            llm = RecordingLLM()
+
+            result = AgentRunner(root, llm, policy, max_steps=1, context_strategy="injection-safe").run()
+
+            self.assertGreater(result.context_chars_max, 0)
+            self.assertIn("## Context Strategy\ninjection-safe", llm.contexts[0])
+            trace = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("context_built", trace)
+            self.assertIn("context_chars", trace)
 
 
 if __name__ == "__main__":

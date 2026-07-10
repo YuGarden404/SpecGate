@@ -19,14 +19,23 @@ class RunResult:
     passed: bool
     steps: int
     final_gate: GateResult | None
+    context_chars_max: int = 0
 
 
 class AgentRunner:
-    def __init__(self, root: Path, llm: LLMClient, policy: WorkspacePolicy, max_steps: int = 5):
+    def __init__(
+        self,
+        root: Path,
+        llm: LLMClient,
+        policy: WorkspacePolicy,
+        max_steps: int = 5,
+        context_strategy: str = "baseline",
+    ):
         self.root = root
         self.llm = llm
         self.policy = policy
         self.max_steps = max_steps
+        self.context_strategy = context_strategy
         snapshot = FileSnapshot.capture(root, policy.allowed_write_paths)
         self.dispatcher = ToolDispatcher(policy, snapshot)
         self.trace = TraceStore(root / "runs" / "latest" / "trace.jsonl", reset=True)
@@ -34,8 +43,20 @@ class AgentRunner:
     def run(self) -> RunResult:
         latest_gate: GateResult | None = None
         runtime_feedback: list[dict] = []
+        context_chars_max = 0
         for step in range(1, self.max_steps + 1):
-            context = build_context_pack(self.root, latest_gate, runtime_feedback)
+            context = build_context_pack(
+                self.root,
+                latest_gate,
+                runtime_feedback,
+                strategy=self.context_strategy,
+            )
+            context_chars = len(context)
+            context_chars_max = max(context_chars_max, context_chars)
+            self.trace.append(
+                "context_built",
+                {"step": step, "strategy": self.context_strategy, "context_chars": context_chars},
+            )
             raw = self.llm.complete(context)
             self.trace.append("llm_response", {"step": step, "text": raw})
 
@@ -79,12 +100,12 @@ class AgentRunner:
             if action.action == "finish":
                 if latest_gate is None:
                     latest_gate = run_html_gate(self.root / "index.html", self.root / "CHECKLIST.md")
-                result = RunResult(latest_gate.passed, step, latest_gate)
+                result = RunResult(latest_gate.passed, step, latest_gate, context_chars_max)
                 append_memory(self.root, result.passed, result.steps, latest_gate.summary)
                 return result
 
         if latest_gate is None:
             latest_gate = run_html_gate(self.root / "index.html", self.root / "CHECKLIST.md")
-        result = RunResult(latest_gate.passed, self.max_steps, latest_gate)
+        result = RunResult(latest_gate.passed, self.max_steps, latest_gate, context_chars_max)
         append_memory(self.root, result.passed, result.steps, latest_gate.summary)
         return result
