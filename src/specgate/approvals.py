@@ -98,8 +98,8 @@ class ApprovalQueue:
         ]
         return cls(approvals)
 
-    def append(self, approval: PendingApproval) -> None:
-        self.approvals.append(approval)
+    def append(self, approval: PendingApproval) -> "ApprovalQueue":
+        return ApprovalQueue([*self.approvals, approval])
 
 
 def approval_queue_path(root: Path) -> Path:

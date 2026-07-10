@@ -79,6 +79,26 @@ class ApprovalTests(unittest.TestCase):
             self.assertEqual(loaded.approvals[0].id, "approval-step-2")
             self.assertEqual(loaded.approvals[0].status, "pending")
 
+    def test_queue_append_returns_new_queue_without_mutating_original(self):
+        approval = PendingApproval(
+            id="approval-step-3",
+            step=3,
+            action="replace_file",
+            path="README.md",
+            risk_level="review",
+            reason="replace_file on protected path requires human review",
+            profile="review",
+            arguments_preview={"path": "README.md"},
+        )
+        empty = ApprovalQueue()
+
+        updated = empty.append(approval)
+
+        self.assertIsNot(updated, empty)
+        self.assertEqual(len(empty.approvals), 0)
+        self.assertEqual(len(updated.approvals), 1)
+        self.assertIs(updated.approvals[0], approval)
+
 
 if __name__ == "__main__":
     unittest.main()
