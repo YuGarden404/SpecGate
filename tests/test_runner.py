@@ -143,6 +143,38 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("permission_decision", trace_events)
             self.assertIn("run_summary", trace_events)
 
+    def test_failed_unblocked_write_records_disallowed_permission_decision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": 123},
+                    }
+                ]
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"write_file"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=1).run()
+
+            self.assertIsNotNone(result.permission_decisions)
+            decision = result.permission_decisions[0]
+            self.assertFalse(decision.allowed)
+            self.assertFalse(decision.blocked)
+            self.assertIn("content must be a string", decision.reason)
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.tool_calls, 1)
+            self.assertEqual(result.metrics.successful_tool_calls, 0)
+
     def test_max_step_exhaustion_marks_metrics_and_failed_trust(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

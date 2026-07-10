@@ -139,7 +139,7 @@ class AgentRunner:
                 step=step,
                 action=action.action,
                 path=action_path if isinstance(action_path, str) else None,
-                allowed=not tool_result.blocked,
+                allowed=tool_result.ok and not tool_result.blocked,
                 blocked=tool_result.blocked,
                 reason=tool_result.message,
                 profile=self.governance_profile,
