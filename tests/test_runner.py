@@ -123,6 +123,56 @@ class RunnerTests(unittest.TestCase):
             ]
             self.assertIn("retrieval_result", trace_events)
 
+    def test_compressed_rag_run_records_compression_evidence_and_metrics(self):
+        class LargeFeedbackLLM:
+            def __init__(self):
+                self.calls = 0
+
+            def complete(self, context: str) -> str:
+                self.calls += 1
+                if self.calls == 1:
+                    return (
+                        '{"schema_version":"1","action":"read_file",'
+                        '"args":{"path":"notes.md"}}'
+                    )
+                return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text(
+                "The page must display Python LLM Gate search details.",
+                encoding="utf-8",
+            )
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "notes.md").write_text("Python LLM Gate search details " + ("x" * 5000), encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Python LLM Gate search details</body></html>',
+                encoding="utf-8",
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"read_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html", "notes.md"},
+                {"index.html"},
+            )
+
+            result = AgentRunner(root, LargeFeedbackLLM(), policy, max_steps=2, context_strategy="compressed-rag").run()
+
+            compression_path = root / "runs" / "latest" / "compression.json"
+            self.assertTrue(compression_path.exists())
+            compression = json.loads(compression_path.read_text(encoding="utf-8"))
+            self.assertGreater(compression["original_chars"], compression["compressed_chars"])
+            self.assertEqual(compression["cleared_tool_results"], 1)
+            self.assertIsNotNone(result.metrics)
+            self.assertGreater(result.metrics.compression_original_chars, 0)
+            self.assertGreater(result.metrics.cleared_tool_results, 0)
+            trace_events = [
+                json.loads(line)["event_type"]
+                for line in (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertIn("compression_result", trace_events)
+
     def test_successful_write_finish_records_metrics_and_trust(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

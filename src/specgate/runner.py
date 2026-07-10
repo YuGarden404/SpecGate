@@ -61,6 +61,9 @@ class AgentRunner:
         retrieval_path = self.run_dir / "retrieval.json"
         if retrieval_path.exists():
             retrieval_path.unlink()
+        compression_path = self.run_dir / "compression.json"
+        if compression_path.exists():
+            compression_path.unlink()
 
     def run(self) -> RunResult:
         queue_path = approval_queue_path(self.root)
@@ -205,6 +208,38 @@ class AgentRunner:
                 },
             )
 
+        def record_compression(metadata: dict | None) -> None:
+            nonlocal metrics
+            if not metadata:
+                return
+            compression = metadata.get("compression")
+            if not isinstance(compression, dict):
+                return
+            original_chars = compression.get("original_chars", 0)
+            compressed_chars = compression.get("compressed_chars", 0)
+            cleared_tool_results = compression.get("cleared_tool_results", 0)
+            metrics = replace(
+                metrics,
+                compression_original_chars=metrics.compression_original_chars
+                + (original_chars if isinstance(original_chars, int) else 0),
+                compression_compressed_chars=metrics.compression_compressed_chars
+                + (compressed_chars if isinstance(compressed_chars, int) else 0),
+                cleared_tool_results=metrics.cleared_tool_results
+                + (cleared_tool_results if isinstance(cleared_tool_results, int) else 0),
+            )
+            (self.run_dir / "compression.json").write_text(
+                json.dumps(compression, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            self.trace.append(
+                "compression_result",
+                {
+                    "original_chars": original_chars,
+                    "compressed_chars": compressed_chars,
+                    "cleared_tool_results": cleared_tool_results,
+                },
+            )
+
         for step in range(1, self.max_steps + 1):
             context, context_metadata = build_context_pack_with_metadata(
                 self.root,
@@ -213,6 +248,7 @@ class AgentRunner:
                 strategy=self.context_strategy,
             )
             record_retrieval(context_metadata)
+            record_compression(context_metadata)
             context_chars = len(context)
             context_chars_max = max(context_chars_max, context_chars)
             metrics = replace(metrics, steps=step, context_chars_max=context_chars_max)

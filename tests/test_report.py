@@ -177,6 +177,35 @@ class ReportTests(unittest.TestCase):
             self.assertIn("could not read retrieval evidence", html)
             self.assertNotIn("<script>alert(1)</script>", html)
 
+    def test_generate_report_includes_compression_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+            run_dir = root / "runs" / "latest"
+            run_dir.mkdir(parents=True)
+            (run_dir / "compression.json").write_text(
+                json.dumps(
+                    {
+                        "original_chars": 5000,
+                        "compressed_chars": 400,
+                        "cleared_tool_results": 1,
+                        "summarized_events": 2,
+                        "pinned_sections": ["Task Constraints", "<script>alert(1)</script>"],
+                        "dropped_sections": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            output = generate_report(root, gate, steps=1)
+
+            html = output.read_text(encoding="utf-8")
+            self.assertIn("Compression Evidence", html)
+            self.assertIn("cleared_tool_results", html)
+            self.assertIn("Task Constraints", html)
+            self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+            self.assertNotIn("<script>alert(1)</script>", html)
+
     def test_generate_report_handles_missing_pending_approvals_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

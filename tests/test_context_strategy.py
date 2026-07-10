@@ -195,6 +195,61 @@ class ContextStrategyTests(unittest.TestCase):
 
         self.assertNotIn("stale runtime output", context)
 
+    def test_compressed_rag_strategy_retrieves_context_and_pins_critical_sections(self):
+        feedback = [
+            {
+                "event_type": "tool_result",
+                "payload": {
+                    "action": "read_file",
+                    "result": {"ok": True, "data": {"content": "x" * 5000}},
+                },
+            }
+        ]
+        with self._workspace() as tmp:
+            root = Path(tmp)
+            root.joinpath("TASK_SPEC.md").write_text(
+                "The dashboard must display Python LLM Gate search details.",
+                encoding="utf-8",
+            )
+            root.joinpath("notes.md").write_text(
+                "Python LLM Gate search details must be visible in the final page.",
+                encoding="utf-8",
+            )
+
+            context = build_context_pack(
+                root,
+                GateResult(False, [], [], "missing details"),
+                feedback,
+                strategy="compressed-rag",
+            )
+
+        self.assertIn("## Retrieved Context", context)
+        self.assertIn("retrieved:notes.md:1-1", context)
+        self.assertIn("[cleared tool result", context)
+        self.assertNotIn("x" * 200, context)
+        self.assertLess(context.rfind("## Task Constraints"), context.rfind("## Policy Boundary"))
+        self.assertLess(context.rfind("## Policy Boundary"), context.rfind("## Latest Gate Feedback"))
+        self.assertTrue(context.rstrip().endswith("missing details"))
+
+    def test_compressed_rag_strategy_compresses_large_selected_files_and_pinned_task(self):
+        with self._workspace() as tmp:
+            root = Path(tmp)
+            key_requirement = "critical requirement: keep search details"
+            root.joinpath("TASK_SPEC.md").write_text(
+                key_requirement + "\n" + ("long task body " * 1000),
+                encoding="utf-8",
+            )
+            root.joinpath("notes.md").write_text(
+                "search details are supported by retrieved notes.",
+                encoding="utf-8",
+            )
+
+            context = build_context_pack(root, None, [], strategy="compressed-rag")
+
+        self.assertIn(key_requirement, context)
+        self.assertIn("[compressed selected file", context)
+        self.assertNotIn("long task body " * 200, context)
+
     def test_compressed_strategy_keeps_earlier_blocked_tool_result(self):
         feedback = [
             {

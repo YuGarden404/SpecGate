@@ -46,6 +46,9 @@ class MetricsTests(unittest.TestCase):
                 "retrieved_chunks": 0,
                 "retrieval_candidate_chunks": 0,
                 "retrieval_context_chars": 0,
+                "compression_original_chars": 0,
+                "compression_compressed_chars": 0,
+                "cleared_tool_results": 0,
                 "max_steps_reached": False,
             },
         )
@@ -68,6 +71,9 @@ class MetricsTests(unittest.TestCase):
             retrieved_chunks=3,
             retrieval_candidate_chunks=8,
             retrieval_context_chars=1200,
+            compression_original_chars=2000,
+            compression_compressed_chars=500,
+            cleared_tool_results=2,
             max_steps_reached=True,
         )
 
@@ -90,6 +96,9 @@ class MetricsTests(unittest.TestCase):
                 "retrieved_chunks": 3,
                 "retrieval_candidate_chunks": 8,
                 "retrieval_context_chars": 1200,
+                "compression_original_chars": 2000,
+                "compression_compressed_chars": 500,
+                "cleared_tool_results": 2,
                 "max_steps_reached": True,
             },
         )

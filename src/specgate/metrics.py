@@ -21,6 +21,9 @@ class RunMetrics:
     retrieved_chunks: int = 0
     retrieval_candidate_chunks: int = 0
     retrieval_context_chars: int = 0
+    compression_original_chars: int = 0
+    compression_compressed_chars: int = 0
+    cleared_tool_results: int = 0
     max_steps_reached: bool = False
 
     def to_dict(self) -> dict[str, int | bool]:

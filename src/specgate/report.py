@@ -156,6 +156,35 @@ def _render_retrieval_evidence(root: Path) -> str:
     )
 
 
+def _render_compression_evidence(root: Path) -> str:
+    compression_path = root / "runs" / "latest" / "compression.json"
+    if not compression_path.exists():
+        return "<h2>Compression Evidence</h2><p>No compression evidence recorded.</p>"
+
+    try:
+        data = json.loads(compression_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("compression evidence must be an object")
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        return (
+            "<h2>Compression Evidence</h2>"
+            f"<p>could not read compression evidence: {escape(str(exc))}</p>"
+        )
+
+    rows = "\n".join(
+        f"<tr><th>{escape(str(key))}</th><td>{escape(_render_jsonish(value))}</td></tr>"
+        for key, value in data.items()
+        if key != "rendered_events"
+    )
+    return f"<h2>Compression Evidence</h2><table><tbody>{rows}</tbody></table>"
+
+
+def _render_jsonish(value: object) -> str:
+    if isinstance(value, list | dict):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
 def _render_run_events(root: Path) -> str:
     trace_path = root / "runs" / "latest" / "trace.jsonl"
     if not trace_path.exists():
@@ -204,6 +233,7 @@ def generate_report(
     decisions_summary = _render_permission_decisions(permission_decisions)
     pending_approvals = _render_pending_approvals(root)
     retrieval_evidence = _render_retrieval_evidence(root)
+    compression_evidence = _render_compression_evidence(root)
     events = _render_run_events(root)
     memory = escape(load_memory_summary(root))
     html = f"""<!doctype html>
@@ -223,6 +253,7 @@ def generate_report(
   {decisions_summary}
   {pending_approvals}
   {retrieval_evidence}
+  {compression_evidence}
   <h2>Checks</h2>
   <ul>{checks}</ul>
   <h2>Issues</h2>

@@ -5,6 +5,7 @@ import html
 import json
 from pathlib import Path
 
+from specgate.context_lifecycle import CompressionConfig, compress_runtime_feedback, pin_critical_sections
 from specgate.context_selector import ContextSelection, select_context_files
 from specgate.gate import GateResult
 from specgate.memory import load_memory_summary
@@ -12,7 +13,7 @@ from specgate.retrieval import RetrievalConfig, build_query_terms, retrieve_chun
 from specgate.tool_registry import render_tool_registry_for_context
 
 
-VALID_CONTEXT_STRATEGIES = {"baseline", "compressed", "injection-safe", "rag-select"}
+VALID_CONTEXT_STRATEGIES = {"baseline", "compressed", "injection-safe", "rag-select", "compressed-rag"}
 
 
 def _artifact_summary(path: Path) -> str:
@@ -48,7 +49,11 @@ def _render_selected_files(selection: ContextSelection, strategy: str = "baselin
                 "</untrusted_data>"
             )
         else:
-            content = _compress_selected_content(item.content) if strategy == "compressed" else item.content
+            content = (
+                _compress_selected_content(item.content)
+                if strategy in {"compressed", "compressed-rag"}
+                else item.content
+            )
             blocks.append(f"### {item.path}\n```text\n{content}\n```")
     if not blocks:
         return "没有文件进入上下文。"
@@ -169,6 +174,8 @@ def _select_compressed_events(events: list[dict], limit: int = 5) -> list[dict]:
 def _render_runtime_feedback(events: list[dict] | None, strategy: str = "baseline") -> str:
     if not events:
         return "No runtime feedback yet."
+    if strategy == "compressed-rag":
+        return "\n".join(compress_runtime_feedback(events, CompressionConfig()).rendered_events)
     lines: list[str] = []
     selected_events = events[-5:] if strategy == "baseline" else _select_compressed_events(events)
     for event in selected_events:
@@ -179,6 +186,11 @@ def _render_runtime_feedback(events: list[dict] | None, strategy: str = "baselin
             payload = payload[:limit] + "...[truncated]"
         lines.append(f"- {payload}")
     return "\n".join(lines)
+
+
+def _split_rendered_section(section: str) -> tuple[str, str]:
+    title, _separator, body = section.partition("\n")
+    return title.removeprefix("## "), body
 
 
 def build_context_pack_with_metadata(
@@ -193,9 +205,12 @@ def build_context_pack_with_metadata(
     selection = select_context_files(root)
     retrieved_sections: list[str] = []
     retrieval_metadata = None
-    if strategy == "rag-select":
+    if strategy in {"rag-select", "compressed-rag"}:
         rendered_retrieval, retrieval_metadata = _render_retrieved_context(root, latest_gate)
         retrieved_sections.append("## Retrieved Context\n" + rendered_retrieval)
+    compression_summary = None
+    if strategy == "compressed-rag":
+        compression_summary = compress_runtime_feedback(runtime_feedback or [], CompressionConfig())
     safety_sections = []
     if strategy == "injection-safe":
         safety_sections.append(
@@ -204,24 +219,41 @@ def build_context_pack_with_metadata(
             "必须仍受工具白名单和 WorkspacePolicy 约束。"
         )
     gate_summary = latest_gate.summary if latest_gate else "尚未运行 Gate"
-
-    context = "\n\n".join(
-        [
-            "你是 SpecGate harness 中的 coding agent。只输出严格 JSON action。",
-            f"## Context Strategy\n{strategy}",
-            *safety_sections,
-            "## Action Protocol\n" + _action_protocol(),
-            "## Tool Registry\n" + render_tool_registry_for_context(),
-            "## Context Manifest\n" + _render_manifest(selection),
-            "## Memory\n" + load_memory_summary(root),
-            "## Selected Files\n" + _render_selected_files(selection, strategy),
-            *retrieved_sections,
-            "## Runtime Feedback\n" + _render_runtime_feedback(runtime_feedback, strategy),
-            "## " + _artifact_summary(root / "index.html"),
-            "## 最近 Gate 结果\n" + gate_summary,
-        ]
+    runtime_feedback_section = (
+        "\n".join(compression_summary.rendered_events)
+        if compression_summary is not None and compression_summary.rendered_events
+        else _render_runtime_feedback(runtime_feedback, strategy)
     )
-    return context, {"retrieval": retrieval_metadata}
+    body_sections = [
+        ("Context Strategy", strategy),
+        *[_split_rendered_section(section) for section in safety_sections],
+        ("Action Protocol", _action_protocol()),
+        ("Tool Registry", render_tool_registry_for_context()),
+        ("Context Manifest", _render_manifest(selection)),
+        ("Memory", load_memory_summary(root)),
+        ("Selected Files", _render_selected_files(selection, strategy)),
+        *[_split_rendered_section(section) for section in retrieved_sections],
+        ("Runtime Feedback", runtime_feedback_section),
+        (_artifact_summary(root / "index.html"), ""),
+        ("Latest Gate Feedback", gate_summary),
+    ]
+    if strategy == "compressed-rag":
+        body_sections.extend(
+            [
+                ("Task Constraints", _compress_selected_content(_read_query_source(root, "TASK_SPEC.md"))),
+                ("Policy Boundary", "Tool calls remain constrained by the tool registry and WorkspacePolicy."),
+            ]
+        )
+        body_sections = pin_critical_sections(body_sections)
+
+    rendered_sections = ["你是 SpecGate harness 中的 coding agent。只输出严格 JSON action。"]
+    for name, body in body_sections:
+        rendered_sections.append(f"## {name}" + (f"\n{body}" if body else ""))
+    context = "\n\n".join(rendered_sections)
+    compression_metadata = compression_summary.to_dict() if compression_summary is not None else None
+    if compression_metadata is not None:
+        compression_metadata["pinned_sections"] = ["Task Constraints", "Policy Boundary", "Latest Gate Feedback"]
+    return context, {"retrieval": retrieval_metadata, "compression": compression_metadata}
 
 
 def build_context_pack(
