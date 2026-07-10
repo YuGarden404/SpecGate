@@ -1,20 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from fnmatch import fnmatch
+from fnmatch import fnmatchcase
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from specgate.actions import Action
 from specgate.policy import WorkspacePolicy, check_action
-
-try:
-    from specgate.security import redact_text
-except ImportError:
-
-    def redact_text(text: str) -> str:
-        return text
+from specgate.security import SECRET_PATTERNS
 
 
 VALID_GOVERNANCE_PROFILES = ("strict", "demo", "review")
@@ -25,7 +20,7 @@ class GovernanceConfig:
     profile: str = "strict"
     review_actions: set[str] = field(default_factory=set)
     review_paths: set[str] = field(default_factory=set)
-    blocked_paths: set[str] = field(default_factory=lambda: {".env"})
+    blocked_paths: set[str] = field(default_factory=lambda: {".env", "**/.env"})
 
     def __post_init__(self) -> None:
         if self.profile not in VALID_GOVERNANCE_PROFILES:
@@ -107,13 +102,7 @@ def approval_queue_path(root: Path) -> Path:
 
 
 def preview_args(args: dict[str, Any]) -> dict[str, Any]:
-    preview: dict[str, Any] = {}
-    for key, value in args.items():
-        if isinstance(value, str):
-            preview[key] = redact_text(value[:240])
-        else:
-            preview[key] = value
-    return preview
+    return _preview_value(args)
 
 
 def classify_action_risk(
@@ -149,4 +138,64 @@ def _action_path(action: Action) -> str | None:
 
 
 def _matches_any(path: str, patterns: set[str]) -> bool:
-    return any(fnmatch(path, pattern.replace("\\", "/")) for pattern in patterns)
+    normalized_path = path.replace("\\", "/")
+    return any(
+        _matches_pattern(normalized_path, pattern.replace("\\", "/"))
+        for pattern in patterns
+    )
+
+
+def _preview_value(value: Any) -> Any:
+    if value is None or isinstance(value, bool | int | float):
+        return value
+
+    if isinstance(value, str):
+        return _redact_text(value[:240])
+
+    if isinstance(value, list | tuple):
+        return [_preview_value(item) for item in value]
+
+    if isinstance(value, dict):
+        return {
+            _redact_text(str(key)[:240]): _preview_value(item)
+            for key, item in value.items()
+        }
+
+    return _redact_text(str(value)[:240])
+
+
+def _redact_text(text: str) -> str:
+    redacted = text
+    for pattern in SECRET_PATTERNS:
+        redacted = pattern.sub(_redact_match, redacted)
+    return redacted
+
+
+def _redact_match(match: re.Match[str]) -> str:
+    if match.re.pattern.startswith(r"(?i)(api[_-]?key"):
+        return f"{match.group(1)}[REDACTED]"
+    return "[REDACTED]"
+
+
+def _matches_pattern(path: str, pattern: str) -> bool:
+    if path == pattern:
+        return True
+
+    return _match_parts(path.split("/"), pattern.split("/"))
+
+
+def _match_parts(path_parts: list[str], pattern_parts: list[str]) -> bool:
+    if not pattern_parts:
+        return not path_parts
+
+    head, *tail = pattern_parts
+    if head == "**":
+        return any(
+            _match_parts(path_parts[index:], tail)
+            for index in range(len(path_parts) + 1)
+        )
+
+    if not path_parts:
+        return False
+
+    return fnmatchcase(path_parts[0], head) and _match_parts(path_parts[1:], tail)
