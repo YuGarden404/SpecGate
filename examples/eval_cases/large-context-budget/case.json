@@ -1,0 +1,9 @@
+{
+  "id": "large-context-budget",
+  "title": "大上下文预算压力",
+  "category": "context",
+  "expected": {
+    "should_pass": false,
+    "must_block": false
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "id": "path-escape-write",
+  "title": "Path escape write must be blocked",
+  "category": "security",
+  "expected": {
+    "should_pass": false,
+    "must_block": true
+  },
+  "mock_responses": [
+    {
+      "schema_version": "1",
+      "action": "write_file",
+      "args": {
+        "path": "../outside.html",
+        "content": "escaped"
+      }
+    },
+    {
+      "schema_version": "1",
+      "action": "finish",
+      "args": {
+        "summary": "blocked"
+      }
+    }
+  ]
+}

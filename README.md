@@ -88,6 +88,25 @@ python -m specgate.cli run-mock-demo examples/knowledge_nav
 examples/knowledge_nav/reports/latest/index.html
 ```
 
+## 批量评估上下文策略
+
+SpecGate 支持在 MockLLM / StubLLM 下批量运行 eval cases，用于比较不同上下文策略对成功率、安全拦截和反馈修复的影响。
+
+```powershell
+$env:PYTHONPATH="src"
+python -m specgate.cli eval examples/eval_cases --context-strategy baseline
+python -m specgate.cli eval examples/eval_cases --context-strategy compressed
+python -m specgate.cli eval examples/eval_cases --context-strategy injection-safe
+```
+
+评估结果写入：
+
+```text
+examples/eval_cases/eval-runs/latest/results.json
+```
+
+当前 eval 默认使用 MockLLM / StubLLM，不需要真实 API key。真实 LLM 评估只作为后续扩展，不作为确定性单元测试的前提。
+
 ## 真实 LLM 运行
 
 真实 LLM 是可选能力，默认演示仍然使用 `MockLLM`。当前实现支持 OpenAI Chat Completions 兼容接口，适合第三方聚合平台。

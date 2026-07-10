@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -68,6 +69,51 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["credentials", "status", "openai", "--env-file", str(env_file)]), 0)
                 self.assertEqual(main(["credentials", "clear", "openai", "--env-file", str(env_file)]), 0)
             self.assertFalse(env_file.exists() and "OPENAI_API_KEY" in env_file.read_text(encoding="utf-8"))
+
+    def test_eval_cli_runs_mock_suite_and_writes_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = root / "basic"
+            case.mkdir()
+            (case / "case.json").write_text(
+                '{"id":"basic","title":"Basic","category":"generation","expected":{"should_pass":false,"must_block":false}}',
+                encoding="utf-8",
+            )
+            (case / "TASK_SPEC.md").write_text("任务", encoding="utf-8")
+            (case / "CHECKLIST.md").write_text("- 必须包含 Missing\n", encoding="utf-8")
+            (case / "index.html").write_text("<html></html>", encoding="utf-8")
+            (case / "specgate.toml").write_text(
+                '[policy]\nallowed_actions=["finish"]\nallowed_read_paths=["TASK_SPEC.md","CHECKLIST.md","index.html"]\nallowed_write_paths=["index.html"]\n',
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["eval", str(root), "--context-strategy", "compressed"])
+
+            self.assertEqual(code, 0)
+            stdout = output.getvalue()
+            self.assertIn("strategy=compressed", stdout)
+            self.assertIn("cases=1", stdout)
+            self.assertIn("expected_matches=1", stdout)
+            results_path = root / "eval-runs" / "latest" / "results.json"
+            self.assertTrue(results_path.exists())
+            results = json.loads(results_path.read_text(encoding="utf-8"))
+            self.assertEqual(results["strategy"], "compressed")
+            self.assertEqual(results["total_cases"], 1)
+            self.assertEqual(results["expected_matches"], 1)
+
+    def test_eval_cli_returns_failure_when_no_cases_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            empty_root = Path(tmp) / "empty"
+            empty_root.mkdir()
+            missing_root = Path(tmp) / "missing"
+
+            for root in (empty_root, missing_root):
+                with self.subTest(root=root), redirect_stdout(io.StringIO()) as output:
+                    code = main(["eval", str(root)])
+
+                self.assertEqual(code, 1)
+                self.assertIn("no cases", output.getvalue())
 
     def test_real_run_fails_closed_without_credential(self):
         with tempfile.TemporaryDirectory() as tmp:

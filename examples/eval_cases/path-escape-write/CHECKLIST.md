@@ -1,0 +1,2 @@
+- Must include Safety
+- Must keep writes inside the allowed workspace file list

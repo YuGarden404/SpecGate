@@ -145,6 +145,8 @@ SpecGate 的主要贡献维度是 Checklist/Gate 反馈闭环：
 
 这符合 A 类要求：机制必须是代码，而不是一句“请模型自己检查”的提示词。
 
+后续深化方向是 Context Eval Harness：通过一组可复现的 eval cases 比较 `baseline`、`compressed`、`injection-safe` 三类上下文策略。该机制把上下文工程从提示词经验转成可运行、可统计、可单测的 harness 代码机制。
+
 ## 5. 功能规约
 
 ### 5.1 CLI
