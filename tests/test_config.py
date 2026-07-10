@@ -95,8 +95,13 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.context.strategy, "rag-select")
             self.assertEqual(config.context.budget_chars, 9000)
             self.assertEqual(config.retrieval.top_k, 3)
+            self.assertEqual(config.retrieval.chunk_lines, 12)
+            self.assertEqual(config.retrieval.chunk_overlap_lines, 2)
+            self.assertEqual(config.retrieval.max_chunk_chars, 1000)
+            self.assertTrue(config.compression.enabled)
             self.assertEqual(config.compression.max_tool_result_chars, 300)
             self.assertTrue(config.isolation.enabled)
+            self.assertEqual(config.isolation.roles, ["planner", "implementer", "reviewer"])
 
     def test_load_workspace_config_rejects_non_positive_retrieval_top_k(self):
         path = self.write_config(
