@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -61,6 +62,122 @@ class RecordingLLM:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_successful_write_finish_records_metrics_and_trust(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {
+                            "path": "index.html",
+                            "content": (
+                                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                '<title>Task</title></head><body><input type="search">Task Search Detail</body></html>'
+                            ),
+                        },
+                    },
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "done"}},
+                ]
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"write_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=3).run()
+
+            self.assertTrue(result.passed)
+            self.assertEqual(result.profile, "strict")
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.llm_calls, 2)
+            self.assertEqual(result.metrics.tool_calls, 2)
+            self.assertEqual(result.metrics.successful_tool_calls, 2)
+            self.assertEqual(result.metrics.gate_runs, 1)
+            self.assertEqual(result.metrics.gate_failures, 0)
+            self.assertEqual(result.metrics.finish_actions, 1)
+            self.assertIsNotNone(result.trust)
+            self.assertEqual(result.trust.status, "trusted")
+
+    def test_blocked_env_write_records_permission_decision_and_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": ".env", "content": "SECRET=123"},
+                    }
+                ]
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"write_file"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=1, governance_profile="review").run()
+
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.blocked_actions, 1)
+            self.assertEqual(result.profile, "review")
+            self.assertIsNotNone(result.permission_decisions)
+            self.assertEqual(len(result.permission_decisions), 1)
+            decision = result.permission_decisions[0]
+            self.assertEqual(decision.path, ".env")
+            self.assertEqual(decision.profile, "review")
+            self.assertEqual(decision.rule_family, "allowlist")
+            trace_events = [
+                json.loads(line)["event_type"]
+                for line in (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertIn("permission_decision", trace_events)
+            self.assertIn("run_summary", trace_events)
+
+    def test_max_step_exhaustion_marks_metrics_and_failed_trust(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {
+                            "path": "index.html",
+                            "content": (
+                                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                '<title>Task</title></head><body><input type="search">Task Search Detail</body></html>'
+                            ),
+                        },
+                    }
+                ]
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"write_file"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=1).run()
+
+            self.assertIsNotNone(result.metrics)
+            self.assertTrue(result.metrics.max_steps_reached)
+            self.assertIsNotNone(result.trust)
+            self.assertEqual(result.trust.status, "failed")
+            self.assertIn("max_steps_reached", result.trust.reasons)
+
     def test_gate_failure_feedback_changes_next_action(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -131,9 +248,11 @@ class RunnerTests(unittest.TestCase):
             llm = FeedbackAwareLLM()
             policy = WorkspacePolicy(root, {"finish"}, {"TASK_SPEC.md", "CHECKLIST.md", "index.html"}, {"index.html"})
 
-            AgentRunner(root, llm, policy, max_steps=2).run()
+            result = AgentRunner(root, llm, policy, max_steps=2).run()
 
             self.assertEqual(len(llm.contexts), 2)
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.parse_errors, 1)
             self.assertIn("Runtime Feedback", llm.contexts[1])
             self.assertIn("parse_error", llm.contexts[1])
             self.assertIn("model output must be one strict JSON object", llm.contexts[1])
