@@ -6,7 +6,67 @@ from pathlib import Path
 
 from specgate.gate import GateResult
 from specgate.memory import load_memory_summary
+from specgate.metrics import PermissionDecision, RunMetrics, TrustSummary
 from specgate.tool_registry import default_tool_registry
+
+
+def _render_trust_summary(trust: TrustSummary | None, profile: str = "strict") -> str:
+    if trust is None:
+        return (
+            "<h2>Trust Summary</h2>"
+            f"<p>Profile: {escape(profile)}</p>"
+            "<p>No trust summary available.</p>"
+        )
+
+    reasons = "\n".join(f"<li>{escape(reason)}</li>" for reason in trust.reasons)
+    if not reasons:
+        reasons = "<li>No trust reasons recorded.</li>"
+    return (
+        "<h2>Trust Summary</h2>"
+        f"<p>Profile: {escape(profile)}</p>"
+        f"<p>Status: <strong>{escape(trust.status)}</strong></p>"
+        f"<ul>{reasons}</ul>"
+    )
+
+
+def _render_metrics(metrics: RunMetrics | None) -> str:
+    if metrics is None:
+        return "<h2>Run Metrics</h2><p>No run metrics available.</p>"
+
+    rows = "\n".join(
+        f"<tr><th>{escape(str(key))}</th><td>{escape(str(value))}</td></tr>"
+        for key, value in metrics.to_dict().items()
+    )
+    return f"<h2>Run Metrics</h2><table><tbody>{rows}</tbody></table>"
+
+
+def _render_permission_decisions(permission_decisions: list[PermissionDecision] | None) -> str:
+    if not permission_decisions:
+        return "<h2>Permission Decisions</h2><p>No permission decisions recorded.</p>"
+
+    rows = "\n".join(
+        "<tr>"
+        f"<td>{escape(str(decision.step))}</td>"
+        f"<td>{escape(decision.action)}</td>"
+        f"<td>{escape(decision.path or '')}</td>"
+        f"<td>{'yes' if decision.allowed else 'no'}</td>"
+        f"<td>{'yes' if decision.blocked else 'no'}</td>"
+        f"<td>{escape(decision.reason)}</td>"
+        f"<td>{escape(decision.profile)}</td>"
+        f"<td>{escape(decision.rule_family)}</td>"
+        "</tr>"
+        for decision in permission_decisions
+    )
+    return (
+        "<h2>Permission Decisions</h2>"
+        "<table>"
+        "<thead><tr>"
+        "<th>Step</th><th>Action</th><th>Path</th><th>Allowed</th>"
+        "<th>Blocked</th><th>Reason</th><th>Profile</th><th>Rule Family</th>"
+        "</tr></thead>"
+        f"<tbody>{rows}</tbody>"
+        "</table>"
+    )
 
 
 def _render_run_events(root: Path) -> str:
@@ -34,7 +94,15 @@ def _render_run_events(root: Path) -> str:
     return "<ol>" + "\n".join(items) + "</ol>"
 
 
-def generate_report(root: Path, gate: GateResult, steps: int) -> Path:
+def generate_report(
+    root: Path,
+    gate: GateResult,
+    steps: int,
+    metrics: RunMetrics | None = None,
+    permission_decisions: list[PermissionDecision] | None = None,
+    trust: TrustSummary | None = None,
+    profile: str = "strict",
+) -> Path:
     report_dir = root / "reports" / "latest"
     report_dir.mkdir(parents=True, exist_ok=True)
     output = report_dir / "index.html"
@@ -44,6 +112,9 @@ def generate_report(root: Path, gate: GateResult, steps: int) -> Path:
         f"<li><strong>{escape(tool.name)}</strong> [{escape(tool.permission)}]: {escape(tool.description)}</li>"
         for tool in default_tool_registry().values()
     )
+    trust_summary = _render_trust_summary(trust, profile)
+    metrics_summary = _render_metrics(metrics)
+    decisions_summary = _render_permission_decisions(permission_decisions)
     events = _render_run_events(root)
     memory = escape(load_memory_summary(root))
     html = f"""<!doctype html>
@@ -58,6 +129,9 @@ def generate_report(root: Path, gate: GateResult, steps: int) -> Path:
   <h1>SpecGate Run Report</h1>
   <p>Steps: {steps}</p>
   <p>Gate: {escape(gate.summary)}</p>
+  {trust_summary}
+  {metrics_summary}
+  {decisions_summary}
   <h2>Checks</h2>
   <ul>{checks}</ul>
   <h2>Issues</h2>
