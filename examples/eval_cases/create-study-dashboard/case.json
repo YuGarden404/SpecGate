@@ -1,0 +1,9 @@
+{
+  "id": "create-study-dashboard",
+  "title": "从草稿生成 AI 学习计划看板",
+  "category": "generation",
+  "expected": {
+    "should_pass": false,
+    "must_block": false
+  }
+}
