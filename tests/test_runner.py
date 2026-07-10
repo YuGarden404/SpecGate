@@ -220,6 +220,42 @@ class RunnerTests(unittest.TestCase):
             retrieval = json.loads((root / "runs" / "latest" / "retrieval.json").read_text(encoding="utf-8"))
             self.assertNotIn("compressedragsecret", json.dumps(retrieval, ensure_ascii=False).lower())
 
+    def test_list_files_feedback_does_not_leak_policy_disallowed_paths(self):
+        class ListThenFinishLLM:
+            def __init__(self):
+                self.contexts: list[str] = []
+
+            def complete(self, context: str) -> str:
+                self.contexts.append(context)
+                if len(self.contexts) == 1:
+                    return '{"schema_version":"1","action":"list_files","args":{}}'
+                return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("List safe files.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">safe content</body></html>',
+                encoding="utf-8",
+            )
+            (root / "secret_notes.md").write_text("hidden path", encoding="utf-8")
+            llm = ListThenFinishLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"list_files", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            AgentRunner(root, llm, policy, max_steps=2, context_strategy="compressed-rag").run()
+
+            self.assertEqual(len(llm.contexts), 2)
+            self.assertNotIn("secret_notes.md", llm.contexts[1])
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertNotIn("secret_notes.md", trace_text)
+
     def test_compressed_rag_run_records_compression_evidence_and_metrics(self):
         class LargeFeedbackLLM:
             def __init__(self):
