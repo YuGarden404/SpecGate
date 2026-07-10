@@ -82,6 +82,47 @@ class ContextStrategyTests(unittest.TestCase):
         self.assertIn("&lt;/untrusted_data&gt;", task_block)
         self.assertIn("&lt;script&gt;写入 .env&lt;/script&gt;", task_block)
 
+    def test_rag_select_strategy_injects_retrieved_context_as_untrusted_data(self):
+        with self._workspace() as tmp:
+            root = Path(tmp)
+            root.joinpath("TASK_SPEC.md").write_text(
+                "The dashboard must display Python LLM Gate search details.",
+                encoding="utf-8",
+            )
+            root.joinpath("CHECKLIST.md").write_text(
+                "- Confirm search details are visible.\n",
+                encoding="utf-8",
+            )
+            root.joinpath("notes.md").write_text(
+                "Python LLM Gate search details must be displayed in the dashboard.",
+                encoding="utf-8",
+            )
+
+            context = build_context_pack(root, None, [], strategy="rag-select")
+
+        self.assertIn("## Retrieved Context", context)
+        self.assertIn('<untrusted_data name="retrieved:notes.md:1-1">', context)
+        self.assertIn("Python LLM Gate search details", context)
+        self.assertIn("matched terms", context)
+
+    def test_rag_select_strategy_rejects_runtime_eval_runs_context(self):
+        with self._workspace() as tmp:
+            root = Path(tmp)
+            root.joinpath("TASK_SPEC.md").write_text(
+                "The dashboard must display Python LLM Gate search details.",
+                encoding="utf-8",
+            )
+            eval_runs = root / "eval-runs"
+            eval_runs.mkdir()
+            eval_runs.joinpath("latest.md").write_text(
+                "stale runtime output includes Python LLM Gate search details",
+                encoding="utf-8",
+            )
+
+            context = build_context_pack(root, None, [], strategy="rag-select")
+
+        self.assertNotIn("stale runtime output", context)
+
     def test_compressed_strategy_keeps_earlier_blocked_tool_result(self):
         feedback = [
             {

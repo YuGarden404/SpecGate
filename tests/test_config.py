@@ -57,6 +57,84 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.governance.review_paths, {"src/**"})
             self.assertEqual(config.governance.blocked_paths, {".env", "secrets/**"})
 
+    def test_load_workspace_config_reads_context_retrieval_compression_and_isolation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "specgate.toml"
+            path.write_text(
+                "\n".join(
+                    [
+                        "[policy]",
+                        'allowed_actions = ["read_file", "write_file", "finish"]',
+                        'allowed_read_paths = ["TASK_SPEC.md", "src/**"]',
+                        'allowed_write_paths = ["src/**"]',
+                        "",
+                        "[context]",
+                        'strategy = "rag-select"',
+                        "budget_chars = 9000",
+                        "",
+                        "[retrieval]",
+                        "top_k = 3",
+                        "chunk_lines = 12",
+                        "chunk_overlap_lines = 2",
+                        "max_chunk_chars = 1000",
+                        "",
+                        "[compression]",
+                        "enabled = true",
+                        "max_tool_result_chars = 300",
+                        "",
+                        "[isolation]",
+                        "enabled = true",
+                        'roles = ["planner", "implementer", "reviewer"]',
+                    ]
+                ),
+                encoding="utf-8-sig",
+            )
+
+            config = load_workspace_config(path)
+
+            self.assertEqual(config.context.strategy, "rag-select")
+            self.assertEqual(config.context.budget_chars, 9000)
+            self.assertEqual(config.retrieval.top_k, 3)
+            self.assertEqual(config.compression.max_tool_result_chars, 300)
+            self.assertTrue(config.isolation.enabled)
+
+    def test_load_workspace_config_rejects_non_positive_retrieval_top_k(self):
+        path = self.write_config(
+            [
+                "",
+                "[retrieval]",
+                "top_k = 0",
+            ]
+        )
+
+        with self.assertRaises(ValueError):
+            load_workspace_config(path)
+
+    def test_load_workspace_config_rejects_chunk_overlap_at_least_chunk_lines(self):
+        path = self.write_config(
+            [
+                "",
+                "[retrieval]",
+                "chunk_lines = 12",
+                "chunk_overlap_lines = 12",
+            ]
+        )
+
+        with self.assertRaises(ValueError):
+            load_workspace_config(path)
+
+    def test_load_workspace_config_rejects_non_positive_context_budget_chars(self):
+        path = self.write_config(
+            [
+                "",
+                "[context]",
+                "budget_chars = 0",
+            ]
+        )
+
+        with self.assertRaises(ValueError):
+            load_workspace_config(path)
+
     def test_load_workspace_config_rejects_bare_string_review_actions(self):
         path = self.write_config(['review_actions = "replace_file"'])
 

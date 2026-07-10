@@ -7,10 +7,11 @@ from pathlib import Path
 from specgate.context_selector import ContextSelection, select_context_files
 from specgate.gate import GateResult
 from specgate.memory import load_memory_summary
+from specgate.retrieval import RetrievalConfig, build_query_terms, retrieve_chunks
 from specgate.tool_registry import render_tool_registry_for_context
 
 
-VALID_CONTEXT_STRATEGIES = {"baseline", "compressed", "injection-safe"}
+VALID_CONTEXT_STRATEGIES = {"baseline", "compressed", "injection-safe", "rag-select"}
 
 
 def _artifact_summary(path: Path) -> str:
@@ -50,6 +51,45 @@ def _render_selected_files(selection: ContextSelection, strategy: str = "baselin
             blocks.append(f"### {item.path}\n```text\n{content}\n```")
     if not blocks:
         return "没有文件进入上下文。"
+    return "\n\n".join(blocks)
+
+
+def _read_query_source(root: Path, relative_path: str) -> str:
+    try:
+        return root.joinpath(relative_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _render_retrieved_context(root: Path, latest_gate: GateResult | None) -> str:
+    task_spec = _read_query_source(root, "TASK_SPEC.md")
+    checklist = _read_query_source(root, "CHECKLIST.md")
+    gate_feedback = latest_gate.summary if latest_gate else ""
+    query_terms = build_query_terms(task_spec, checklist, gate_feedback)
+    result = retrieve_chunks(root, query_terms, RetrievalConfig())
+
+    if not result.selected_chunks:
+        return "No retrieved context matched the query."
+
+    blocks: list[str] = []
+    for chunk in result.selected_chunks:
+        escaped_path = html.escape(chunk.path, quote=True)
+        escaped_text = html.escape(chunk.text)
+        start = chunk.start_line
+        end = chunk.end_line
+        matched_terms = ", ".join(html.escape(term, quote=True) for term in chunk.matched_terms)
+        escaped_reason = html.escape(chunk.reason, quote=True)
+        blocks.append(
+            f"### {escaped_path}:{start}-{end}\n"
+            f"path: {escaped_path}\n"
+            f"line_range: {start}-{end}\n"
+            f"score: {chunk.score:.2f}\n"
+            f"matched_terms: {matched_terms}\n"
+            f"reason: {escaped_reason}\n"
+            f'<untrusted_data name="retrieved:{escaped_path}:{start}-{end}">\n'
+            f"{escaped_text}\n"
+            "</untrusted_data>"
+        )
     return "\n\n".join(blocks)
 
 
@@ -151,6 +191,11 @@ def build_context_pack(
             "## Context Manifest\n" + _render_manifest(selection),
             "## Memory\n" + load_memory_summary(root),
             "## Selected Files\n" + _render_selected_files(selection, strategy),
+            *(
+                ["## Retrieved Context\n" + _render_retrieved_context(root, latest_gate)]
+                if strategy == "rag-select"
+                else []
+            ),
             "## Runtime Feedback\n" + _render_runtime_feedback(runtime_feedback, strategy),
             "## " + _artifact_summary(root / "index.html"),
             "## 最近 Gate 结果\n" + gate_summary,
