@@ -17,6 +17,10 @@ class RunMetrics:
     finish_actions: int = 0
     approval_requests: int = 0
     pending_approvals: int = 0
+    retrieval_queries: int = 0
+    retrieved_chunks: int = 0
+    retrieval_candidate_chunks: int = 0
+    retrieval_context_chars: int = 0
     max_steps_reached: bool = False
 
     def to_dict(self) -> dict[str, int | bool]:

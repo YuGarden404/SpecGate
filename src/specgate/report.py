@@ -101,6 +101,61 @@ def _render_pending_approvals(root: Path) -> str:
     )
 
 
+def _render_retrieval_evidence(root: Path) -> str:
+    retrieval_path = root / "runs" / "latest" / "retrieval.json"
+    if not retrieval_path.exists():
+        return "<h2>Retrieval Evidence</h2><p>No retrieval evidence recorded.</p>"
+
+    try:
+        data = json.loads(retrieval_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("retrieval evidence must be an object")
+        selected_chunks = data.get("selected_chunks", [])
+        if not isinstance(selected_chunks, list):
+            raise ValueError("retrieval selected_chunks must be a list")
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        return (
+            "<h2>Retrieval Evidence</h2>"
+            f"<p>could not read retrieval evidence: {escape(str(exc))}</p>"
+        )
+
+    query_terms = data.get("query_terms", [])
+    terms_text = ", ".join(str(term) for term in query_terms) if isinstance(query_terms, list) else ""
+    summary = (
+        f"<p>Query terms: {escape(terms_text)}</p>"
+        f"<p>Candidate chunks: {escape(str(data.get('candidate_count', 0)))}</p>"
+    )
+    if not selected_chunks:
+        return "<h2>Retrieval Evidence</h2>" + summary + "<p>No chunks selected.</p>"
+
+    rows: list[str] = []
+    for chunk in selected_chunks:
+        if not isinstance(chunk, dict):
+            continue
+        matched_terms = chunk.get("matched_terms", [])
+        matched_text = ", ".join(str(term) for term in matched_terms) if isinstance(matched_terms, list) else ""
+        rows.append(
+            "<tr>"
+            f"<td>{escape(str(chunk.get('path', '')))}</td>"
+            f"<td>{escape(str(chunk.get('start_line', '')))}-{escape(str(chunk.get('end_line', '')))}</td>"
+            f"<td>{escape(str(chunk.get('score', '')))}</td>"
+            f"<td>{escape(matched_text)}</td>"
+            f"<td>{escape(str(chunk.get('reason', '')))}</td>"
+            "</tr>"
+        )
+    if not rows:
+        return "<h2>Retrieval Evidence</h2>" + summary + "<p>No valid chunks selected.</p>"
+
+    return (
+        "<h2>Retrieval Evidence</h2>"
+        + summary
+        + "<table>"
+        + "<thead><tr><th>Path</th><th>Lines</th><th>Score</th><th>Matched Terms</th><th>Reason</th></tr></thead>"
+        + f"<tbody>{''.join(rows)}</tbody>"
+        + "</table>"
+    )
+
+
 def _render_run_events(root: Path) -> str:
     trace_path = root / "runs" / "latest" / "trace.jsonl"
     if not trace_path.exists():
@@ -148,6 +203,7 @@ def generate_report(
     metrics_summary = _render_metrics(metrics)
     decisions_summary = _render_permission_decisions(permission_decisions)
     pending_approvals = _render_pending_approvals(root)
+    retrieval_evidence = _render_retrieval_evidence(root)
     events = _render_run_events(root)
     memory = escape(load_memory_summary(root))
     html = f"""<!doctype html>
@@ -166,6 +222,7 @@ def generate_report(
   {metrics_summary}
   {decisions_summary}
   {pending_approvals}
+  {retrieval_evidence}
   <h2>Checks</h2>
   <ul>{checks}</ul>
   <h2>Issues</h2>

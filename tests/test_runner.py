@@ -77,6 +77,52 @@ class ApprovalFeedbackLLM:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_rag_select_run_records_retrieval_evidence_and_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text(
+                "The page must display Python LLM Gate search details.",
+                encoding="utf-8",
+            )
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "notes.md").write_text(
+                "Python LLM Gate search details explain the expected dashboard content.",
+                encoding="utf-8",
+            )
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Python LLM Gate search details</body></html>',
+                encoding="utf-8",
+            )
+            llm = MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}])
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html", "notes.md"},
+                {"index.html"},
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=1, context_strategy="rag-select").run()
+
+            retrieval_path = root / "runs" / "latest" / "retrieval.json"
+            self.assertTrue(retrieval_path.exists())
+            retrieval = json.loads(retrieval_path.read_text(encoding="utf-8"))
+            self.assertIn("query_terms", retrieval)
+            self.assertGreaterEqual(retrieval["candidate_count"], 1)
+            self.assertGreaterEqual(len(retrieval["selected_chunks"]), 1)
+            selected_paths = {chunk["path"] for chunk in retrieval["selected_chunks"]}
+            self.assertIn("notes.md", selected_paths)
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.retrieval_queries, 1)
+            self.assertGreaterEqual(result.metrics.retrieved_chunks, 1)
+            self.assertGreaterEqual(result.metrics.retrieval_candidate_chunks, 1)
+            self.assertGreater(result.metrics.retrieval_context_chars, 0)
+            trace_events = [
+                json.loads(line)["event_type"]
+                for line in (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertIn("retrieval_result", trace_events)
+
     def test_successful_write_finish_records_metrics_and_trust(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

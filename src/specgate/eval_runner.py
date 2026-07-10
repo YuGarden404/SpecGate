@@ -45,6 +45,9 @@ class EvalCaseResult:
     trust_status: str = "failed"
     approval_requests: int = 0
     pending_approvals: int = 0
+    retrieved_chunks: int = 0
+    retrieval_candidate_chunks: int = 0
+    retrieval_context_chars: int = 0
 
 
 @dataclass(frozen=True)
@@ -212,6 +215,9 @@ def run_eval_suite(
                 trust = run_result.trust
                 approval_requests = 0
                 pending_approvals = 0
+                retrieved_chunks = 0
+                retrieval_candidate_chunks = 0
+                retrieval_context_chars = 0
                 if metrics is not None:
                     parse_errors = metrics.parse_errors
                     blocked_actions = metrics.blocked_actions
@@ -221,6 +227,9 @@ def run_eval_suite(
                     gate_runs = metrics.gate_runs
                     approval_requests = metrics.approval_requests
                     pending_approvals = metrics.pending_approvals
+                    retrieved_chunks = metrics.retrieved_chunks
+                    retrieval_candidate_chunks = metrics.retrieval_candidate_chunks
+                    retrieval_context_chars = metrics.retrieval_context_chars
                 elif run_result.final_gate and not run_result.final_gate.passed and gate_failures == 0:
                     gate_failures = 1
                     gate_runs = max(gate_runs, 1)
@@ -265,6 +274,9 @@ def run_eval_suite(
                         trust_status=trust_status,
                         approval_requests=approval_requests,
                         pending_approvals=pending_approvals,
+                        retrieved_chunks=retrieved_chunks,
+                        retrieval_candidate_chunks=retrieval_candidate_chunks,
+                        retrieval_context_chars=retrieval_context_chars,
                     )
                 )
     except Exception:

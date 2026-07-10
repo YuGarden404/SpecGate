@@ -370,6 +370,50 @@ class EvalRunnerExecutionTests(unittest.TestCase):
             data = json.loads(results_path.read_text(encoding="utf-8"))
             self.assertEqual(data["results"][0]["pending_approvals"], 1)
 
+    def test_run_eval_suite_records_retrieval_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = self._case_dir(root, "rag-case")
+            (case / "TASK_SPEC.md").write_text(
+                "The page must display Python LLM Gate search details.",
+                encoding="utf-8",
+            )
+            (case / "notes.md").write_text(
+                "Python LLM Gate search details explain the expected dashboard content.",
+                encoding="utf-8",
+            )
+            (case / "specgate.toml").write_text(
+                (
+                    "[policy]\n"
+                    'allowed_actions=["finish"]\n'
+                    'allowed_read_paths=["TASK_SPEC.md","CHECKLIST.md","index.html","notes.md"]\n'
+                    'allowed_write_paths=["index.html"]\n'
+                ),
+                encoding="utf-8",
+            )
+            (case / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Python LLM Gate search details</body></html>',
+                encoding="utf-8",
+            )
+            responses = {
+                "rag-case": [
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "done"}}
+                ]
+            }
+
+            suite = run_eval_suite(root, strategy="rag-select", scripted_responses=responses)
+
+            result = suite.results[0]
+            self.assertGreaterEqual(result.retrieved_chunks, 1)
+            self.assertGreaterEqual(result.retrieval_candidate_chunks, 1)
+            self.assertGreater(result.retrieval_context_chars, 0)
+            results_path = root / "eval-runs" / "latest" / "results.json"
+            data = json.loads(results_path.read_text(encoding="utf-8"))
+            self.assertGreaterEqual(data["results"][0]["retrieved_chunks"], 1)
+            self.assertGreaterEqual(data["results"][0]["retrieval_candidate_chunks"], 1)
+            self.assertGreater(data["results"][0]["retrieval_context_chars"], 0)
+
     def test_failed_eval_does_not_delete_previous_saved_workspaces(self):
         class FailingLLM:
             def complete(self, context: str) -> str:

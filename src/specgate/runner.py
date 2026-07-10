@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import json
 from pathlib import Path
 
 from specgate.actions import ActionParseError, parse_action
@@ -12,7 +13,7 @@ from specgate.approvals import (
     classify_action_risk,
     preview_args,
 )
-from specgate.context import build_context_pack
+from specgate.context import build_context_pack_with_metadata
 from specgate.gate import GateResult, run_html_gate
 from specgate.llm import LLMClient
 from specgate.memory import append_memory
@@ -55,7 +56,11 @@ class AgentRunner:
         self.governance_profile = governance_profile if governance_profile is not None else self.governance_config.profile
         snapshot = FileSnapshot.capture(root, policy.allowed_write_paths)
         self.dispatcher = ToolDispatcher(policy, snapshot)
-        self.trace = TraceStore(root / "runs" / "latest" / "trace.jsonl", reset=True)
+        self.run_dir = root / "runs" / "latest"
+        self.trace = TraceStore(self.run_dir / "trace.jsonl", reset=True)
+        retrieval_path = self.run_dir / "retrieval.json"
+        if retrieval_path.exists():
+            retrieval_path.unlink()
 
     def run(self) -> RunResult:
         queue_path = approval_queue_path(self.root)
@@ -167,13 +172,47 @@ class AgentRunner:
             permission_decisions.append(decision)
             self.trace.append("permission_decision", decision.to_dict())
 
+        def record_retrieval(metadata: dict | None) -> None:
+            nonlocal metrics
+            if not metadata:
+                return
+            retrieval = metadata.get("retrieval")
+            if not isinstance(retrieval, dict):
+                return
+            selected_chunks = retrieval.get("selected_chunks", [])
+            selected_count = len(selected_chunks) if isinstance(selected_chunks, list) else 0
+            candidate_count = retrieval.get("candidate_count", 0)
+            used_chars = retrieval.get("used_chars", 0)
+            metrics = replace(
+                metrics,
+                retrieval_queries=metrics.retrieval_queries + 1,
+                retrieved_chunks=metrics.retrieved_chunks + selected_count,
+                retrieval_candidate_chunks=metrics.retrieval_candidate_chunks
+                + (candidate_count if isinstance(candidate_count, int) else 0),
+                retrieval_context_chars=metrics.retrieval_context_chars
+                + (used_chars if isinstance(used_chars, int) else 0),
+            )
+            (self.run_dir / "retrieval.json").write_text(
+                json.dumps(retrieval, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            self.trace.append(
+                "retrieval_result",
+                {
+                    "selected_count": selected_count,
+                    "candidate_count": candidate_count,
+                    "used_chars": used_chars,
+                },
+            )
+
         for step in range(1, self.max_steps + 1):
-            context = build_context_pack(
+            context, context_metadata = build_context_pack_with_metadata(
                 self.root,
                 latest_gate,
                 runtime_feedback,
                 strategy=self.context_strategy,
             )
+            record_retrieval(context_metadata)
             context_chars = len(context)
             context_chars_max = max(context_chars_max, context_chars)
             metrics = replace(metrics, steps=step, context_chars_max=context_chars_max)

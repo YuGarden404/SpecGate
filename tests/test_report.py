@@ -123,6 +123,60 @@ class ReportTests(unittest.TestCase):
             self.assertIn("needs review &lt;script&gt;alert(1)&lt;/script&gt;", html)
             self.assertNotIn("<script>", html)
 
+    def test_generate_report_includes_retrieval_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+            run_dir = root / "runs" / "latest"
+            run_dir.mkdir(parents=True)
+            (run_dir / "trace.jsonl").write_text("", encoding="utf-8")
+            (run_dir / "retrieval.json").write_text(
+                json.dumps(
+                    {
+                        "query_terms": ["python", "gate"],
+                        "candidate_count": 8,
+                        "selected_chunks": [
+                            {
+                                "path": "notes<script>.md",
+                                "start_line": 1,
+                                "end_line": 3,
+                                "score": 2.0,
+                                "matched_terms": ["python", "gate"],
+                                "reason": "matched terms: <script>alert(1)</script>",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            output = generate_report(root, gate, steps=1)
+
+            html = output.read_text(encoding="utf-8")
+            self.assertIn("Retrieval Evidence", html)
+            self.assertIn("notes&lt;script&gt;.md", html)
+            self.assertIn("python, gate", html)
+            self.assertIn("matched terms: &lt;script&gt;alert(1)&lt;/script&gt;", html)
+            self.assertNotIn("notes<script>.md", html)
+
+    def test_generate_report_handles_malformed_retrieval_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+            run_dir = root / "runs" / "latest"
+            run_dir.mkdir(parents=True)
+            (run_dir / "retrieval.json").write_text(
+                '{"selected_chunks": [<script>alert(1)</script>]}',
+                encoding="utf-8",
+            )
+
+            output = generate_report(root, gate, steps=1)
+
+            html = output.read_text(encoding="utf-8")
+            self.assertIn("Retrieval Evidence", html)
+            self.assertIn("could not read retrieval evidence", html)
+            self.assertNotIn("<script>alert(1)</script>", html)
+
     def test_generate_report_handles_missing_pending_approvals_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

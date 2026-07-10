@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 import html
 import json
 from pathlib import Path
@@ -61,15 +62,33 @@ def _read_query_source(root: Path, relative_path: str) -> str:
         return ""
 
 
-def _render_retrieved_context(root: Path, latest_gate: GateResult | None) -> str:
+def _retrieval_metadata(result) -> dict:
+    chunks = []
+    for chunk in result.selected_chunks:
+        item = asdict(chunk)
+        item.pop("text", None)
+        item["text_chars"] = len(chunk.text)
+        chunks.append(item)
+    return {
+        "query_terms": result.query_terms,
+        "candidate_count": result.candidate_count,
+        "selected_chunks": chunks,
+        "budget_chars": result.budget_chars,
+        "used_chars": result.used_chars,
+        "dropped_reasons": result.dropped_reasons,
+    }
+
+
+def _render_retrieved_context(root: Path, latest_gate: GateResult | None) -> tuple[str, dict]:
     task_spec = _read_query_source(root, "TASK_SPEC.md")
     checklist = _read_query_source(root, "CHECKLIST.md")
     gate_feedback = latest_gate.summary if latest_gate else ""
     query_terms = build_query_terms(task_spec, checklist, gate_feedback)
     result = retrieve_chunks(root, query_terms, RetrievalConfig())
+    metadata = _retrieval_metadata(result)
 
     if not result.selected_chunks:
-        return "No retrieved context matched the query."
+        return "No retrieved context matched the query.", metadata
 
     blocks: list[str] = []
     for chunk in result.selected_chunks:
@@ -90,7 +109,7 @@ def _render_retrieved_context(root: Path, latest_gate: GateResult | None) -> str
             f"{escaped_text}\n"
             "</untrusted_data>"
         )
-    return "\n\n".join(blocks)
+    return "\n\n".join(blocks), metadata
 
 
 def _action_protocol() -> str:
@@ -162,16 +181,21 @@ def _render_runtime_feedback(events: list[dict] | None, strategy: str = "baselin
     return "\n".join(lines)
 
 
-def build_context_pack(
+def build_context_pack_with_metadata(
     root: Path,
     latest_gate: GateResult | None,
     runtime_feedback: list[dict] | None = None,
     strategy: str = "baseline",
-) -> str:
+) -> tuple[str, dict]:
     if strategy not in VALID_CONTEXT_STRATEGIES:
         raise ValueError(f"unknown context strategy: {strategy}")
 
     selection = select_context_files(root)
+    retrieved_sections: list[str] = []
+    retrieval_metadata = None
+    if strategy == "rag-select":
+        rendered_retrieval, retrieval_metadata = _render_retrieved_context(root, latest_gate)
+        retrieved_sections.append("## Retrieved Context\n" + rendered_retrieval)
     safety_sections = []
     if strategy == "injection-safe":
         safety_sections.append(
@@ -181,7 +205,7 @@ def build_context_pack(
         )
     gate_summary = latest_gate.summary if latest_gate else "尚未运行 Gate"
 
-    return "\n\n".join(
+    context = "\n\n".join(
         [
             "你是 SpecGate harness 中的 coding agent。只输出严格 JSON action。",
             f"## Context Strategy\n{strategy}",
@@ -191,13 +215,20 @@ def build_context_pack(
             "## Context Manifest\n" + _render_manifest(selection),
             "## Memory\n" + load_memory_summary(root),
             "## Selected Files\n" + _render_selected_files(selection, strategy),
-            *(
-                ["## Retrieved Context\n" + _render_retrieved_context(root, latest_gate)]
-                if strategy == "rag-select"
-                else []
-            ),
+            *retrieved_sections,
             "## Runtime Feedback\n" + _render_runtime_feedback(runtime_feedback, strategy),
             "## " + _artifact_summary(root / "index.html"),
             "## 最近 Gate 结果\n" + gate_summary,
         ]
     )
+    return context, {"retrieval": retrieval_metadata}
+
+
+def build_context_pack(
+    root: Path,
+    latest_gate: GateResult | None,
+    runtime_feedback: list[dict] | None = None,
+    strategy: str = "baseline",
+) -> str:
+    context, _metadata = build_context_pack_with_metadata(root, latest_gate, runtime_feedback, strategy)
+    return context

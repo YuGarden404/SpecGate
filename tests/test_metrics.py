@@ -42,6 +42,10 @@ class MetricsTests(unittest.TestCase):
                 "finish_actions": 0,
                 "approval_requests": 0,
                 "pending_approvals": 0,
+                "retrieval_queries": 0,
+                "retrieved_chunks": 0,
+                "retrieval_candidate_chunks": 0,
+                "retrieval_context_chars": 0,
                 "max_steps_reached": False,
             },
         )
@@ -60,6 +64,10 @@ class MetricsTests(unittest.TestCase):
             finish_actions=1,
             approval_requests=2,
             pending_approvals=1,
+            retrieval_queries=1,
+            retrieved_chunks=3,
+            retrieval_candidate_chunks=8,
+            retrieval_context_chars=1200,
             max_steps_reached=True,
         )
 
@@ -78,9 +86,28 @@ class MetricsTests(unittest.TestCase):
                 "finish_actions": 1,
                 "approval_requests": 2,
                 "pending_approvals": 1,
+                "retrieval_queries": 1,
+                "retrieved_chunks": 3,
+                "retrieval_candidate_chunks": 8,
+                "retrieval_context_chars": 1200,
                 "max_steps_reached": True,
             },
         )
+
+    def test_run_metrics_includes_retrieval_fields(self):
+        metrics = RunMetrics(
+            retrieval_queries=1,
+            retrieved_chunks=3,
+            retrieval_candidate_chunks=8,
+            retrieval_context_chars=900,
+        )
+
+        data = metrics.to_dict()
+
+        self.assertEqual(data["retrieval_queries"], 1)
+        self.assertEqual(data["retrieved_chunks"], 3)
+        self.assertEqual(data["retrieval_candidate_chunks"], 8)
+        self.assertEqual(data["retrieval_context_chars"], 900)
 
     def test_permission_decision_from_tool_result_shape(self):
         decision = PermissionDecision(
