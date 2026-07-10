@@ -3,10 +3,12 @@ import json
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from specgate import cli
+from specgate.approvals import ApprovalQueue, PendingApproval, approval_queue_path
 from specgate.cli import main, run_mock_demo, run_real_llm
 from specgate.llm import LLMProviderError
 
@@ -108,6 +110,90 @@ class CliTests(unittest.TestCase):
             self.assertFalse((root / "index.html").exists())
             trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("write path not allowed", trace_text)
+
+    def test_load_workspace_settings_includes_workspace_governance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "specgate.toml").write_text(
+                "\n".join(
+                    [
+                        "[policy]",
+                        'allowed_actions = ["write_file", "finish"]',
+                        'allowed_read_paths = ["TASK_SPEC.md"]',
+                        'allowed_write_paths = ["README.md"]',
+                        "",
+                        "[governance]",
+                        'profile = "review"',
+                        'review_actions = ["write_file"]',
+                        'review_paths = ["README.md"]',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            settings = cli._load_workspace_settings(root)
+
+            self.assertEqual(settings.governance.profile, "review")
+            self.assertEqual(settings.governance.review_actions, {"write_file"})
+            self.assertEqual(settings.governance.review_paths, {"README.md"})
+
+    def test_approvals_list_empty_queue_reports_no_pending_approvals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["approvals", "list", tmp])
+
+            self.assertEqual(code, 0)
+            self.assertIn("no pending approvals", output.getvalue())
+
+    def test_approvals_list_prints_pending_approval_details(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-step-2",
+                        step=2,
+                        action="replace_file",
+                        path="README.md",
+                        risk_level="review",
+                        reason="replace_file on protected path requires human review",
+                        profile="review",
+                    )
+                ]
+            ).write(approval_queue_path(root))
+
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["approvals", "list", tmp])
+
+            stdout = output.getvalue()
+            self.assertEqual(code, 0)
+            self.assertIn("id", stdout)
+            self.assertIn("status", stdout)
+            self.assertIn("action", stdout)
+            self.assertIn("path", stdout)
+            self.assertIn("reason", stdout)
+            self.assertIn("approval-step-2", stdout)
+            self.assertIn("pending", stdout)
+            self.assertIn("replace_file", stdout)
+            self.assertIn("README.md", stdout)
+            self.assertIn("requires human review", stdout)
+
+    def test_approvals_list_malformed_queue_reports_clean_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queue_path = approval_queue_path(root)
+            queue_path.parent.mkdir(parents=True)
+            queue_path.write_text("{not-json", encoding="utf-8")
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = main(["approvals", "list", tmp])
+
+            text = stdout.getvalue() + stderr.getvalue()
+            self.assertNotEqual(code, 0)
+            self.assertIn("could not read pending approvals", text)
+            self.assertNotIn("Traceback", text)
 
     def test_credentials_cli_status_set_and_clear(self):
         with tempfile.TemporaryDirectory() as tmp:

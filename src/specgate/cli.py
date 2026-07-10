@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 from pathlib import Path
 
-from specgate.config import load_policy
+from specgate.approvals import ApprovalQueue, GovernanceConfig, approval_queue_path
+from specgate.config import WorkspaceConfig, load_workspace_config
 from specgate.context import VALID_CONTEXT_STRATEGIES
 from specgate.credentials import clear_credential, credential_status_from_env, read_credential, set_credential
 from specgate.eval_runner import run_eval_suite
@@ -392,10 +394,41 @@ def _default_demo_policy(root: Path) -> WorkspacePolicy:
 
 
 def _load_demo_policy(root: Path) -> WorkspacePolicy:
+    return _load_workspace_settings(root).policy
+
+
+def _load_workspace_settings(root: Path) -> WorkspaceConfig:
     config_path = root / "specgate.toml"
     if config_path.exists():
-        return load_policy(config_path)
-    return _default_demo_policy(root)
+        return load_workspace_config(config_path)
+    return WorkspaceConfig(policy=_default_demo_policy(root), governance=GovernanceConfig())
+
+
+def list_approvals(root: Path) -> int:
+    try:
+        queue = ApprovalQueue.read(approval_queue_path(root))
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        print(f"could not read pending approvals: {exc}")
+        return 1
+
+    if not queue.approvals:
+        print("no pending approvals")
+        return 0
+
+    print("id\tstatus\taction\tpath\treason")
+    for approval in queue.approvals:
+        print(
+            "\t".join(
+                [
+                    approval.id,
+                    approval.status,
+                    approval.action,
+                    approval.path or "",
+                    approval.reason,
+                ]
+            )
+        )
+    return 0
 
 
 def run_mock_demo(root: Path, governance_profile: str = "strict") -> int:
@@ -410,8 +443,15 @@ def run_mock_demo(root: Path, governance_profile: str = "strict") -> int:
             {"schema_version": "1", "action": "finish", "args": {"summary": "done"}},
         ]
     )
-    policy = _load_demo_policy(root)
-    result = AgentRunner(root, llm, policy, max_steps=5, governance_profile=governance_profile).run()
+    settings = _load_workspace_settings(root)
+    result = AgentRunner(
+        root,
+        llm,
+        settings.policy,
+        max_steps=5,
+        governance_profile=governance_profile,
+        governance_config=settings.governance,
+    ).run()
     gate = result.final_gate or run_html_gate(root / "index.html", root / "CHECKLIST.md")
     generate_report(
         root,
@@ -455,9 +495,16 @@ def run_real_llm(
         user_agent=user_agent,
         timeout=timeout,
     )
-    policy = _load_demo_policy(root)
+    settings = _load_workspace_settings(root)
     try:
-        result = AgentRunner(root, llm, policy, max_steps=max_steps, governance_profile=governance_profile).run()
+        result = AgentRunner(
+            root,
+            llm,
+            settings.policy,
+            max_steps=max_steps,
+            governance_profile=governance_profile,
+            governance_config=settings.governance,
+        ).run()
     except LLMProviderError as exc:
         print(f"provider request failed: {exc}")
         return 1
@@ -582,6 +629,10 @@ def main(argv: list[str] | None = None) -> int:
     set_parser.add_argument("provider")
     set_parser.add_argument("--env-file", default=".env")
     set_parser.add_argument("--value")
+    approvals = sub.add_parser("approvals")
+    approvals_sub = approvals.add_subparsers(dest="approvals_command", required=True)
+    approvals_list = approvals_sub.add_parser("list")
+    approvals_list.add_argument("workspace")
     args = parser.parse_args(argv)
     if args.command == "run-mock-demo":
         return run_mock_demo(Path(args.workspace), governance_profile=args.governance_profile)
@@ -644,6 +695,9 @@ def main(argv: list[str] | None = None) -> int:
             clear_credential(args.provider, env_file)
             print(f"{args.provider} credential cleared from {env_file}")
             return 0
+    if args.command == "approvals":
+        if args.approvals_command == "list":
+            return list_approvals(Path(args.workspace))
     return 2
 
 
