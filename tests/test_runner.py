@@ -61,6 +61,20 @@ class RecordingLLM:
         return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
 
 
+class ApprovalFeedbackLLM:
+    def __init__(self):
+        self.contexts: list[str] = []
+
+    def complete(self, context: str) -> str:
+        self.contexts.append(context)
+        if len(self.contexts) == 1:
+            return (
+                '{"schema_version":"1","action":"replace_file",'
+                '"args":{"path":"README.md","content":"changed"}}'
+            )
+        return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
+
+
 class RunnerTests(unittest.TestCase):
     def test_successful_write_finish_records_metrics_and_trust(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -307,6 +321,88 @@ class RunnerTests(unittest.TestCase):
             trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("file changed since run started", trace_text)
             self.assertEqual((root / "index.html").read_text(encoding="utf-8"), "external edit")
+
+    def test_review_profile_creates_pending_approval_without_mutating_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("original", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Task Search Detail</body></html>',
+                encoding="utf-8",
+            )
+            llm = ApprovalFeedbackLLM()
+            policy = WorkspacePolicy(root, {"replace_file", "finish"}, {"TASK_SPEC.md"}, {"README.md"})
+            from specgate.approvals import GovernanceConfig, approval_queue_path
+
+            result = AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=2,
+                governance_profile="review",
+                governance_config=GovernanceConfig(
+                    profile="review",
+                    review_actions={"replace_file"},
+                    review_paths={"README.md"},
+                ),
+            ).run()
+
+            self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "original")
+            self.assertTrue(approval_queue_path(root).exists())
+            self.assertIn("approval-step-1", approval_queue_path(root).read_text(encoding="utf-8"))
+            self.assertEqual(result.metrics.approval_requests, 1)
+            self.assertEqual(result.metrics.pending_approvals, 1)
+            self.assertEqual(result.trust.status, "warning")
+            self.assertEqual(len(llm.contexts), 2)
+            self.assertIn("approval_requested", llm.contexts[1])
+            trace_events = [
+                json.loads(line)["event_type"]
+                for line in (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertIn("approval_requested", trace_events)
+
+    def test_strict_profile_blocks_review_action_without_creating_approval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("original", encoding="utf-8")
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {"path": "README.md", "content": "changed"},
+                    },
+                ]
+            )
+            policy = WorkspacePolicy(root, {"replace_file"}, {"TASK_SPEC.md"}, {"README.md"})
+            from specgate.approvals import GovernanceConfig, approval_queue_path
+
+            result = AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=1,
+                governance_profile="strict",
+                governance_config=GovernanceConfig(
+                    profile="strict",
+                    review_actions={"replace_file"},
+                    review_paths={"README.md"},
+                ),
+            ).run()
+
+            self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "original")
+            self.assertFalse(approval_queue_path(root).exists())
+            self.assertEqual(result.metrics.blocked_actions, 1)
+            trace_events = [
+                json.loads(line)["event_type"]
+                for line in (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertIn("permission_decision", trace_events)
 
 
 class RunnerContextStrategyTests(unittest.TestCase):

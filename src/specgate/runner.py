@@ -4,6 +4,14 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from specgate.actions import ActionParseError, parse_action
+from specgate.approvals import (
+    ApprovalQueue,
+    GovernanceConfig,
+    PendingApproval,
+    approval_queue_path,
+    classify_action_risk,
+    preview_args,
+)
 from specgate.context import build_context_pack
 from specgate.gate import GateResult, run_html_gate
 from specgate.llm import LLMClient
@@ -36,6 +44,7 @@ class AgentRunner:
         max_steps: int = 5,
         context_strategy: str = "baseline",
         governance_profile: str = "strict",
+        governance_config: GovernanceConfig | None = None,
     ):
         self.root = root
         self.llm = llm
@@ -43,11 +52,16 @@ class AgentRunner:
         self.max_steps = max_steps
         self.context_strategy = context_strategy
         self.governance_profile = governance_profile
+        self.governance_config = governance_config or GovernanceConfig(profile=governance_profile)
         snapshot = FileSnapshot.capture(root, policy.allowed_write_paths)
         self.dispatcher = ToolDispatcher(policy, snapshot)
         self.trace = TraceStore(root / "runs" / "latest" / "trace.jsonl", reset=True)
 
     def run(self) -> RunResult:
+        queue_path = approval_queue_path(self.root)
+        if queue_path.exists():
+            queue_path.unlink()
+
         latest_gate: GateResult | None = None
         runtime_feedback: list[dict] = []
         context_chars_max = 0
@@ -99,6 +113,60 @@ class AgentRunner:
             append_memory(self.root, result.passed, result.steps, final_gate.summary)
             return result
 
+        def record_tool_feedback(
+            step: int,
+            action_name: str,
+            ok: bool,
+            blocked: bool,
+            message: str,
+            data: dict,
+        ) -> None:
+            runtime_feedback.append(
+                {
+                    "step": step,
+                    "type": "tool_result",
+                    "action": action_name,
+                    "ok": ok,
+                    "blocked": blocked,
+                    "message": message,
+                    "data": data,
+                }
+            )
+            self.trace.append(
+                "tool_result",
+                {
+                    "step": step,
+                    "result": {
+                        "ok": ok,
+                        "action": action_name,
+                        "message": message,
+                        "data": data,
+                        "blocked": blocked,
+                    },
+                },
+            )
+
+        def record_permission_decision(
+            step: int,
+            action_name: str,
+            action_path: str | None,
+            ok: bool,
+            blocked: bool,
+            message: str,
+        ) -> None:
+            decision = PermissionDecision(
+                step=step,
+                action=action_name,
+                path=action_path,
+                allowed=ok and not blocked,
+                blocked=blocked,
+                reason=message,
+                profile=self.governance_profile,
+                rule_family=classify_rule_family(message),
+            )
+            permission_decisions.append(decision)
+            self.trace.append("permission_decision", decision.to_dict())
+
         for step in range(1, self.max_steps + 1):
             context = build_context_pack(
                 self.root,
@@ -126,6 +194,56 @@ class AgentRunner:
                 self.trace.append("parse_error", event)
                 continue
 
+            action_path_value = action.args.get("path")
+            action_path = action_path_value if isinstance(action_path_value, str) else None
+            risk = classify_action_risk(action, self.policy, self.governance_config)
+            if risk.level == "review" and self.governance_profile == "review":
+                approval = PendingApproval(
+                    id=f"approval-step-{step}",
+                    step=step,
+                    action=action.action,
+                    path=action_path,
+                    risk_level=risk.level,
+                    reason=risk.reason,
+                    profile=self.governance_profile,
+                    arguments_preview=preview_args(action.args),
+                )
+                queue = ApprovalQueue.read(queue_path).append(approval)
+                queue.write(queue_path)
+                metrics = replace(
+                    metrics,
+                    approval_requests=metrics.approval_requests + 1,
+                    pending_approvals=metrics.pending_approvals + 1,
+                )
+                event = {
+                    "step": step,
+                    "type": "approval_requested",
+                    "approval": approval.to_dict(),
+                }
+                runtime_feedback.append(event)
+                self.trace.append("approval_requested", event)
+                continue
+
+            if risk.level in {"review", "blocked"}:
+                metrics = replace(metrics, blocked_actions=metrics.blocked_actions + 1)
+                record_permission_decision(
+                    step,
+                    action.action,
+                    action_path,
+                    ok=False,
+                    blocked=True,
+                    message=risk.reason,
+                )
+                record_tool_feedback(
+                    step,
+                    action.action,
+                    ok=False,
+                    blocked=True,
+                    message=risk.reason,
+                    data={"risk": risk.to_dict()},
+                )
+                continue
+
             tool_result = self.dispatcher.dispatch(action)
             metrics = replace(
                 metrics,
@@ -134,19 +252,16 @@ class AgentRunner:
                 blocked_actions=metrics.blocked_actions + (1 if tool_result.blocked else 0),
                 finish_actions=metrics.finish_actions + (1 if action.action == "finish" else 0),
             )
-            action_path = action.args.get("path")
-            decision = PermissionDecision(
+            action_path_value = action.args.get("path")
+            action_path = action_path_value if isinstance(action_path_value, str) else None
+            record_permission_decision(
                 step=step,
-                action=action.action,
-                path=action_path if isinstance(action_path, str) else None,
-                allowed=tool_result.ok and not tool_result.blocked,
+                action_name=action.action,
+                action_path=action_path,
+                ok=tool_result.ok,
                 blocked=tool_result.blocked,
-                reason=tool_result.message,
-                profile=self.governance_profile,
-                rule_family=classify_rule_family(tool_result.message),
+                message=tool_result.message,
             )
-            permission_decisions.append(decision)
-            self.trace.append("permission_decision", decision.to_dict())
             runtime_feedback.append(
                 {
                     "step": step,
