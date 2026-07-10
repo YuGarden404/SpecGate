@@ -6,6 +6,7 @@ from pathlib import Path
 from specgate.llm import MockLLM
 from specgate.policy import WorkspacePolicy
 from specgate.runner import AgentRunner
+from specgate.approvals import GovernanceConfig, approval_queue_path
 
 
 BROKEN_HTML = "<html><head><title>x</title></head><body></body></html>"
@@ -372,6 +373,34 @@ class RunnerTests(unittest.TestCase):
             ]
             self.assertIn("permission_decision", trace_events)
             self.assertIn("approval_requested", trace_events)
+
+    def test_workspace_review_governance_config_sets_runner_profile_when_not_overridden(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("original", encoding="utf-8")
+            llm = ApprovalFeedbackLLM()
+            policy = WorkspacePolicy(root, {"replace_file", "finish"}, {"TASK_SPEC.md"}, {"README.md"})
+
+            result = AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=2,
+                governance_config=GovernanceConfig(
+                    profile="review",
+                    review_actions={"replace_file"},
+                    review_paths={"README.md"},
+                ),
+            ).run()
+
+            self.assertEqual(result.profile, "review")
+            self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "original")
+            self.assertTrue(approval_queue_path(root).exists())
+            self.assertEqual(result.metrics.approval_requests, 1)
+            self.assertEqual(result.metrics.pending_approvals, 1)
+            self.assertEqual(result.permission_decisions[0].profile, "review")
 
     def test_strict_profile_blocks_review_action_without_creating_approval(self):
         with tempfile.TemporaryDirectory() as tmp:

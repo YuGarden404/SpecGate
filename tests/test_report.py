@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from specgate.approvals import ApprovalQueue, PendingApproval, approval_queue_path
@@ -189,6 +190,39 @@ class ReportTests(unittest.TestCase):
             self.assertIn("Pending Approvals", html)
             self.assertIn("could not read pending approvals", html)
             self.assertNotIn('{"approvals": {}}', html)
+
+    def test_generate_report_handles_malformed_pending_approval_field_types(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+            queue_path = approval_queue_path(root)
+            queue_path.parent.mkdir(parents=True)
+            queue_path.write_text(
+                json.dumps(
+                    {
+                        "approvals": [
+                            {
+                                "id": {"secret": "sk-test-secret-1234567890"},
+                                "step": 1,
+                                "action": "replace_file",
+                                "path": "README.md",
+                                "risk_level": "review",
+                                "reason": ["sk-test-secret-abcdefghij"],
+                                "profile": "review",
+                                "status": "pending",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            output = generate_report(root, gate, 1)
+
+            html = output.read_text(encoding="utf-8")
+            self.assertIn("Pending Approvals", html)
+            self.assertIn("could not read pending approvals", html)
+            self.assertNotIn("sk-test-secret", html)
 
 
 if __name__ == "__main__":

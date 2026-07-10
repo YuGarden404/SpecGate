@@ -137,6 +137,94 @@ class CliTests(unittest.TestCase):
             self.assertEqual(settings.governance.review_actions, {"write_file"})
             self.assertEqual(settings.governance.review_paths, {"README.md"})
 
+    def test_run_mock_demo_uses_workspace_governance_profile_when_not_overridden(self):
+        captured = {}
+
+        class RecordingRunner:
+            def __init__(self, root, llm, policy, max_steps=5, governance_profile=None, governance_config=None):
+                captured["governance_profile"] = governance_profile
+                captured["governance_config"] = governance_config
+
+            def run(self):
+                from specgate.gate import GateCheck, GateResult
+                from specgate.runner import RunResult
+
+                return RunResult(
+                    True,
+                    1,
+                    GateResult(True, [GateCheck("ok", True, "ok")], [], "Gate passed"),
+                    profile="review",
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "specgate.toml").write_text(
+                "\n".join(
+                    [
+                        "[policy]",
+                        'allowed_actions = ["write_file", "finish"]',
+                        'allowed_read_paths = ["TASK_SPEC.md"]',
+                        'allowed_write_paths = ["index.html"]',
+                        "",
+                        "[governance]",
+                        'profile = "review"',
+                        'review_actions = ["write_file"]',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("specgate.cli.AgentRunner", RecordingRunner):
+                exit_code = run_mock_demo(root)
+
+            self.assertEqual(exit_code, 0)
+            self.assertIsNone(captured["governance_profile"])
+            self.assertEqual(captured["governance_config"].profile, "review")
+
+    def test_run_mock_demo_cli_explicit_governance_profile_overrides_workspace(self):
+        captured = {}
+
+        class RecordingRunner:
+            def __init__(self, root, llm, policy, max_steps=5, governance_profile=None, governance_config=None):
+                captured["governance_profile"] = governance_profile
+                captured["governance_config"] = governance_config
+
+            def run(self):
+                from specgate.gate import GateCheck, GateResult
+                from specgate.runner import RunResult
+
+                return RunResult(
+                    True,
+                    1,
+                    GateResult(True, [GateCheck("ok", True, "ok")], [], "Gate passed"),
+                    profile="strict",
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "specgate.toml").write_text(
+                "\n".join(
+                    [
+                        "[policy]",
+                        'allowed_actions = ["write_file", "finish"]',
+                        'allowed_read_paths = ["TASK_SPEC.md"]',
+                        'allowed_write_paths = ["index.html"]',
+                        "",
+                        "[governance]",
+                        'profile = "review"',
+                        'review_actions = ["write_file"]',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("specgate.cli.AgentRunner", RecordingRunner):
+                exit_code = main(["run-mock-demo", str(root), "--governance-profile", "strict"])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(captured["governance_profile"], "strict")
+            self.assertEqual(captured["governance_config"].profile, "review")
+
     def test_approvals_list_empty_queue_reports_no_pending_approvals(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(io.StringIO()) as output:

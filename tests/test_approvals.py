@@ -49,6 +49,16 @@ class ApprovalTests(unittest.TestCase):
         self.assertEqual(risk.level, "blocked")
         self.assertIn("blocked path", risk.reason)
 
+    def test_env_write_is_blocked_even_when_custom_blocked_paths_omit_env(self):
+        policy = WorkspacePolicy(Path("."), {"write_file"}, set(), {".env"})
+        config = GovernanceConfig(profile="review", blocked_paths={"custom.txt"})
+        action = Action("1", "write_file", {"path": ".env", "content": "SECRET=1"})
+
+        risk = classify_action_risk(action, policy, config)
+
+        self.assertEqual(risk.level, "blocked")
+        self.assertIn("blocked path", risk.reason)
+
     def test_path_escape_is_blocked(self):
         policy = WorkspacePolicy(Path("."), {"write_file"}, set(), {"index.html"})
         config = GovernanceConfig(profile="review")

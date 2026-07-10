@@ -444,7 +444,7 @@ def list_approvals(root: Path) -> int:
     return 0
 
 
-def run_mock_demo(root: Path, governance_profile: str = "strict") -> int:
+def run_mock_demo(root: Path, governance_profile: str | None = None) -> int:
     llm = MockLLM(
         [
             {
@@ -487,7 +487,7 @@ def run_real_llm(
     max_steps: int,
     user_agent: str,
     timeout: float,
-    governance_profile: str = "strict",
+    governance_profile: str | None = None,
 ) -> int:
     status = credential_status_from_env(provider, env_file)
     if not status.safe_to_run:
@@ -605,7 +605,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     demo = sub.add_parser("run-mock-demo")
     demo.add_argument("workspace")
-    demo.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default="strict")
+    demo.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
     real_run = sub.add_parser("run")
     real_run.add_argument("workspace")
     real_run.add_argument("--provider", default="openai-compatible")
@@ -615,7 +615,7 @@ def main(argv: list[str] | None = None) -> int:
     real_run.add_argument("--max-steps", type=int, default=5)
     real_run.add_argument("--user-agent", default="SpecGate/0.1 OpenAI-Compatible")
     real_run.add_argument("--timeout", type=float, default=60)
-    real_run.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default="strict")
+    real_run.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
     eval_parser = sub.add_parser("eval")
     eval_parser.add_argument("cases_root")
     eval_parser.add_argument(

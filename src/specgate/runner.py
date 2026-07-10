@@ -43,7 +43,7 @@ class AgentRunner:
         policy: WorkspacePolicy,
         max_steps: int = 5,
         context_strategy: str = "baseline",
-        governance_profile: str = "strict",
+        governance_profile: str | None = None,
         governance_config: GovernanceConfig | None = None,
     ):
         self.root = root
@@ -51,8 +51,8 @@ class AgentRunner:
         self.policy = policy
         self.max_steps = max_steps
         self.context_strategy = context_strategy
-        self.governance_profile = governance_profile
-        self.governance_config = governance_config or GovernanceConfig(profile=governance_profile)
+        self.governance_config = governance_config or GovernanceConfig(profile=governance_profile or "strict")
+        self.governance_profile = governance_profile if governance_profile is not None else self.governance_config.profile
         snapshot = FileSnapshot.capture(root, policy.allowed_write_paths)
         self.dispatcher = ToolDispatcher(policy, snapshot)
         self.trace = TraceStore(root / "runs" / "latest" / "trace.jsonl", reset=True)

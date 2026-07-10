@@ -13,6 +13,7 @@ from specgate.security import SECRET_PATTERNS
 
 
 VALID_GOVERNANCE_PROFILES = ("strict", "demo", "review")
+HARD_BLOCKED_PATHS = {".env", "**/.env"}
 
 
 @dataclass
@@ -97,10 +98,7 @@ class ApprovalQueue:
         if not all(isinstance(approval, dict) for approval in raw_approvals):
             raise ValueError("pending approval entries must be objects")
 
-        approvals = [
-            PendingApproval(**approval)
-            for approval in raw_approvals
-        ]
+        approvals = [_parse_pending_approval(approval) for approval in raw_approvals]
         return cls(approvals)
 
     def append(self, approval: PendingApproval) -> "ApprovalQueue":
@@ -109,6 +107,50 @@ class ApprovalQueue:
 
 def approval_queue_path(root: Path) -> Path:
     return root / "runs" / "latest" / "pending_approvals.json"
+
+
+def _parse_pending_approval(approval: dict[str, Any]) -> PendingApproval:
+    required = {
+        "id",
+        "step",
+        "action",
+        "path",
+        "risk_level",
+        "reason",
+        "profile",
+        "status",
+    }
+    if not required.issubset(approval):
+        raise ValueError("pending approval entry has invalid schema")
+
+    string_fields = ("id", "action", "risk_level", "reason", "profile", "status")
+    if not all(isinstance(approval[field], str) for field in string_fields):
+        raise ValueError("pending approval entry has invalid schema")
+
+    if not isinstance(approval["step"], int) or isinstance(approval["step"], bool):
+        raise ValueError("pending approval entry has invalid schema")
+
+    if approval["path"] is not None and not isinstance(approval["path"], str):
+        raise ValueError("pending approval entry has invalid schema")
+
+    if "arguments_preview" in approval and not isinstance(approval["arguments_preview"], dict):
+        raise ValueError("pending approval entry has invalid schema")
+
+    if "created_at" in approval and approval["created_at"] is not None and not isinstance(approval["created_at"], str):
+        raise ValueError("pending approval entry has invalid schema")
+
+    return PendingApproval(
+        id=approval["id"],
+        step=approval["step"],
+        action=approval["action"],
+        path=approval["path"],
+        risk_level=approval["risk_level"],
+        reason=approval["reason"],
+        profile=approval["profile"],
+        arguments_preview=approval.get("arguments_preview", {}),
+        status=approval["status"],
+        created_at=approval.get("created_at"),
+    )
 
 
 def preview_args(args: dict[str, Any]) -> dict[str, Any]:
@@ -125,7 +167,7 @@ def classify_action_risk(
         return ActionRisk("blocked", decision.reason)
 
     path = _action_path(action)
-    if path is not None and _matches_any(path, config.blocked_paths):
+    if path is not None and _matches_any(path, config.blocked_paths | HARD_BLOCKED_PATHS):
         return ActionRisk("blocked", f"blocked path: {path}")
 
     if action.action in config.review_actions:
