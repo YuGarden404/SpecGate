@@ -95,6 +95,24 @@ python -m specgate.cli run-mock-demo examples/knowledge_nav --governance-profile
 
 `review` profile 只用于记录审计证据和报告标签，不会绕过 allowlist、路径边界或 snapshot 保护。
 
+### HITL Review Gate
+
+`review` governance profile 对高风险 action 不会自动执行，而是把待人工确认的请求写入 `runs/latest/pending_approvals.json`。对应 trace 会记录 `approval_requested` 事件，静态 report 也会显示 pending approval 状态，便于审计这次运行停在了人工审批门。
+
+第一版 HITL Review Gate 只支持创建和列出 pending approvals；暂不支持 approve、deny 或 resume。
+
+```powershell
+$env:PYTHONPATH="src"
+python -m specgate.cli run-mock-demo examples/knowledge_nav --governance-profile review
+python -m specgate.cli approvals list examples/knowledge_nav
+```
+
+批量 eval 可用：
+
+```powershell
+python -m specgate.cli eval examples/eval_cases --context-strategy injection-safe --save-workspaces
+```
+
 运行后打开：
 
 ```text
