@@ -69,6 +69,28 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["credentials", "clear", "openai", "--env-file", str(env_file)]), 0)
             self.assertFalse(env_file.exists() and "OPENAI_API_KEY" in env_file.read_text(encoding="utf-8"))
 
+    def test_eval_cli_runs_mock_suite_and_writes_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = root / "basic"
+            case.mkdir()
+            (case / "case.json").write_text(
+                '{"id":"basic","title":"Basic","category":"generation","expected":{"should_pass":false,"must_block":false}}',
+                encoding="utf-8",
+            )
+            (case / "TASK_SPEC.md").write_text("任务", encoding="utf-8")
+            (case / "CHECKLIST.md").write_text("- 必须包含 Missing\n", encoding="utf-8")
+            (case / "index.html").write_text("<html></html>", encoding="utf-8")
+            (case / "specgate.toml").write_text(
+                '[policy]\nallowed_actions=["finish"]\nallowed_read_paths=["TASK_SPEC.md","CHECKLIST.md","index.html"]\nallowed_write_paths=["index.html"]\n',
+                encoding="utf-8",
+            )
+
+            code = main(["eval", str(root), "--context-strategy", "compressed"])
+
+            self.assertEqual(code, 0)
+            self.assertTrue((root / "eval-runs" / "latest" / "results.json").exists())
+
     def test_real_run_fails_closed_without_credential(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

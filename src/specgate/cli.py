@@ -6,6 +6,7 @@ from pathlib import Path
 
 from specgate.config import load_policy
 from specgate.credentials import clear_credential, credential_status_from_env, read_credential, set_credential
+from specgate.eval_runner import run_eval_suite
 from specgate.gate import run_html_gate
 from specgate.llm import LLMProviderError, MockLLM, OpenAICompatibleLLM
 from specgate.policy import WorkspacePolicy
@@ -467,6 +468,13 @@ def main(argv: list[str] | None = None) -> int:
     real_run.add_argument("--max-steps", type=int, default=5)
     real_run.add_argument("--user-agent", default="SpecGate/0.1 OpenAI-Compatible")
     real_run.add_argument("--timeout", type=float, default=60)
+    eval_parser = sub.add_parser("eval")
+    eval_parser.add_argument("cases_root")
+    eval_parser.add_argument(
+        "--context-strategy",
+        choices=("baseline", "compressed", "injection-safe"),
+        default="baseline",
+    )
     credentials = sub.add_parser("credentials")
     credentials_sub = credentials.add_subparsers(dest="credentials_command", required=True)
     for command in ("status", "clear"):
@@ -491,6 +499,16 @@ def main(argv: list[str] | None = None) -> int:
             user_agent=args.user_agent,
             timeout=args.timeout,
         )
+    if args.command == "eval":
+        suite = run_eval_suite(Path(args.cases_root), strategy=args.context_strategy)
+        print(
+            "SpecGate eval finished: "
+            f"strategy={suite.strategy}, "
+            f"cases={suite.total_cases}, "
+            f"passed={suite.passed_cases}, "
+            f"expected_matches={suite.expected_matches}"
+        )
+        return 0 if suite.expected_matches == suite.total_cases else 1
     if args.command == "credentials":
         env_file = Path(args.env_file)
         if args.credentials_command == "status":
