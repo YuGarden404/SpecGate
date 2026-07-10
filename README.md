@@ -82,6 +82,19 @@ $env:PYTHONPATH="src"
 python -m specgate.cli run-mock-demo examples/knowledge_nav
 ```
 
+## 治理指标
+
+SpecGate 会在 `runs/latest/trace.jsonl` 和 `reports/latest/index.html` 中记录治理证据，包括 `llm_calls`、`tool_calls`、`blocked_actions`、`parse_errors`、`gate_runs`、是否触达 `max_steps_reached`，以及每一次 permission decision 的 action、path、allowed/blocked、reason、profile 和 rule family。报告还会汇总 trust summary，状态为 `trusted`、`warning` 或 `failed`。
+
+可以显式选择治理配置：
+
+```powershell
+$env:PYTHONPATH="src"
+python -m specgate.cli run-mock-demo examples/knowledge_nav --governance-profile strict
+```
+
+`review` profile 只用于记录审计证据和报告标签，不会绕过 allowlist、路径边界或 snapshot 保护。
+
 运行后打开：
 
 ```text

@@ -146,6 +146,7 @@ def run_eval_suite(
     llm_factory: Callable[[EvalCase], LLMClient] | None = None,
     max_steps: int | None = None,
     save_workspaces: bool = False,
+    governance_profile: str = "strict",
 ) -> EvalSuiteResult:
     cases = discover_eval_cases(root)
     results: list[EvalCaseResult] = []
@@ -187,6 +188,7 @@ def run_eval_suite(
                     policy,
                     max_steps=case_max_steps,
                     context_strategy=strategy,
+                    governance_profile=governance_profile,
                 ).run()
                 (
                     parse_errors,
