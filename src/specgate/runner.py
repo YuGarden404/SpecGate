@@ -81,7 +81,12 @@ class AgentRunner:
 
         def run_gate(step: int) -> GateResult:
             nonlocal metrics
-            gate = run_html_gate(self.root / "index.html", self.root / "CHECKLIST.md")
+            checklist_path = (
+                self.root / "CHECKLIST.md"
+                if "CHECKLIST.md" in self.policy.allowed_read_paths
+                else None
+            )
+            gate = run_html_gate(self.root / "index.html", checklist_path)
             metrics = replace(
                 metrics,
                 gate_runs=metrics.gate_runs + 1,

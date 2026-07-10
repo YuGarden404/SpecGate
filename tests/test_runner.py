@@ -186,6 +186,40 @@ class RunnerTests(unittest.TestCase):
             retrieval = json.loads((root / "runs" / "latest" / "retrieval.json").read_text(encoding="utf-8"))
             self.assertNotIn("SECRET", json.dumps(retrieval, ensure_ascii=False))
 
+    def test_gate_feedback_does_not_leak_policy_disallowed_checklist(self):
+        class TwoStepLLM:
+            def __init__(self):
+                self.contexts: list[str] = []
+
+            def complete(self, context: str) -> str:
+                self.contexts.append(context)
+                if len(self.contexts) == 1:
+                    return (
+                        '{"schema_version":"1","action":"write_file",'
+                        '"args":{"path":"index.html","content":"<!doctype html><html><head><title>x</title></head><body>draft</body></html>"}}'
+                    )
+                return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build a safe page.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("- 蹇呴』鍖呭惈 COMPRESSEDRAGSECRET\n", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("- 必须包含 COMPRESSEDRAGSECRET\n", encoding="utf-8")
+            llm = TwoStepLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"write_file", "finish"},
+                {"TASK_SPEC.md", "index.html"},
+                {"index.html"},
+            )
+
+            AgentRunner(root, llm, policy, max_steps=2, context_strategy="compressed-rag").run()
+
+            self.assertEqual(len(llm.contexts), 2)
+            self.assertNotIn("COMPRESSEDRAGSECRET", llm.contexts[1])
+            retrieval = json.loads((root / "runs" / "latest" / "retrieval.json").read_text(encoding="utf-8"))
+            self.assertNotIn("compressedragsecret", json.dumps(retrieval, ensure_ascii=False).lower())
+
     def test_compressed_rag_run_records_compression_evidence_and_metrics(self):
         class LargeFeedbackLLM:
             def __init__(self):
