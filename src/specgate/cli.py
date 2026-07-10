@@ -5,6 +5,7 @@ import getpass
 from pathlib import Path
 
 from specgate.config import load_policy
+from specgate.context import VALID_CONTEXT_STRATEGIES
 from specgate.credentials import clear_credential, credential_status_from_env, read_credential, set_credential
 from specgate.eval_runner import run_eval_suite
 from specgate.gate import run_html_gate
@@ -472,7 +473,7 @@ def main(argv: list[str] | None = None) -> int:
     eval_parser.add_argument("cases_root")
     eval_parser.add_argument(
         "--context-strategy",
-        choices=("baseline", "compressed", "injection-safe"),
+        choices=sorted(VALID_CONTEXT_STRATEGIES),
         default="baseline",
     )
     credentials = sub.add_parser("credentials")
@@ -501,6 +502,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "eval":
         suite = run_eval_suite(Path(args.cases_root), strategy=args.context_strategy)
+        if suite.total_cases == 0:
+            print(f"SpecGate eval found no cases: {args.cases_root}")
+            return 1
         print(
             "SpecGate eval finished: "
             f"strategy={suite.strategy}, "
@@ -508,7 +512,7 @@ def main(argv: list[str] | None = None) -> int:
             f"passed={suite.passed_cases}, "
             f"expected_matches={suite.expected_matches}"
         )
-        return 0 if suite.expected_matches == suite.total_cases else 1
+        return 0 if suite.expected_matches == suite.total_cases and suite.total_cases > 0 else 1
     if args.command == "credentials":
         env_file = Path(args.env_file)
         if args.credentials_command == "status":
