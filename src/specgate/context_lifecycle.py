@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 
+from specgate.trace import redact
+
 
 @dataclass(frozen=True)
 class CompressionConfig:
@@ -36,6 +38,8 @@ class CompressionSummary:
 
 def compress_runtime_feedback(events: list[dict], config: CompressionConfig | None = None) -> CompressionSummary:
     cfg = config or CompressionConfig()
+    redacted_events = redact(events)
+    events = redacted_events if isinstance(redacted_events, list) else []
     original = json.dumps(events, ensure_ascii=False, sort_keys=True)
     rendered: list[str] = []
     cleared = 0

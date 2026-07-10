@@ -21,7 +21,7 @@ from specgate.metrics import PermissionDecision, RunMetrics, TrustSummary, build
 from specgate.policy import WorkspacePolicy
 from specgate.snapshot import FileSnapshot
 from specgate.tools import ToolDispatcher
-from specgate.trace import TraceStore
+from specgate.trace import TraceStore, redact
 
 
 @dataclass(frozen=True)
@@ -81,6 +81,30 @@ class AgentRunner:
 
         def run_gate(step: int) -> GateResult:
             nonlocal metrics
+            if "index.html" not in self.policy.allowed_read_paths:
+                gate = GateResult(
+                    False,
+                    [],
+                    [],
+                    "Gate skipped: artifact inspection is not allowed by WorkspacePolicy",
+                )
+                metrics = replace(
+                    metrics,
+                    gate_runs=metrics.gate_runs + 1,
+                    gate_failures=metrics.gate_failures + 1,
+                )
+                event = {
+                    "step": step,
+                    "type": "gate_result",
+                    "passed": gate.passed,
+                    "summary": gate.summary,
+                }
+                runtime_feedback.append(redact(event))
+                self.trace.append(
+                    "gate_result",
+                    {"step": step, "passed": gate.passed, "summary": gate.summary},
+                )
+                return gate
             checklist_path = (
                 self.root / "CHECKLIST.md"
                 if "CHECKLIST.md" in self.policy.allowed_read_paths
@@ -93,12 +117,14 @@ class AgentRunner:
                 gate_failures=metrics.gate_failures + (0 if gate.passed else 1),
             )
             runtime_feedback.append(
-                {
-                    "step": step,
-                    "type": "gate_result",
-                    "passed": gate.passed,
-                    "summary": gate.summary,
-                }
+                redact(
+                    {
+                        "step": step,
+                        "type": "gate_result",
+                        "passed": gate.passed,
+                        "summary": gate.summary,
+                    }
+                )
             )
             self.trace.append(
                 "gate_result",
@@ -138,15 +164,17 @@ class AgentRunner:
             data: dict,
         ) -> None:
             runtime_feedback.append(
-                {
-                    "step": step,
-                    "type": "tool_result",
-                    "action": action_name,
-                    "ok": ok,
-                    "blocked": blocked,
-                    "message": message,
-                    "data": data,
-                }
+                redact(
+                    {
+                        "step": step,
+                        "type": "tool_result",
+                        "action": action_name,
+                        "ok": ok,
+                        "blocked": blocked,
+                        "message": message,
+                        "data": data,
+                    }
+                )
             )
             self.trace.append(
                 "tool_result",
@@ -301,7 +329,7 @@ class AgentRunner:
             except ActionParseError as exc:
                 metrics = replace(metrics, parse_errors=metrics.parse_errors + 1)
                 event = {"step": step, "type": "parse_error", "error": str(exc)}
-                runtime_feedback.append(event)
+                runtime_feedback.append(redact(event))
                 self.trace.append("parse_error", event)
                 continue
 
@@ -339,7 +367,7 @@ class AgentRunner:
                     "type": "approval_requested",
                     "approval": approval.to_dict(),
                 }
-                runtime_feedback.append(event)
+                runtime_feedback.append(redact(event))
                 self.trace.append("approval_requested", event)
                 continue
 
@@ -382,15 +410,17 @@ class AgentRunner:
                 message=tool_result.message,
             )
             runtime_feedback.append(
-                {
-                    "step": step,
-                    "type": "tool_result",
-                    "action": tool_result.action,
-                    "ok": tool_result.ok,
-                    "blocked": tool_result.blocked,
-                    "message": tool_result.message,
-                    "data": tool_result.data,
-                }
+                redact(
+                    {
+                        "step": step,
+                        "type": "tool_result",
+                        "action": tool_result.action,
+                        "ok": tool_result.ok,
+                        "blocked": tool_result.blocked,
+                        "message": tool_result.message,
+                        "data": tool_result.data,
+                    }
+                )
             )
             self.trace.append("tool_result", {"step": step, "result": tool_result.__dict__})
 

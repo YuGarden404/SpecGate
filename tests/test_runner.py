@@ -256,6 +256,98 @@ class RunnerTests(unittest.TestCase):
             trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
             self.assertNotIn("secret_notes.md", trace_text)
 
+    def test_artifact_summary_does_not_read_policy_disallowed_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Finish without reading artifact.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            artifact = "x" * 1379 + '<section class="node">hidden</section>'
+            (root / "index.html").write_text(artifact, encoding="utf-8")
+            llm = RecordingLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md"},
+                {"index.html"},
+            )
+
+            AgentRunner(root, llm, policy, max_steps=1, context_strategy="rag-select").run()
+
+            self.assertEqual(len(llm.contexts), 1)
+            self.assertNotIn(str(len(artifact)), llm.contexts[0])
+            self.assertNotIn("hidden", llm.contexts[0])
+
+    def test_gate_feedback_does_not_read_policy_disallowed_index(self):
+        class WriteThenFinishLLM:
+            def __init__(self):
+                self.contexts: list[str] = []
+
+            def complete(self, context: str) -> str:
+                self.contexts.append(context)
+                if len(self.contexts) == 1:
+                    return (
+                        '{"schema_version":"1","action":"write_file",'
+                        '"args":{"path":"index.html","content":"<html><head><title>x</title></head><body>draft</body></html>"}}'
+                    )
+                return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Write an artifact.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            llm = WriteThenFinishLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"write_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md"},
+                {"index.html"},
+            )
+
+            AgentRunner(root, llm, policy, max_steps=2, context_strategy="compressed-rag").run()
+
+            self.assertEqual(len(llm.contexts), 2)
+            self.assertNotIn("viewport meta", llm.contexts[1])
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertNotIn("viewport meta", trace_text)
+
+    def test_tool_feedback_secret_is_redacted_before_reaching_next_context_and_compression(self):
+        class ReadThenFinishLLM:
+            def __init__(self):
+                self.contexts: list[str] = []
+
+            def complete(self, context: str) -> str:
+                self.contexts.append(context)
+                if len(self.contexts) == 1:
+                    return '{"schema_version":"1","action":"read_file","args":{"path":"notes.md"}}'
+                return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            secret = "sk-testsecret1234567890"
+            (root / "TASK_SPEC.md").write_text("Read notes.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "notes.md").write_text(f"token {secret}", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">safe content</body></html>',
+                encoding="utf-8",
+            )
+            llm = ReadThenFinishLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"read_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html", "notes.md"},
+                {"index.html"},
+            )
+
+            AgentRunner(root, llm, policy, max_steps=2, context_strategy="compressed-rag").run()
+
+            self.assertEqual(len(llm.contexts), 2)
+            self.assertNotIn(secret, llm.contexts[1])
+            self.assertIn("[REDACTED]", llm.contexts[1])
+            compression_text = (root / "runs" / "latest" / "compression.json").read_text(encoding="utf-8")
+            self.assertNotIn(secret, compression_text)
+
     def test_compressed_rag_run_records_compression_evidence_and_metrics(self):
         class LargeFeedbackLLM:
             def __init__(self):
@@ -651,7 +743,7 @@ class RunnerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             llm = ApprovalFeedbackLLM()
-            policy = WorkspacePolicy(root, {"replace_file", "finish"}, {"TASK_SPEC.md"}, {"README.md"})
+            policy = WorkspacePolicy(root, {"replace_file", "finish"}, {"TASK_SPEC.md", "index.html"}, {"README.md"})
             from specgate.approvals import GovernanceConfig, approval_queue_path
 
             result = AgentRunner(
