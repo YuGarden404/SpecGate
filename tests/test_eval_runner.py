@@ -316,6 +316,62 @@ class EvalRunnerExecutionTests(unittest.TestCase):
             self.assertTrue((saved_workspace / "runs" / "latest" / "trace.jsonl").exists())
             self.assertEqual(suite.results[0].workspace_path, "eval-runs/latest/workspaces/saved-case")
 
+    def test_run_eval_suite_records_review_approval_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = root / "review-case"
+            case.mkdir()
+            (case / "case.json").write_text(
+                json.dumps(
+                    {
+                        "id": "review-case",
+                        "title": "Review case",
+                        "category": "governance",
+                        "expected": {"should_pass": False, "must_block": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (case / "TASK_SPEC.md").write_text("Update the readme.", encoding="utf-8")
+            (case / "CHECKLIST.md").write_text("- Must request review\n", encoding="utf-8")
+            (case / "README.md").write_text("draft", encoding="utf-8")
+            (case / "specgate.toml").write_text(
+                (
+                    "[policy]\n"
+                    'allowed_actions=["replace_file","finish"]\n'
+                    'allowed_read_paths=["TASK_SPEC.md","CHECKLIST.md","README.md"]\n'
+                    'allowed_write_paths=["README.md"]\n'
+                    "[governance]\n"
+                    'profile="review"\n'
+                    'review_actions=["replace_file"]\n'
+                    'review_paths=["README.md"]\n'
+                ),
+                encoding="utf-8",
+            )
+            responses = {
+                "review-case": [
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {"path": "README.md", "content": "updated"},
+                    },
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "done"}},
+                ]
+            }
+
+            suite = run_eval_suite(
+                root,
+                governance_profile="review",
+                scripted_responses=responses,
+                save_workspaces=True,
+            )
+
+            self.assertEqual(suite.results[0].approval_requests, 1)
+            self.assertEqual(suite.results[0].pending_approvals, 1)
+            results_path = root / "eval-runs" / "latest" / "results.json"
+            data = json.loads(results_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["results"][0]["pending_approvals"], 1)
+
     def test_failed_eval_does_not_delete_previous_saved_workspaces(self):
         class FailingLLM:
             def complete(self, context: str) -> str:

@@ -4,6 +4,7 @@ import json
 from html import escape
 from pathlib import Path
 
+from specgate.approvals import ApprovalQueue, approval_queue_path
 from specgate.gate import GateResult
 from specgate.memory import load_memory_summary
 from specgate.metrics import PermissionDecision, RunMetrics, TrustSummary
@@ -69,6 +70,30 @@ def _render_permission_decisions(permission_decisions: list[PermissionDecision] 
     )
 
 
+def _render_pending_approvals(root: Path) -> str:
+    queue = ApprovalQueue.read(approval_queue_path(root))
+    if not queue.approvals:
+        return "<h2>Pending Approvals</h2><p>No pending approvals.</p>"
+
+    rows = "\n".join(
+        "<tr>"
+        f"<td>{escape(approval.id)}</td>"
+        f"<td>{escape(approval.status)}</td>"
+        f"<td>{escape(approval.action)}</td>"
+        f"<td>{escape(approval.path or '')}</td>"
+        f"<td>{escape(approval.reason)}</td>"
+        "</tr>"
+        for approval in queue.approvals
+    )
+    return (
+        "<h2>Pending Approvals</h2>"
+        "<table>"
+        "<thead><tr><th>ID</th><th>Status</th><th>Action</th><th>Path</th><th>Reason</th></tr></thead>"
+        f"<tbody>{rows}</tbody>"
+        "</table>"
+    )
+
+
 def _render_run_events(root: Path) -> str:
     trace_path = root / "runs" / "latest" / "trace.jsonl"
     if not trace_path.exists():
@@ -115,6 +140,7 @@ def generate_report(
     trust_summary = _render_trust_summary(trust, profile)
     metrics_summary = _render_metrics(metrics)
     decisions_summary = _render_permission_decisions(permission_decisions)
+    pending_approvals = _render_pending_approvals(root)
     events = _render_run_events(root)
     memory = escape(load_memory_summary(root))
     html = f"""<!doctype html>
@@ -132,6 +158,7 @@ def generate_report(
   {trust_summary}
   {metrics_summary}
   {decisions_summary}
+  {pending_approvals}
   <h2>Checks</h2>
   <ul>{checks}</ul>
   <h2>Issues</h2>

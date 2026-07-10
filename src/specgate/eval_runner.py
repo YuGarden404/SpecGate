@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
-from specgate.config import load_policy
+from specgate.config import load_workspace_config
 from specgate.llm import LLMClient, MockLLM
 from specgate.runner import AgentRunner
 
@@ -43,6 +43,8 @@ class EvalCaseResult:
     successful_tool_calls: int = 0
     gate_runs: int = 0
     trust_status: str = "failed"
+    approval_requests: int = 0
+    pending_approvals: int = 0
 
 
 @dataclass(frozen=True)
@@ -181,14 +183,15 @@ def run_eval_suite(
                         ]
                     llm = MockLLM(responses)
                     case_max_steps = max_steps or max(1, len(responses))
-                policy = load_policy(workspace / "specgate.toml")
+                workspace_config = load_workspace_config(workspace / "specgate.toml")
                 run_result = AgentRunner(
                     workspace,
                     llm,
-                    policy,
+                    workspace_config.policy,
                     max_steps=case_max_steps,
                     context_strategy=strategy,
                     governance_profile=governance_profile,
+                    governance_config=workspace_config.governance,
                 ).run()
                 (
                     parse_errors,
@@ -202,6 +205,8 @@ def run_eval_suite(
                 )
                 metrics = run_result.metrics
                 trust = run_result.trust
+                approval_requests = 0
+                pending_approvals = 0
                 if metrics is not None:
                     parse_errors = metrics.parse_errors
                     blocked_actions = metrics.blocked_actions
@@ -209,6 +214,8 @@ def run_eval_suite(
                     tool_calls = metrics.tool_calls
                     successful_tool_calls = metrics.successful_tool_calls
                     gate_runs = metrics.gate_runs
+                    approval_requests = metrics.approval_requests
+                    pending_approvals = metrics.pending_approvals
                 elif run_result.final_gate and not run_result.final_gate.passed and gate_failures == 0:
                     gate_failures = 1
                     gate_runs = max(gate_runs, 1)
@@ -251,6 +258,8 @@ def run_eval_suite(
                         successful_tool_calls=successful_tool_calls,
                         gate_runs=gate_runs,
                         trust_status=trust_status,
+                        approval_requests=approval_requests,
+                        pending_approvals=pending_approvals,
                     )
                 )
     except Exception:

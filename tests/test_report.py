@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from specgate.approvals import ApprovalQueue, PendingApproval, approval_queue_path
 from specgate.gate import GateCheck, GateResult
 from specgate.metrics import PermissionDecision, RunMetrics, TrustSummary
 from specgate.report import generate_report
@@ -92,6 +93,34 @@ class ReportTests(unittest.TestCase):
             self.assertIn("&lt;script&gt;evil_path()&lt;/script&gt;", html)
             self.assertNotIn("<script>", html)
             self.assertNotIn("<img src=x onerror=alert(1)>", html)
+
+    def test_generate_report_includes_pending_approvals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-123",
+                        step=1,
+                        action="replace_file",
+                        path="README.md",
+                        risk_level="review",
+                        reason="needs review <script>alert(1)</script>",
+                        profile="review",
+                    )
+                ]
+            ).write(approval_queue_path(root))
+
+            output = generate_report(root, gate, 1, profile="review")
+
+            html = output.read_text(encoding="utf-8")
+            self.assertIn("Pending Approvals", html)
+            self.assertIn("approval-123", html)
+            self.assertIn("replace_file", html)
+            self.assertIn("README.md", html)
+            self.assertIn("needs review &lt;script&gt;alert(1)&lt;/script&gt;", html)
+            self.assertNotIn("<script>", html)
 
 
 if __name__ == "__main__":
