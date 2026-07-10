@@ -40,6 +40,8 @@ class MetricsTests(unittest.TestCase):
                 "gate_runs": 0,
                 "gate_failures": 0,
                 "finish_actions": 0,
+                "approval_requests": 0,
+                "pending_approvals": 0,
                 "max_steps_reached": False,
             },
         )
@@ -56,6 +58,8 @@ class MetricsTests(unittest.TestCase):
             gate_runs=2,
             gate_failures=1,
             finish_actions=1,
+            approval_requests=2,
+            pending_approvals=1,
             max_steps_reached=True,
         )
 
@@ -72,6 +76,8 @@ class MetricsTests(unittest.TestCase):
                 "gate_runs": 2,
                 "gate_failures": 1,
                 "finish_actions": 1,
+                "approval_requests": 2,
+                "pending_approvals": 1,
                 "max_steps_reached": True,
             },
         )
@@ -173,6 +179,14 @@ class MetricsTests(unittest.TestCase):
 
         self.assertEqual(trust.status, "warning")
         self.assertIn("parse_errors_present", trust.reasons)
+
+    def test_warning_summary_when_gate_passes_with_pending_approval(self):
+        metrics = RunMetrics(steps=2, finish_actions=1, approval_requests=1, pending_approvals=1)
+
+        trust = build_trust_summary(True, metrics)
+
+        self.assertEqual(trust.status, "warning")
+        self.assertIn("pending_approvals_present", trust.reasons)
 
     def test_failed_summary_when_finish_is_missing(self):
         trust = build_trust_summary(True, RunMetrics(steps=2, finish_actions=0))

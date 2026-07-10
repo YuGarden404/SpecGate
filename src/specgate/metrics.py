@@ -15,6 +15,8 @@ class RunMetrics:
     gate_runs: int = 0
     gate_failures: int = 0
     finish_actions: int = 0
+    approval_requests: int = 0
+    pending_approvals: int = 0
     max_steps_reached: bool = False
 
     def to_dict(self) -> dict[str, int | bool]:
@@ -80,6 +82,8 @@ def build_trust_summary(final_gate_passed: bool, metrics: RunMetrics) -> TrustSu
         reasons.append("blocked_actions_present")
     if metrics.parse_errors:
         reasons.append("parse_errors_present")
+    if metrics.pending_approvals:
+        reasons.append("pending_approvals_present")
     if reasons:
         return TrustSummary("warning", reasons)
 
