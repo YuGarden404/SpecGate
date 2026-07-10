@@ -71,7 +71,14 @@ def _render_permission_decisions(permission_decisions: list[PermissionDecision] 
 
 
 def _render_pending_approvals(root: Path) -> str:
-    queue = ApprovalQueue.read(approval_queue_path(root))
+    try:
+        queue = ApprovalQueue.read(approval_queue_path(root))
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        return (
+            "<h2>Pending Approvals</h2>"
+            f"<p>could not read pending approvals: {escape(str(exc))}</p>"
+        )
+
     if not queue.approvals:
         return "<h2>Pending Approvals</h2><p>No pending approvals.</p>"
 

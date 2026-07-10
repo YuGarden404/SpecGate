@@ -486,7 +486,7 @@ def run_real_eval(
     user_agent: str,
     timeout: float,
     save_workspaces: bool = False,
-    governance_profile: str = "strict",
+    governance_profile: str | None = None,
 ) -> int:
     if not model:
         print("--model is required when --provider is used")
@@ -571,7 +571,7 @@ def main(argv: list[str] | None = None) -> int:
     eval_parser.add_argument("--user-agent", default="SpecGate/0.1 OpenAI-Compatible")
     eval_parser.add_argument("--timeout", type=float, default=60)
     eval_parser.add_argument("--save-workspaces", action="store_true")
-    eval_parser.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default="strict")
+    eval_parser.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
     credentials = sub.add_parser("credentials")
     credentials_sub = credentials.add_subparsers(dest="credentials_command", required=True)
     for command in ("status", "clear"):

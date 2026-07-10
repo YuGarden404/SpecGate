@@ -154,6 +154,60 @@ class CliTests(unittest.TestCase):
             self.assertEqual(results["total_cases"], 1)
             self.assertEqual(results["expected_matches"], 1)
 
+    def test_eval_cli_uses_case_governance_profile_when_not_overridden(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = root / "review-case"
+            case.mkdir()
+            (case / "case.json").write_text(
+                json.dumps(
+                    {
+                        "id": "review-case",
+                        "title": "Review case",
+                        "category": "governance",
+                        "expected": {"should_pass": False, "must_block": False},
+                        "mock_responses": [
+                            {
+                                "schema_version": "1",
+                                "action": "replace_file",
+                                "args": {"path": "README.md", "content": "updated"},
+                            },
+                            {
+                                "schema_version": "1",
+                                "action": "finish",
+                                "args": {"summary": "done"},
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (case / "TASK_SPEC.md").write_text("Update README.md.", encoding="utf-8")
+            (case / "README.md").write_text("draft", encoding="utf-8")
+            (case / "specgate.toml").write_text(
+                (
+                    "[policy]\n"
+                    'allowed_actions=["replace_file","finish"]\n'
+                    'allowed_read_paths=["TASK_SPEC.md"]\n'
+                    'allowed_write_paths=["README.md"]\n'
+                    "[governance]\n"
+                    'profile="review"\n'
+                    'review_actions=["replace_file"]\n'
+                    'review_paths=["README.md"]\n'
+                ),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                code = main(["eval", str(root)])
+
+            self.assertEqual(code, 0)
+            results_path = root / "eval-runs" / "latest" / "results.json"
+            self.assertTrue(results_path.exists())
+            results = json.loads(results_path.read_text(encoding="utf-8"))
+            self.assertEqual(results["expected_matches"], 1)
+            self.assertEqual(results["results"][0]["pending_approvals"], 1)
+
     def test_eval_cli_save_workspaces_writes_case_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
