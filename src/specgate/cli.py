@@ -407,27 +407,40 @@ def _load_workspace_settings(root: Path) -> WorkspaceConfig:
 def list_approvals(root: Path) -> int:
     try:
         queue = ApprovalQueue.read(approval_queue_path(root))
-    except (json.JSONDecodeError, TypeError, ValueError):
+
+        if not queue.approvals:
+            print("no pending approvals")
+            return 0
+
+        rows = []
+        for approval in queue.approvals:
+            approval_id = approval.id
+            status = approval.status
+            action = approval.action
+            path = approval.path
+            reason = approval.reason
+            if not all(isinstance(value, str) for value in (approval_id, status, action, reason)):
+                raise ValueError("approval display fields must be strings")
+            if path is not None and not isinstance(path, str):
+                raise ValueError("approval path must be a string or null")
+            rows.append(
+                "\t".join(
+                    [
+                        approval_id,
+                        status,
+                        action,
+                        path or "",
+                        reason,
+                    ]
+                )
+            )
+
+        print("id\tstatus\taction\tpath\treason")
+        for row in rows:
+            print(row)
+    except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
         print("could not read pending approvals: malformed queue")
         return 1
-
-    if not queue.approvals:
-        print("no pending approvals")
-        return 0
-
-    print("id\tstatus\taction\tpath\treason")
-    for approval in queue.approvals:
-        print(
-            "\t".join(
-                [
-                    approval.id,
-                    approval.status,
-                    approval.action,
-                    approval.path or "",
-                    approval.reason,
-                ]
-            )
-        )
     return 0
 
 

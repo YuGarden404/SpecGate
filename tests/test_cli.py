@@ -204,6 +204,42 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("sk-test-secret", text)
             self.assertNotIn("Traceback", text)
 
+    def test_approvals_list_malformed_field_type_reports_clean_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queue_path = approval_queue_path(root)
+            queue_path.parent.mkdir(parents=True)
+            queue_path.write_text(
+                json.dumps(
+                    {
+                        "approvals": [
+                            {
+                                "id": {"secret": "sk-test-secret-1234567890"},
+                                "step": 1,
+                                "action": "replace_file",
+                                "path": "README.md",
+                                "risk_level": "review",
+                                "reason": "requires human review",
+                                "profile": "review",
+                                "status": "pending",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = main(["approvals", "list", tmp])
+
+            text = stdout.getvalue() + stderr.getvalue()
+            self.assertNotEqual(code, 0)
+            self.assertIn("could not read pending approvals", text)
+            self.assertNotIn("sk-test-secret", text)
+            self.assertNotIn("Traceback", text)
+
     def test_credentials_cli_status_set_and_clear(self):
         with tempfile.TemporaryDirectory() as tmp:
             env_file = Path(tmp) / ".env"
