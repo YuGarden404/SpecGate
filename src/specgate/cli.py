@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from specgate.approvals import ApprovalQueue, GovernanceConfig, approval_queue_path
+from specgate.benchmark import summarize_benchmark
 from specgate.config import WorkspaceConfig, load_workspace_config
 from specgate.context import VALID_CONTEXT_STRATEGIES
 from specgate.credentials import clear_credential, credential_status_from_env, read_credential, set_credential
@@ -600,6 +601,33 @@ def run_real_eval(
     return 0 if suite.expected_matches == suite.total_cases and suite.total_cases > 0 else 1
 
 
+def run_benchmark(root: Path, strategies: list[str], governance_profile: str | None = None) -> int:
+    suites = []
+    output_dir = root / "eval-runs" / "latest"
+    for strategy in strategies:
+        suite = run_eval_suite(root, strategy=strategy, governance_profile=governance_profile)
+        suites.append(suite)
+        results_path = output_dir / "results.json"
+        if results_path.exists():
+            strategy_results_path = output_dir / f"results-{strategy}.json"
+            strategy_results_path.write_text(results_path.read_text(encoding="utf-8"), encoding="utf-8")
+    if not suites or any(suite.total_cases == 0 for suite in suites):
+        print(f"SpecGate benchmark found no cases: {root}")
+        return 1
+    benchmark = summarize_benchmark(suites)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "benchmark.json").write_text(
+        json.dumps(benchmark.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(
+        "SpecGate benchmark finished: "
+        f"strategies={len(strategies)}, "
+        f"cases={suites[0].total_cases}"
+    )
+    return 0 if all(suite.expected_matches == suite.total_cases for suite in suites) else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="specgate")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -632,6 +660,15 @@ def main(argv: list[str] | None = None) -> int:
     eval_parser.add_argument("--timeout", type=float, default=60)
     eval_parser.add_argument("--save-workspaces", action="store_true")
     eval_parser.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
+    benchmark = sub.add_parser("benchmark")
+    benchmark.add_argument("cases_root")
+    benchmark.add_argument(
+        "--strategies",
+        nargs="+",
+        choices=sorted(VALID_CONTEXT_STRATEGIES),
+        default=["baseline", "rag-select", "compressed-rag", "isolated-harness"],
+    )
+    benchmark.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
     credentials = sub.add_parser("credentials")
     credentials_sub = credentials.add_subparsers(dest="credentials_command", required=True)
     for command in ("status", "clear"):
@@ -693,6 +730,12 @@ def main(argv: list[str] | None = None) -> int:
             f"expected_matches={suite.expected_matches}"
         )
         return 0 if suite.expected_matches == suite.total_cases and suite.total_cases > 0 else 1
+    if args.command == "benchmark":
+        return run_benchmark(
+            Path(args.cases_root),
+            strategies=args.strategies,
+            governance_profile=args.governance_profile,
+        )
     if args.command == "credentials":
         env_file = Path(args.env_file)
         if args.credentials_command == "status":

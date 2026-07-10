@@ -373,6 +373,90 @@ class CliTests(unittest.TestCase):
             self.assertEqual(results["total_cases"], 1)
             self.assertEqual(results["expected_matches"], 1)
 
+    def test_benchmark_cli_runs_multiple_mock_strategies_and_writes_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = root / "basic"
+            case.mkdir()
+            (case / "case.json").write_text(
+                json.dumps(
+                    {
+                        "id": "basic",
+                        "title": "Basic",
+                        "category": "generation",
+                        "expected": {"should_pass": True, "must_block": False},
+                        "mock_responses": [
+                            {"schema_version": "1", "action": "finish", "args": {"summary": "done"}}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (case / "TASK_SPEC.md").write_text("Create a search details page.", encoding="utf-8")
+            (case / "CHECKLIST.md").write_text("- Must include Search\n- Must include Detail\n", encoding="utf-8")
+            (case / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Search Detail</body></html>',
+                encoding="utf-8",
+            )
+            (case / "specgate.toml").write_text(
+                '[policy]\nallowed_actions=["finish"]\n'
+                'allowed_read_paths=["TASK_SPEC.md","CHECKLIST.md","index.html"]\n'
+                'allowed_write_paths=["index.html"]\n',
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["benchmark", str(root), "--strategies", "baseline", "rag-select"])
+
+            self.assertEqual(code, 0)
+            self.assertIn("SpecGate benchmark finished", output.getvalue())
+            benchmark_path = root / "eval-runs" / "latest" / "benchmark.json"
+            self.assertTrue(benchmark_path.exists())
+            self.assertTrue((root / "eval-runs" / "latest" / "results-baseline.json").exists())
+            self.assertTrue((root / "eval-runs" / "latest" / "results-rag-select.json").exists())
+            data = json.loads(benchmark_path.read_text(encoding="utf-8"))
+            self.assertEqual([item["strategy"] for item in data["results"]], ["baseline", "rag-select"])
+            self.assertEqual(data["results"][0]["total_cases"], 1)
+
+    def test_benchmark_cli_returns_failure_when_any_strategy_misses_expected_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = root / "failing"
+            case.mkdir()
+            (case / "case.json").write_text(
+                json.dumps(
+                    {
+                        "id": "failing",
+                        "title": "Failing",
+                        "category": "generation",
+                        "expected": {"should_pass": True, "must_block": False},
+                        "mock_responses": [
+                            {"schema_version": "1", "action": "finish", "args": {"summary": "done"}}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (case / "TASK_SPEC.md").write_text("Create a search details page.", encoding="utf-8")
+            (case / "CHECKLIST.md").write_text("- Must include MissingTerm\n", encoding="utf-8")
+            (case / "index.html").write_text("<html></html>", encoding="utf-8")
+            (case / "specgate.toml").write_text(
+                '[policy]\nallowed_actions=["finish"]\n'
+                'allowed_read_paths=["TASK_SPEC.md","CHECKLIST.md","index.html"]\n'
+                'allowed_write_paths=["index.html"]\n',
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(io.StringIO()):
+                code = main(["benchmark", str(root), "--strategies", "baseline"])
+
+            self.assertEqual(code, 1)
+            benchmark_path = root / "eval-runs" / "latest" / "benchmark.json"
+            self.assertTrue(benchmark_path.exists())
+            data = json.loads(benchmark_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["results"][0]["expected_matches"], 0)
+
     def test_eval_cli_uses_case_governance_profile_when_not_overridden(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

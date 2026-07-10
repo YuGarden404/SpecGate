@@ -221,6 +221,55 @@ def _render_role_isolation_evidence(root: Path) -> str:
     )
 
 
+def _render_benchmark_summary(root: Path) -> str:
+    benchmark_path = root / "eval-runs" / "latest" / "benchmark.json"
+    if not benchmark_path.exists():
+        return "<h2>Benchmark Summary</h2><p>No benchmark summary recorded.</p>"
+
+    try:
+        data = json.loads(benchmark_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("benchmark summary must be an object")
+        results = data.get("results", [])
+        if not isinstance(results, list):
+            raise ValueError("benchmark results must be a list")
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        return (
+            "<h2>Benchmark Summary</h2>"
+            f"<p>could not read benchmark summary: {escape(str(exc))}</p>"
+        )
+
+    rows: list[str] = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        rows.append(
+            "<tr>"
+            f"<td>{escape(str(result.get('strategy', '')))}</td>"
+            f"<td>{escape(str(result.get('total_cases', 0)))}</td>"
+            f"<td>{escape(str(result.get('passed_cases', 0)))}</td>"
+            f"<td>{escape(str(result.get('expected_matches', 0)))}</td>"
+            f"<td>{escape(str(result.get('avg_context_chars', 0)))}</td>"
+            f"<td>{escape(str(result.get('avg_retrieved_chunks', 0)))}</td>"
+            f"<td>{escape(str(result.get('blocked_actions', 0)))}</td>"
+            f"<td>{escape(str(result.get('approval_requests', 0)))}</td>"
+            f"<td>{escape(str(result.get('parse_errors', 0)))}</td>"
+            f"<td>{escape(str(result.get('gate_runs', 0)))}</td>"
+            "</tr>"
+        )
+    if not rows:
+        return "<h2>Benchmark Summary</h2><p>No benchmark strategy rows recorded.</p>"
+    return (
+        "<h2>Benchmark Summary</h2>"
+        "<table>"
+        "<thead><tr><th>Strategy</th><th>Cases</th><th>Passed</th><th>Expected Matches</th>"
+        "<th>Avg Context Chars</th><th>Avg Retrieved Chunks</th><th>Blocked Actions</th>"
+        "<th>Approval Requests</th><th>Parse Errors</th><th>Gate Runs</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+    )
+
+
 def _render_jsonish(value: object) -> str:
     if isinstance(value, list | dict):
         return json.dumps(value, ensure_ascii=False)
@@ -277,6 +326,7 @@ def generate_report(
     retrieval_evidence = _render_retrieval_evidence(root)
     compression_evidence = _render_compression_evidence(root)
     role_isolation_evidence = _render_role_isolation_evidence(root)
+    benchmark_summary = _render_benchmark_summary(root)
     events = _render_run_events(root)
     memory = escape(load_memory_summary(root))
     html = f"""<!doctype html>
@@ -298,6 +348,7 @@ def generate_report(
   {retrieval_evidence}
   {compression_evidence}
   {role_isolation_evidence}
+  {benchmark_summary}
   <h2>Checks</h2>
   <ul>{checks}</ul>
   <h2>Issues</h2>

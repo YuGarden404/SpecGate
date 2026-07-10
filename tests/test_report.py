@@ -239,6 +239,42 @@ class ReportTests(unittest.TestCase):
             self.assertIn("draft_patch", html)
             self.assertNotIn("reviewer<script>", html)
 
+    def test_generate_report_includes_benchmark_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+            benchmark_dir = root / "eval-runs" / "latest"
+            benchmark_dir.mkdir(parents=True)
+            (benchmark_dir / "benchmark.json").write_text(
+                json.dumps(
+                    {
+                        "results": [
+                            {
+                                "strategy": "rag<script>",
+                                "total_cases": 2,
+                                "passed_cases": 2,
+                                "expected_matches": 2,
+                                "avg_context_chars": 1200,
+                                "avg_retrieved_chunks": 2.5,
+                                "blocked_actions": 0,
+                                "approval_requests": 0,
+                                "parse_errors": 0,
+                                "gate_runs": 2,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            output = generate_report(root, gate, steps=1)
+
+            html = output.read_text(encoding="utf-8")
+            self.assertIn("Benchmark Summary", html)
+            self.assertIn("rag&lt;script&gt;", html)
+            self.assertIn("2.5", html)
+            self.assertNotIn("rag<script>", html)
+
     def test_generate_report_handles_missing_pending_approvals_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
