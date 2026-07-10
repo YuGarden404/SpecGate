@@ -49,6 +49,8 @@ class MetricsTests(unittest.TestCase):
                 "compression_original_chars": 0,
                 "compression_compressed_chars": 0,
                 "cleared_tool_results": 0,
+                "role_contexts": 0,
+                "isolated_state_keys": 0,
                 "max_steps_reached": False,
             },
         )
@@ -74,6 +76,8 @@ class MetricsTests(unittest.TestCase):
             compression_original_chars=2000,
             compression_compressed_chars=500,
             cleared_tool_results=2,
+            role_contexts=3,
+            isolated_state_keys=9,
             max_steps_reached=True,
         )
 
@@ -99,6 +103,8 @@ class MetricsTests(unittest.TestCase):
                 "compression_original_chars": 2000,
                 "compression_compressed_chars": 500,
                 "cleared_tool_results": 2,
+                "role_contexts": 3,
+                "isolated_state_keys": 9,
                 "max_steps_reached": True,
             },
         )

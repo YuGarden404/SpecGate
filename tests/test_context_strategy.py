@@ -250,6 +250,29 @@ class ContextStrategyTests(unittest.TestCase):
         self.assertIn("[compressed selected file", context)
         self.assertNotIn("long task body " * 200, context)
 
+    def test_isolated_harness_strategy_renders_role_isolation_section(self):
+        with self._workspace() as tmp:
+            root = Path(tmp)
+            root.joinpath("TASK_SPEC.md").write_text(
+                "The dashboard must display Python LLM Gate search details.",
+                encoding="utf-8",
+            )
+            root.joinpath("notes.md").write_text(
+                "Python LLM Gate search details must be visible in the final page.",
+                encoding="utf-8",
+            )
+
+            context = build_context_pack(root, None, [], strategy="isolated-harness")
+
+        self.assertIn("## Role Isolation", context)
+        self.assertIn("role: planner", context)
+        self.assertIn("role: implementer", context)
+        self.assertIn("role: reviewer", context)
+        self.assertIn("hidden_state: draft_patch", context)
+        self.assertIn("allowed_actions:", context)
+        self.assertIn("## Retrieved Context", context)
+        self.assertIn("## Compression Evidence", context)
+
     def test_compressed_strategy_keeps_earlier_blocked_tool_result(self):
         feedback = [
             {

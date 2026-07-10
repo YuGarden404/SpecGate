@@ -64,6 +64,9 @@ class AgentRunner:
         compression_path = self.run_dir / "compression.json"
         if compression_path.exists():
             compression_path.unlink()
+        isolation_path = self.run_dir / "isolation.json"
+        if isolation_path.exists():
+            isolation_path.unlink()
 
     def run(self) -> RunResult:
         queue_path = approval_queue_path(self.root)
@@ -240,6 +243,32 @@ class AgentRunner:
                 },
             )
 
+        def record_isolation(metadata: dict | None) -> None:
+            nonlocal metrics
+            if not metadata:
+                return
+            isolation = metadata.get("isolation")
+            if not isinstance(isolation, dict):
+                return
+            role_contexts = isolation.get("role_contexts", 0)
+            isolated_state_keys = isolation.get("isolated_state_keys", 0)
+            metrics = replace(
+                metrics,
+                role_contexts=role_contexts if isinstance(role_contexts, int) else 0,
+                isolated_state_keys=isolated_state_keys if isinstance(isolated_state_keys, int) else 0,
+            )
+            (self.run_dir / "isolation.json").write_text(
+                json.dumps(isolation, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            self.trace.append(
+                "isolation_result",
+                {
+                    "role_contexts": role_contexts,
+                    "isolated_state_keys": isolated_state_keys,
+                },
+            )
+
         for step in range(1, self.max_steps + 1):
             context, context_metadata = build_context_pack_with_metadata(
                 self.root,
@@ -249,6 +278,7 @@ class AgentRunner:
             )
             record_retrieval(context_metadata)
             record_compression(context_metadata)
+            record_isolation(context_metadata)
             context_chars = len(context)
             context_chars_max = max(context_chars_max, context_chars)
             metrics = replace(metrics, steps=step, context_chars_max=context_chars_max)

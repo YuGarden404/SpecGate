@@ -173,6 +173,93 @@ class RunnerTests(unittest.TestCase):
             ]
             self.assertIn("compression_result", trace_events)
 
+    def test_isolated_harness_run_records_isolation_evidence_and_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text(
+                "The page must display Python LLM Gate search details.",
+                encoding="utf-8",
+            )
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "notes.md").write_text("Python LLM Gate search details", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Python LLM Gate search details</body></html>',
+                encoding="utf-8",
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html", "notes.md"},
+                {"index.html"},
+            )
+            llm = MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}])
+
+            result = AgentRunner(root, llm, policy, max_steps=1, context_strategy="isolated-harness").run()
+
+            isolation_path = root / "runs" / "latest" / "isolation.json"
+            self.assertTrue(isolation_path.exists())
+            isolation = json.loads(isolation_path.read_text(encoding="utf-8"))
+            self.assertEqual(isolation["role_contexts"], 3)
+            self.assertGreater(isolation["isolated_state_keys"], 0)
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.role_contexts, 3)
+            self.assertGreater(result.metrics.isolated_state_keys, 0)
+            trace_events = [
+                json.loads(line)["event_type"]
+                for line in (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertIn("isolation_result", trace_events)
+
+    def test_non_isolated_run_clears_stale_isolation_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = root / "runs" / "latest"
+            run_dir.mkdir(parents=True)
+            stale_path = run_dir / "isolation.json"
+            stale_path.write_text('{"role_contexts": 99}', encoding="utf-8")
+            (root / "TASK_SPEC.md").write_text("Task Search Detail", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            llm = MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}])
+
+            AgentRunner(root, llm, policy, max_steps=1, context_strategy="baseline").run()
+
+            self.assertFalse(stale_path.exists())
+
+    def test_isolated_harness_does_not_bypass_workspace_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Write index.html", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": FIXED_HTML},
+                    }
+                ]
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=1, context_strategy="isolated-harness").run()
+
+            self.assertFalse(result.passed)
+            self.assertFalse((root / "index.html").exists())
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.blocked_actions, 1)
+
     def test_successful_write_finish_records_metrics_and_trust(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

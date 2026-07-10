@@ -206,6 +206,39 @@ class ReportTests(unittest.TestCase):
             self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
             self.assertNotIn("<script>alert(1)</script>", html)
 
+    def test_generate_report_includes_role_isolation_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+            run_dir = root / "runs" / "latest"
+            run_dir.mkdir(parents=True)
+            (run_dir / "isolation.json").write_text(
+                json.dumps(
+                    {
+                        "roles": [
+                            {
+                                "role": "reviewer<script>",
+                                "visible_sections": ["Final Artifact"],
+                                "hidden_sections": ["draft_patch"],
+                                "allowed_actions": ["read_file", "finish"],
+                                "state_keys": ["task", "review_notes"],
+                            }
+                        ],
+                        "role_contexts": 1,
+                        "isolated_state_keys": 2,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            output = generate_report(root, gate, steps=1)
+
+            html = output.read_text(encoding="utf-8")
+            self.assertIn("Role Isolation Evidence", html)
+            self.assertIn("reviewer&lt;script&gt;", html)
+            self.assertIn("draft_patch", html)
+            self.assertNotIn("reviewer<script>", html)
+
     def test_generate_report_handles_missing_pending_approvals_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

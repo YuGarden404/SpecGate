@@ -179,6 +179,48 @@ def _render_compression_evidence(root: Path) -> str:
     return f"<h2>Compression Evidence</h2><table><tbody>{rows}</tbody></table>"
 
 
+def _render_role_isolation_evidence(root: Path) -> str:
+    isolation_path = root / "runs" / "latest" / "isolation.json"
+    if not isolation_path.exists():
+        return "<h2>Role Isolation Evidence</h2><p>No role isolation evidence recorded.</p>"
+
+    try:
+        data = json.loads(isolation_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("role isolation evidence must be an object")
+        roles = data.get("roles", [])
+        if not isinstance(roles, list):
+            raise ValueError("role isolation roles must be a list")
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        return (
+            "<h2>Role Isolation Evidence</h2>"
+            f"<p>could not read role isolation evidence: {escape(str(exc))}</p>"
+        )
+
+    rows: list[str] = []
+    for role in roles:
+        if not isinstance(role, dict):
+            continue
+        rows.append(
+            "<tr>"
+            f"<td>{escape(str(role.get('role', '')))}</td>"
+            f"<td>{escape(_render_jsonish(role.get('visible_sections', [])))}</td>"
+            f"<td>{escape(_render_jsonish(role.get('hidden_sections', [])))}</td>"
+            f"<td>{escape(_render_jsonish(role.get('allowed_actions', [])))}</td>"
+            f"<td>{escape(_render_jsonish(role.get('state_keys', [])))}</td>"
+            "</tr>"
+        )
+    if not rows:
+        return "<h2>Role Isolation Evidence</h2><p>No role isolation roles recorded.</p>"
+    return (
+        "<h2>Role Isolation Evidence</h2>"
+        "<table>"
+        "<thead><tr><th>Role</th><th>Visible Sections</th><th>Hidden State</th><th>Allowed Actions</th><th>State Keys</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+    )
+
+
 def _render_jsonish(value: object) -> str:
     if isinstance(value, list | dict):
         return json.dumps(value, ensure_ascii=False)
@@ -234,6 +276,7 @@ def generate_report(
     pending_approvals = _render_pending_approvals(root)
     retrieval_evidence = _render_retrieval_evidence(root)
     compression_evidence = _render_compression_evidence(root)
+    role_isolation_evidence = _render_role_isolation_evidence(root)
     events = _render_run_events(root)
     memory = escape(load_memory_summary(root))
     html = f"""<!doctype html>
@@ -254,6 +297,7 @@ def generate_report(
   {pending_approvals}
   {retrieval_evidence}
   {compression_evidence}
+  {role_isolation_evidence}
   <h2>Checks</h2>
   <ul>{checks}</ul>
   <h2>Issues</h2>

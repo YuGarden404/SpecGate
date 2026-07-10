@@ -8,7 +8,14 @@ from specgate.approvals import GovernanceConfig
 from specgate.policy import WorkspacePolicy
 
 
-VALID_CONTEXT_STRATEGIES = {"baseline", "compressed", "injection-safe", "rag-select", "compressed-rag"}
+VALID_CONTEXT_STRATEGIES = {
+    "baseline",
+    "compressed",
+    "injection-safe",
+    "rag-select",
+    "compressed-rag",
+    "isolated-harness",
+}
 
 
 def _string_set(value: object, field_name: str) -> set[str]:

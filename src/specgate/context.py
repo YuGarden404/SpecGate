@@ -8,12 +8,20 @@ from pathlib import Path
 from specgate.context_lifecycle import CompressionConfig, compress_runtime_feedback, pin_critical_sections
 from specgate.context_selector import ContextSelection, select_context_files
 from specgate.gate import GateResult
+from specgate.isolation import build_role_contexts, isolation_metadata
 from specgate.memory import load_memory_summary
 from specgate.retrieval import RetrievalConfig, build_query_terms, retrieve_chunks
 from specgate.tool_registry import render_tool_registry_for_context
 
 
-VALID_CONTEXT_STRATEGIES = {"baseline", "compressed", "injection-safe", "rag-select", "compressed-rag"}
+VALID_CONTEXT_STRATEGIES = {
+    "baseline",
+    "compressed",
+    "injection-safe",
+    "rag-select",
+    "compressed-rag",
+    "isolated-harness",
+}
 
 
 def _artifact_summary(path: Path) -> str:
@@ -51,7 +59,7 @@ def _render_selected_files(selection: ContextSelection, strategy: str = "baselin
         else:
             content = (
                 _compress_selected_content(item.content)
-                if strategy in {"compressed", "compressed-rag"}
+                if strategy in {"compressed", "compressed-rag", "isolated-harness"}
                 else item.content
             )
             blocks.append(f"### {item.path}\n```text\n{content}\n```")
@@ -193,6 +201,36 @@ def _split_rendered_section(section: str) -> tuple[str, str]:
     return title.removeprefix("## "), body
 
 
+def _render_role_isolation() -> str:
+    blocks: list[str] = []
+    for role in build_role_contexts():
+        blocks.append(
+            "\n".join(
+                [
+                    f"role: {role.role}",
+                    "visible_sections: " + ", ".join(role.visible_sections),
+                    "hidden_state: " + ", ".join(role.hidden_sections),
+                    "allowed_actions: " + ", ".join(role.allowed_actions),
+                    "state_keys: " + ", ".join(role.state_keys),
+                ]
+            )
+        )
+    return "\n\n".join(blocks)
+
+
+def _render_compression_evidence(summary) -> str:
+    if summary is None:
+        return "No compression evidence."
+    return "\n".join(
+        [
+            f"original_chars: {summary.original_chars}",
+            f"compressed_chars: {summary.compressed_chars}",
+            f"cleared_tool_results: {summary.cleared_tool_results}",
+            f"summarized_events: {summary.summarized_events}",
+        ]
+    )
+
+
 def build_context_pack_with_metadata(
     root: Path,
     latest_gate: GateResult | None,
@@ -205,11 +243,12 @@ def build_context_pack_with_metadata(
     selection = select_context_files(root)
     retrieved_sections: list[str] = []
     retrieval_metadata = None
-    if strategy in {"rag-select", "compressed-rag"}:
+    compression_like = strategy in {"compressed-rag", "isolated-harness"}
+    if strategy in {"rag-select", "compressed-rag", "isolated-harness"}:
         rendered_retrieval, retrieval_metadata = _render_retrieved_context(root, latest_gate)
         retrieved_sections.append("## Retrieved Context\n" + rendered_retrieval)
     compression_summary = None
-    if strategy == "compressed-rag":
+    if compression_like:
         compression_summary = compress_runtime_feedback(runtime_feedback or [], CompressionConfig())
     safety_sections = []
     if strategy == "injection-safe":
@@ -237,7 +276,11 @@ def build_context_pack_with_metadata(
         (_artifact_summary(root / "index.html"), ""),
         ("Latest Gate Feedback", gate_summary),
     ]
-    if strategy == "compressed-rag":
+    if strategy == "isolated-harness":
+        body_sections.append(("Role Isolation", _render_role_isolation()))
+        body_sections.append(("Compression Evidence", _render_compression_evidence(compression_summary)))
+
+    if compression_like:
         body_sections.extend(
             [
                 ("Task Constraints", _compress_selected_content(_read_query_source(root, "TASK_SPEC.md"))),
@@ -253,7 +296,8 @@ def build_context_pack_with_metadata(
     compression_metadata = compression_summary.to_dict() if compression_summary is not None else None
     if compression_metadata is not None:
         compression_metadata["pinned_sections"] = ["Task Constraints", "Policy Boundary", "Latest Gate Feedback"]
-    return context, {"retrieval": retrieval_metadata, "compression": compression_metadata}
+    isolation = isolation_metadata() if strategy == "isolated-harness" else None
+    return context, {"retrieval": retrieval_metadata, "compression": compression_metadata, "isolation": isolation}
 
 
 def build_context_pack(
