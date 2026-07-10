@@ -153,8 +153,38 @@ class RunnerTests(unittest.TestCase):
             self.assertNotIn("secret_notes.md", llm.contexts[0])
             self.assertNotIn("should never reach the LLM context", llm.contexts[0])
             retrieval = json.loads((root / "runs" / "latest" / "retrieval.json").read_text(encoding="utf-8"))
+            self.assertNotIn("secret_notes.md", json.dumps(retrieval, ensure_ascii=False))
+            self.assertNotIn("should never reach the LLM context", json.dumps(retrieval, ensure_ascii=False))
             selected_paths = {chunk["path"] for chunk in retrieval["selected_chunks"]}
             self.assertNotIn("secret_notes.md", selected_paths)
+
+    def test_compressed_rag_does_not_pin_policy_disallowed_task_spec(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text(
+                "SECRET TASK CONSTRAINT must never reach context.",
+                encoding="utf-8",
+            )
+            (root / "CHECKLIST.md").write_text("SECRET CHECKLIST TERM", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">safe content</body></html>',
+                encoding="utf-8",
+            )
+            llm = RecordingLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"index.html"},
+                {"index.html"},
+            )
+
+            AgentRunner(root, llm, policy, max_steps=1, context_strategy="compressed-rag").run()
+
+            self.assertNotIn("SECRET TASK CONSTRAINT", llm.contexts[0])
+            self.assertNotIn("SECRET CHECKLIST TERM", llm.contexts[0])
+            retrieval = json.loads((root / "runs" / "latest" / "retrieval.json").read_text(encoding="utf-8"))
+            self.assertNotIn("SECRET", json.dumps(retrieval, ensure_ascii=False))
 
     def test_compressed_rag_run_records_compression_evidence_and_metrics(self):
         class LargeFeedbackLLM:

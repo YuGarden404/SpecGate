@@ -69,7 +69,9 @@ def _render_selected_files(selection: ContextSelection, strategy: str = "baselin
     return "\n\n".join(blocks)
 
 
-def _read_query_source(root: Path, relative_path: str) -> str:
+def _read_query_source(root: Path, relative_path: str, policy: WorkspacePolicy | None = None) -> str:
+    if policy is not None and relative_path not in policy.allowed_read_paths:
+        return ""
     try:
         return root.joinpath(relative_path).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -98,8 +100,8 @@ def _render_retrieved_context(
     latest_gate: GateResult | None,
     policy: WorkspacePolicy | None = None,
 ) -> tuple[str, dict]:
-    task_spec = _read_query_source(root, "TASK_SPEC.md")
-    checklist = _read_query_source(root, "CHECKLIST.md")
+    task_spec = _read_query_source(root, "TASK_SPEC.md", policy)
+    checklist = _read_query_source(root, "CHECKLIST.md", policy)
     gate_feedback = latest_gate.summary if latest_gate else ""
     query_terms = build_query_terms(task_spec, checklist, gate_feedback)
     result = retrieve_chunks(
@@ -297,7 +299,7 @@ def build_context_pack_with_metadata(
     if compression_like:
         body_sections.extend(
             [
-                ("Task Constraints", _compress_selected_content(_read_query_source(root, "TASK_SPEC.md"))),
+                ("Task Constraints", _compress_selected_content(_read_query_source(root, "TASK_SPEC.md", policy))),
                 ("Policy Boundary", "Tool calls remain constrained by the tool registry and WorkspacePolicy."),
             ]
         )
