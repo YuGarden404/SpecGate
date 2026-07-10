@@ -160,6 +160,36 @@ class ReportTests(unittest.TestCase):
             self.assertIn("could not read pending approvals", html)
             self.assertNotIn("<script>alert(1)</script>", html)
 
+    def test_generate_report_handles_non_object_pending_approvals_queue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+            queue_path = approval_queue_path(root)
+            queue_path.parent.mkdir(parents=True)
+            queue_path.write_text("[]", encoding="utf-8")
+
+            output = generate_report(root, gate, 1)
+
+            html = output.read_text(encoding="utf-8")
+            self.assertIn("Pending Approvals", html)
+            self.assertIn("could not read pending approvals", html)
+            self.assertNotIn("[]", html)
+
+    def test_generate_report_handles_non_list_pending_approvals_items(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+            queue_path = approval_queue_path(root)
+            queue_path.parent.mkdir(parents=True)
+            queue_path.write_text('{"approvals": {}}', encoding="utf-8")
+
+            output = generate_report(root, gate, 1)
+
+            html = output.read_text(encoding="utf-8")
+            self.assertIn("Pending Approvals", html)
+            self.assertIn("could not read pending approvals", html)
+            self.assertNotIn('{"approvals": {}}', html)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -87,9 +87,19 @@ class ApprovalQueue:
             return cls()
 
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(payload, dict):
+            raise ValueError("pending approvals payload must be an object")
+
+        raw_approvals = payload.get("approvals", [])
+        if not isinstance(raw_approvals, list):
+            raise ValueError("pending approvals must be a list")
+
+        if not all(isinstance(approval, dict) for approval in raw_approvals):
+            raise ValueError("pending approval entries must be objects")
+
         approvals = [
             PendingApproval(**approval)
-            for approval in payload.get("approvals", [])
+            for approval in raw_approvals
         ]
         return cls(approvals)
 
