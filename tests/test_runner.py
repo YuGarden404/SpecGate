@@ -348,6 +348,57 @@ class RunnerTests(unittest.TestCase):
             compression_text = (root / "runs" / "latest" / "compression.json").read_text(encoding="utf-8")
             self.assertNotIn(secret, compression_text)
 
+    def test_compressed_task_constraints_redact_secret_like_task_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            secret = "sk-tasksecret1234567890"
+            (root / "TASK_SPEC.md").write_text(f"Build page with token {secret}", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">safe content</body></html>',
+                encoding="utf-8",
+            )
+            llm = RecordingLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            AgentRunner(root, llm, policy, max_steps=1, context_strategy="compressed-rag").run()
+
+            self.assertEqual(len(llm.contexts), 1)
+            self.assertNotIn(secret, llm.contexts[0])
+            self.assertIn("[REDACTED]", llm.contexts[0])
+
+    def test_context_manifest_redacts_secret_like_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            secret_path = "sk-pathsecret1234567890.md"
+            (root / "TASK_SPEC.md").write_text("Read allowed docs.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / secret_path).write_text("safe body", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">safe content</body></html>',
+                encoding="utf-8",
+            )
+            llm = RecordingLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html", secret_path},
+                {"index.html"},
+            )
+
+            AgentRunner(root, llm, policy, max_steps=1, context_strategy="rag-select").run()
+
+            self.assertEqual(len(llm.contexts), 1)
+            self.assertNotIn(secret_path, llm.contexts[0])
+            self.assertIn("[REDACTED]", llm.contexts[0])
+
     def test_compressed_rag_run_records_compression_evidence_and_metrics(self):
         class LargeFeedbackLLM:
             def __init__(self):

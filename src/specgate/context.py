@@ -52,7 +52,11 @@ def _render_manifest(selection: ContextSelection) -> str:
         f"used_chars: {selection.used_chars}",
     ]
     for item in selection.files:
-        lines.append(f"- {item.status}: {item.path} ({item.reason}, chars={item.chars})")
+        path = redact(item.path)
+        reason = redact(item.reason)
+        rendered_path = path if isinstance(path, str) else item.path
+        rendered_reason = reason if isinstance(reason, str) else item.reason
+        lines.append(f"- {item.status}: {rendered_path} ({rendered_reason}, chars={item.chars})")
     return "\n".join(lines)
 
 
@@ -322,7 +326,10 @@ def build_context_pack_with_metadata(
     if compression_like:
         body_sections.extend(
             [
-                ("Task Constraints", _compress_selected_content(_read_query_source(root, "TASK_SPEC.md", policy))),
+                (
+                    "Task Constraints",
+                    _compress_selected_content(str(redact(_read_query_source(root, "TASK_SPEC.md", policy)))),
+                ),
                 ("Policy Boundary", "Tool calls remain constrained by the tool registry and WorkspacePolicy."),
             ]
         )
