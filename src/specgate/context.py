@@ -10,6 +10,7 @@ from specgate.context_selector import ContextSelection, select_context_files
 from specgate.gate import GateResult
 from specgate.isolation import build_role_contexts, isolation_metadata
 from specgate.memory import load_memory_summary
+from specgate.policy import WorkspacePolicy
 from specgate.retrieval import RetrievalConfig, build_query_terms, retrieve_chunks
 from specgate.tool_registry import render_tool_registry_for_context
 
@@ -92,12 +93,21 @@ def _retrieval_metadata(result) -> dict:
     }
 
 
-def _render_retrieved_context(root: Path, latest_gate: GateResult | None) -> tuple[str, dict]:
+def _render_retrieved_context(
+    root: Path,
+    latest_gate: GateResult | None,
+    policy: WorkspacePolicy | None = None,
+) -> tuple[str, dict]:
     task_spec = _read_query_source(root, "TASK_SPEC.md")
     checklist = _read_query_source(root, "CHECKLIST.md")
     gate_feedback = latest_gate.summary if latest_gate else ""
     query_terms = build_query_terms(task_spec, checklist, gate_feedback)
-    result = retrieve_chunks(root, query_terms, RetrievalConfig())
+    result = retrieve_chunks(
+        root,
+        query_terms,
+        RetrievalConfig(),
+        allowed_read_paths=policy.allowed_read_paths if policy is not None else None,
+    )
     metadata = _retrieval_metadata(result)
 
     if not result.selected_chunks:
@@ -236,16 +246,20 @@ def build_context_pack_with_metadata(
     latest_gate: GateResult | None,
     runtime_feedback: list[dict] | None = None,
     strategy: str = "baseline",
+    policy: WorkspacePolicy | None = None,
 ) -> tuple[str, dict]:
     if strategy not in VALID_CONTEXT_STRATEGIES:
         raise ValueError(f"unknown context strategy: {strategy}")
 
-    selection = select_context_files(root)
+    selection = select_context_files(
+        root,
+        allowed_read_paths=policy.allowed_read_paths if policy is not None else None,
+    )
     retrieved_sections: list[str] = []
     retrieval_metadata = None
     compression_like = strategy in {"compressed-rag", "isolated-harness"}
     if strategy in {"rag-select", "compressed-rag", "isolated-harness"}:
-        rendered_retrieval, retrieval_metadata = _render_retrieved_context(root, latest_gate)
+        rendered_retrieval, retrieval_metadata = _render_retrieved_context(root, latest_gate, policy)
         retrieved_sections.append("## Retrieved Context\n" + rendered_retrieval)
     compression_summary = None
     if compression_like:
@@ -305,6 +319,7 @@ def build_context_pack(
     latest_gate: GateResult | None,
     runtime_feedback: list[dict] | None = None,
     strategy: str = "baseline",
+    policy: WorkspacePolicy | None = None,
 ) -> str:
-    context, _metadata = build_context_pack_with_metadata(root, latest_gate, runtime_feedback, strategy)
+    context, _metadata = build_context_pack_with_metadata(root, latest_gate, runtime_feedback, strategy, policy)
     return context

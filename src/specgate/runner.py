@@ -275,6 +275,7 @@ class AgentRunner:
                 latest_gate,
                 runtime_feedback,
                 strategy=self.context_strategy,
+                policy=self.policy,
             )
             record_retrieval(context_metadata)
             record_compression(context_metadata)

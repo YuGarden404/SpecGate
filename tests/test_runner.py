@@ -123,6 +123,39 @@ class RunnerTests(unittest.TestCase):
             ]
             self.assertIn("retrieval_result", trace_events)
 
+    def test_rag_select_does_not_inject_policy_disallowed_read_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text(
+                "The page must mention ultrasecret retrieval boundary.",
+                encoding="utf-8",
+            )
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "secret_notes.md").write_text(
+                "ultrasecret retrieval boundary should never reach the LLM context.",
+                encoding="utf-8",
+            )
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">ultrasecret retrieval boundary</body></html>',
+                encoding="utf-8",
+            )
+            llm = RecordingLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            AgentRunner(root, llm, policy, max_steps=1, context_strategy="rag-select").run()
+
+            self.assertNotIn("secret_notes.md", llm.contexts[0])
+            self.assertNotIn("should never reach the LLM context", llm.contexts[0])
+            retrieval = json.loads((root / "runs" / "latest" / "retrieval.json").read_text(encoding="utf-8"))
+            selected_paths = {chunk["path"] for chunk in retrieval["selected_chunks"]}
+            self.assertNotIn("secret_notes.md", selected_paths)
+
     def test_compressed_rag_run_records_compression_evidence_and_metrics(self):
         class LargeFeedbackLLM:
             def __init__(self):

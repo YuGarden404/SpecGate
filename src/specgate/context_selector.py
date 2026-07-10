@@ -59,7 +59,11 @@ def _scan_files(root: Path) -> list[Path]:
     return sorted((path for path in root.rglob("*") if path.is_file()), key=lambda item: _relative(item, root))
 
 
-def select_context_files(root: Path, budget_chars: int = DEFAULT_BUDGET_CHARS) -> ContextSelection:
+def select_context_files(
+    root: Path,
+    budget_chars: int = DEFAULT_BUDGET_CHARS,
+    allowed_read_paths: set[str] | None = None,
+) -> ContextSelection:
     if budget_chars <= 0:
         raise ValueError("budget_chars must be positive")
 
@@ -69,6 +73,8 @@ def select_context_files(root: Path, budget_chars: int = DEFAULT_BUDGET_CHARS) -
     for path in _scan_files(root):
         rel = _relative(path, root)
         priority = _priority(rel)
+        if allowed_read_paths is not None and rel not in allowed_read_paths:
+            continue
         if rel in EXCLUDED_FILES:
             skipped.append(ContextFile(rel, "skipped", "managed memory file", 0, priority))
             continue

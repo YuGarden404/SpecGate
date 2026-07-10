@@ -135,6 +135,7 @@ def retrieve_chunks(
     config: RetrievalConfig | None = None,
     *,
     top_k: int | None = None,
+    allowed_read_paths: set[str] | None = None,
 ) -> RetrievalResult:
     resolved_config = config or RetrievalConfig()
     if top_k is not None:
@@ -152,6 +153,9 @@ def retrieve_chunks(
     dropped_reasons: list[str] = []
     for path in _scan_files(root):
         rel = _relative(path, root)
+        if allowed_read_paths is not None and rel not in allowed_read_paths:
+            dropped_reasons.append("read path omitted by workspace policy")
+            continue
         if _is_under_excluded_dir(path, root, resolved_config.exclude_dirs):
             dropped_reasons.append(f"{rel}: excluded directory")
             continue
