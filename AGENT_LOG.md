@@ -710,6 +710,7 @@
 - Task 8: Final evidence and verification
   - Subagent/process: controller final pass.
   - Spec review: plan checklist reconciled against commits.
-  - Code review: final verification before completion.
-  - Verification: full suite `Ran 190 tests ... OK`; benchmark `strategies=4, cases=7`; `git status --short --branch --ignored` shows only process docs modified plus ignored local artifacts.
-  - Commit: final process-evidence commit.
+  - Code review: final reviewer found one Critical issue: RAG retrieval and selected context did not honor `WorkspacePolicy.allowed_read_paths`.
+  - Fix: `9b03490` passes the workspace policy into context construction, filters selected files and retrieved chunks by `allowed_read_paths`, and adds a regression test proving a policy-disallowed matching file is not sent to the LLM context or retrieval evidence.
+  - Verification: full suite `Ran 191 tests ... OK`; benchmark `strategies=4, cases=7`; `rag-select`, `compressed-rag`, and `isolated-harness` eval each reported `expected_matches=7`.
+  - Commit: `52964d4` for process evidence, `9b03490` for the final review security fix.
