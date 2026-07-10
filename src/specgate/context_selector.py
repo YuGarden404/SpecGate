@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 TEXT_SUFFIXES = {".md", ".html", ".css", ".js", ".txt", ".toml", ".json", ".jsonl"}
-EXCLUDED_DIRS = {".git", "__pycache__", "runs", "reports"}
+EXCLUDED_DIRS = {".git", "__pycache__", "runs", "reports", "eval-runs"}
 EXCLUDED_FILES = {"memory.json"}
 DEFAULT_BUDGET_CHARS = 12000
 TRUNCATION_SUFFIX = "\n...[truncated by SpecGate context budget]\n"
