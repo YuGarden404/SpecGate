@@ -486,3 +486,29 @@ MVP 完成时必须满足：
 - 风险：反馈闭环描述模糊。决策：Gate result 必须结构化，并进入下一轮 context pack。
 - 风险：真实 LLM 不稳定掩盖机制。决策：`MockLLM` 是主要 demo 和测试路径。
 - 风险：课程过程证据不足。决策：从项目开始维护 `SPEC_PROCESS.md` 和 `AGENT_LOG.md`。
+# 2026-07-10 Context Harness Deepening 补充规格
+
+本节记录 SpecGate 在 MVP、真实 LLM 兼容、Context Eval、治理指标和 HITL Review Gate 之后的下一阶段主贡献。该阶段不改变 SpecGate 作为自研 Coding Agent Harness 的定位，而是在已有 harness 内核上继续深入 Context Engineering 与 Harness Engineering。
+
+## 深化目标
+
+新的主线命名为 `Context Harness Deepening`。它按四个阶段推进：
+
+1. Select / RAG Harness：实现本地轻量检索、切片、打分和上下文注入。
+2. Explainable Select：记录每个检索片段的来源、分数、命中词、行号和选择原因。
+3. Compress Lifecycle：实现上下文压缩、tool-result clearing、关键约束置尾和超预算裁剪。
+4. Isolate + Benchmark：实现 planner / implementer / reviewer 的 stub role 隔离，并用固定 mock cases 比较 harness strategy。
+
+## 验收边界
+
+本阶段所有核心机制都必须能在 mock/stub LLM 下确定性验证。真实 LLM 只作为可选人工实验，不作为核心通过标准。原因是课程要求关注自研 harness 机制：移除真实 LLM 后，检索、压缩、隔离、治理和 benchmark 仍应能通过单元测试证明其行为。
+
+## 新增机制
+
+- Select：从 workspace 中允许读取的文本文件构建轻量 lexical index，按任务、checklist 和最新 Gate feedback 检索相关片段。
+- Explainability：为 retrieved chunk 记录 `path`、`start_line`、`end_line`、`score`、`matched_terms`、`reason` 和 `token_estimate`。
+- Compress：清理大体积 tool result，摘要长 trace，保留 task constraints、policy boundary 和 latest gate feedback。
+- Isolate：不同 role 只能看到对应 context view 和 state keys；role 不得绕过 WorkspacePolicy、snapshot guardrail 或 HITL。
+- Benchmark：在固定 eval cases 上比较 `baseline`、`rag-select`、`compressed-rag`、`isolated-harness` 等策略的通过率、上下文规模、检索命中、压缩比例和治理指标。
+
+完整设计见 `docs/superpowers/specs/2026-07-10-context-harness-deepening-design.md`。

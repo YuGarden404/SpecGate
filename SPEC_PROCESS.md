@@ -184,3 +184,16 @@ Python CLI harness + mock LLM + 静态 HTML 生成/修复
 - WebUI 首页：`https://yugarden404.github.io/SpecGate/`。
 - 知识图谱 demo：`https://yugarden404.github.io/SpecGate/demo/`。
 - 运行报告：`https://yugarden404.github.io/SpecGate/report/`。
+# 2026-07-10 Context Harness Deepening 过程记录
+
+本轮 brainstorming 的目标是确定 SpecGate 在 HITL Review Gate 之后的继续深入方向。人工首先指出项目不应继续陷入真实 LLM 性能比较，而应回到“小 Codex 产品”的 harness 能力建设。随后把候选方向收束为 Context Engineering 与 Harness Engineering 的主线。
+
+关键决策：
+
+- 采用一条大分支 `feat-context-harness-deepening` 连续推进。
+- 采用阶段化方案 A，而不是一次性大改或先做 benchmark 再反推机制。
+- 阶段顺序为 Select / RAG Harness -> Explainable Select -> Compress Lifecycle -> Isolate + Benchmark。
+- 根目录 `SPEC.md`、`PLAN.md`、`SPEC_PROCESS.md`、`AGENT_LOG.md` 重新纳入持续维护范围，作为课程最终交付证据。
+- 所有核心验收以 mock/stub LLM 为主，真实 LLM 只作为后续可选人工实验。
+
+本轮重新参考了课程通用要求、A 类 Coding Agent Harness 要求和 `pecehe-with-notes.pptx`。课件中 PE ⊂ CE ⊂ HE、Write/Select/Compress/Isolate、Agent = Model x Harness、Workflow 优先、先减法再加法等原则，被映射为本轮设计约束：先实现轻量可测机制，不引入向量库、真实并发沙箱或真实 LLM 评测主线。

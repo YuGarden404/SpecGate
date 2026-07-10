@@ -590,3 +590,24 @@
   - `$env:PYTHONPATH='src'; python -m specgate.cli eval examples/eval_cases --context-strategy compressed` 通过，`cases=4, expected_matches=4`。
   - `$env:PYTHONPATH='src'; python -m specgate.cli eval examples/eval_cases --context-strategy injection-safe` 通过，`cases=4, expected_matches=4`。
   - Docker 人工验证：用户在本机 PowerShell 执行 `docker build -t specgate:context-eval .` 成功，`docker run --rm specgate:context-eval` 无报错，`docker run --rm specgate:context-eval python -m specgate.cli eval examples/eval_cases --context-strategy injection-safe` 输出 `SpecGate eval finished: strategy=injection-safe, cases=4, passed=0, expected_matches=4`。
+# 2026-07-10 23:40:00 +08:00
+
+- Task：启动 `Context Harness Deepening` 大工程规格设计。
+- Branch：`feat-context-harness-deepening`。
+- Skill/process：
+  - 使用 Superpowers `brainstorming` 收束方向。
+  - 读取课程通用要求、A 类 Coding Agent Harness 要求和 PE/CE/HE 课件。
+- 人工决策：
+  - 授权在一条大分支上连续推进四个阶段。
+  - 授权阶段完成后自动写规格/计划、派发 subagent、审查、测试、提交，并继续下一阶段。
+  - 授权根目录 `SPEC.md`、`PLAN.md`、`SPEC_PROCESS.md`、`AGENT_LOG.md` 从本轮开始作为最终交付物持续维护。
+  - 确认核心验收以 mock/stub LLM 为准，真实 LLM 只作为后续可选实验。
+- Agent 决策：
+  - 采用方案 A：Select / RAG Harness -> Explainable Select -> Compress Lifecycle -> Isolate + Benchmark。
+  - 第一版 Select/RAG 不引入向量库或 embedding API，先使用本地 lexical retrieval。
+  - 第一版 Compress 不依赖 LLM 摘要，先使用 deterministic summarizer。
+  - 第一版 Isolate 不做真实并发进程，只做 role context/state isolation。
+- 输出：
+  - `docs/superpowers/specs/2026-07-10-context-harness-deepening-design.md`
+  - `SPEC.md` 追加深化规格摘要。
+  - `SPEC_PROCESS.md` 追加本轮 brainstorming 过程记录。
