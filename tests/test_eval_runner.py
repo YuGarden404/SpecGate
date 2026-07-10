@@ -333,13 +333,12 @@ class EvalRunnerExecutionTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (case / "TASK_SPEC.md").write_text("Update the readme.", encoding="utf-8")
-            (case / "CHECKLIST.md").write_text("- Must request review\n", encoding="utf-8")
             (case / "README.md").write_text("draft", encoding="utf-8")
             (case / "specgate.toml").write_text(
                 (
                     "[policy]\n"
                     'allowed_actions=["replace_file","finish"]\n'
-                    'allowed_read_paths=["TASK_SPEC.md","CHECKLIST.md","README.md"]\n'
+                    'allowed_read_paths=["TASK_SPEC.md"]\n'
                     'allowed_write_paths=["README.md"]\n'
                     "[governance]\n"
                     'profile="review"\n'
@@ -361,7 +360,6 @@ class EvalRunnerExecutionTests(unittest.TestCase):
 
             suite = run_eval_suite(
                 root,
-                governance_profile="review",
                 scripted_responses=responses,
                 save_workspaces=True,
             )

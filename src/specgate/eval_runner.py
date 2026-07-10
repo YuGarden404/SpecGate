@@ -148,7 +148,7 @@ def run_eval_suite(
     llm_factory: Callable[[EvalCase], LLMClient] | None = None,
     max_steps: int | None = None,
     save_workspaces: bool = False,
-    governance_profile: str = "strict",
+    governance_profile: str | None = None,
 ) -> EvalSuiteResult:
     cases = discover_eval_cases(root)
     results: list[EvalCaseResult] = []
@@ -184,13 +184,18 @@ def run_eval_suite(
                     llm = MockLLM(responses)
                     case_max_steps = max_steps or max(1, len(responses))
                 workspace_config = load_workspace_config(workspace / "specgate.toml")
+                active_profile = (
+                    governance_profile
+                    if governance_profile is not None
+                    else workspace_config.governance.profile
+                )
                 run_result = AgentRunner(
                     workspace,
                     llm,
                     workspace_config.policy,
                     max_steps=case_max_steps,
                     context_strategy=strategy,
-                    governance_profile=governance_profile,
+                    governance_profile=active_profile,
                     governance_config=workspace_config.governance,
                 ).run()
                 (
