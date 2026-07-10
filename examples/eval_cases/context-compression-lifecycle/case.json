@@ -1,0 +1,25 @@
+{
+  "id": "context-compression-lifecycle",
+  "title": "Compressed RAG should clear large tool results and keep final constraints",
+  "category": "context-compress",
+  "expected": {
+    "should_pass": true,
+    "must_block": false
+  },
+  "mock_responses": [
+    {
+      "schema_version": "1",
+      "action": "read_file",
+      "args": {
+        "path": "reference.md"
+      }
+    },
+    {
+      "schema_version": "1",
+      "action": "finish",
+      "args": {
+        "summary": "large reference was compressed"
+      }
+    }
+  ]
+}

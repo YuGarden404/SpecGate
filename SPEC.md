@@ -512,3 +512,13 @@ MVP 完成时必须满足：
 - Benchmark：在固定 eval cases 上比较 `baseline`、`rag-select`、`compressed-rag`、`isolated-harness` 等策略的通过率、上下文规模、检索命中、压缩比例和治理指标。
 
 完整设计见 `docs/superpowers/specs/2026-07-10-context-harness-deepening-design.md`。
+
+## Task 7 Mock Eval Cases 与文档补充
+
+本阶段新增三个固定 mock eval case，用来展示 Context Harness Deepening 不是只存在于单元测试中，而是可以通过 CLI 复现并留下 evidence：
+
+- `retrieval-context-select`：展示 `rag-select` 对任务相关说明文档的检索，并在 evidence 中记录来源、行号、命中词和选择原因。
+- `context-compression-lifecycle`：展示 `compressed-rag` 在大工具结果出现后的压缩证据，并保留关键约束。
+- `isolation-role-boundary`：展示 `isolated-harness` 的 planner / implementer / reviewer 角色隔离证据，同时不改变既有权限执行路径。
+
+这些 case 均使用 MockLLM / StubLLM，真实 LLM 仍然只作为后续可选人工实验，不作为核心验收条件。

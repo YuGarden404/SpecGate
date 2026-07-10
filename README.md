@@ -191,6 +191,37 @@ Lab 9-12 的取舍记录见 `docs/AI4SE_Lab_9_12_Alignment.md`。当前结论是
 
 Lab 11 Hook 已补充为可选示例：`hooks/pre-commit.sample`。它用于提交前疑似密钥扫描、demo 必要文件检查和测试提示，不会自动安装，也不是 SpecGate runtime 的一部分。
 
+## Context Harness Deepening
+
+这一阶段继续沿着 Context Engineering 和 Harness Engineering 深入，但核心验收仍然使用 MockLLM / StubLLM，不需要真实 API key。
+
+新增策略包括：
+
+- `rag-select`：从 workspace 文本文件中检索相关片段，并把来源、行号、命中词和选择原因写入 evidence。
+- `compressed-rag`：在检索基础上压缩运行反馈，清理大体积 tool result，并把关键约束放在上下文末尾。
+- `isolated-harness`：在压缩检索基础上渲染 planner / implementer / reviewer 的角色上下文隔离证据。
+- `benchmark`：固定 mock eval cases，对比不同 harness strategy，而不是比较真实 LLM 性能。
+
+常用命令：
+
+```powershell
+$env:PYTHONPATH="src"
+python -m specgate.cli eval examples/eval_cases --context-strategy rag-select
+python -m specgate.cli eval examples/eval_cases --context-strategy compressed-rag
+python -m specgate.cli eval examples/eval_cases --context-strategy isolated-harness
+python -m specgate.cli benchmark examples/eval_cases --strategies baseline rag-select compressed-rag isolated-harness
+```
+
+benchmark 会写入：
+
+```text
+examples/eval_cases/eval-runs/latest/benchmark.json
+examples/eval_cases/eval-runs/latest/results.json
+examples/eval_cases/eval-runs/latest/results-<strategy>.json
+```
+
+`examples/eval_cases/eval-runs/` 是本地运行产物，不应提交到 Git。
+
 ## Docker
 
 ```powershell

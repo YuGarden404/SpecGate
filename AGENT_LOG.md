@@ -614,6 +614,39 @@
 
 ## 2026-07-10 23:50:00 +08:00
 
+## 2026-07-10 Task 7 Mock Eval Cases and Documentation
+
+- Task: 补充 Context Harness Deepening 的 mock eval cases 与说明文档。
+- Branch: `feat-context-harness-deepening`
+- Superpowers:
+  - 继续使用 `subagent-driven-development` 主流程。
+  - 保持 mock/stub LLM 为核心验收路径。
+- 新增样例:
+  - `examples/eval_cases/retrieval-context-select`
+  - `examples/eval_cases/context-compression-lifecycle`
+  - `examples/eval_cases/isolation-role-boundary`
+- 文档更新:
+  - `README.md`
+  - `SPEC.md`
+  - `PLAN.md`
+  - `SPEC_PROCESS.md`
+  - `AGENT_LOG.md`
+- 验证计划:
+  - `python -m specgate.cli eval examples/eval_cases --context-strategy rag-select`
+  - `python -m specgate.cli eval examples/eval_cases --context-strategy compressed-rag`
+  - `python -m specgate.cli eval examples/eval_cases --context-strategy isolated-harness`
+  - `python -m specgate.cli benchmark examples/eval_cases --strategies baseline rag-select compressed-rag isolated-harness`
+- Review 结果:
+  - 规格审查发现 `examples/eval_cases/eval-runs/` 是运行产物，需要避免误提交。
+  - 质量审查建议将文档措辞从“验证策略能力”收窄为“展示/记录 evidence”。
+  - 已在 `.gitignore` 增加 `examples/eval_cases/eval-runs/`，并同步修正文档说明。
+- 验证结果:
+  - `rag-select`: `cases=7, expected_matches=7`
+  - `compressed-rag`: `cases=7, expected_matches=7`
+  - `isolated-harness`: `cases=7, expected_matches=7`
+  - `benchmark`: `strategies=4, cases=7`
+  - `python -m unittest discover -s tests -v`: `Ran 190 tests ... OK`
+
 - Task：编写 `Context Harness Deepening` 实现计划。
 - Skill/process：
   - 使用 Superpowers `writing-plans`。

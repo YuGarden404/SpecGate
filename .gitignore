@@ -11,6 +11,7 @@ htmlcov/
 runs/
 memory.json
 reports/latest/
+examples/eval_cases/eval-runs/
 !examples/knowledge_nav/reports/
 !examples/knowledge_nav/reports/latest/
 !examples/knowledge_nav/reports/latest/index.html

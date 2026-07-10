@@ -200,6 +200,30 @@ Python CLI harness + mock LLM + 静态 HTML 生成/修复
 
 ## 2026-07-10 Context Harness Deepening 计划记录
 
+## 2026-07-10 Task 7 Mock Eval Cases 过程记录
+
+Task 7 将前面已经实现的 Select、Compress、Isolate、Benchmark 机制落到可复现的 mock eval cases 上。新增 case 均不依赖真实 LLM、网络、向量库或外部 agent runner。
+
+新增样例：
+
+- `examples/eval_cases/retrieval-context-select`
+- `examples/eval_cases/context-compression-lifecycle`
+- `examples/eval_cases/isolation-role-boundary`
+
+文档同步更新 `README.md`、`SPEC.md`、`PLAN.md`、`SPEC_PROCESS.md` 和 `AGENT_LOG.md`。核心原则保持不变：真实 LLM 只作为后续可选人工实验，课程验收以 mock/stub LLM 和确定性测试为准。
+
+Task 7 审查与修正：
+- 规格审查确认三个新增 case 和文档基本满足要求，但指出 `examples/eval_cases/eval-runs/` 运行产物需要防误提交。
+- 质量审查确认新增 case 均走 `MockLLM`，不依赖网络或真实 LLM；同时建议把“验证策略能力”的措辞收窄为“展示/记录 evidence”。
+- 已在 `.gitignore` 增加 `examples/eval_cases/eval-runs/`，并更新 README / SPEC 对运行产物和 evidence 的说明。
+
+Task 7 验证结果：
+- `python -m specgate.cli eval examples/eval_cases --context-strategy rag-select`：`cases=7, expected_matches=7`
+- `python -m specgate.cli eval examples/eval_cases --context-strategy compressed-rag`：`cases=7, expected_matches=7`
+- `python -m specgate.cli eval examples/eval_cases --context-strategy isolated-harness`：`cases=7, expected_matches=7`
+- `python -m specgate.cli benchmark examples/eval_cases --strategies baseline rag-select compressed-rag isolated-harness`：`strategies=4, cases=7`
+- `python -m unittest discover -s tests -v`：`Ran 190 tests ... OK`
+
 在规格确认后，使用 Superpowers `writing-plans` 将大工程拆分为 8 个可执行任务。计划保存到 `docs/superpowers/plans/2026-07-10-context-harness-deepening.md`，并同步在根目录 `PLAN.md` 追加摘要。
 
 计划设计原则：

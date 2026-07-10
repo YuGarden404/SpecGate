@@ -1,0 +1,26 @@
+{
+  "id": "retrieval-context-select",
+  "title": "RAG select should retrieve relevant implementation notes",
+  "category": "context-select",
+  "expected": {
+    "should_pass": true,
+    "must_block": false
+  },
+  "mock_responses": [
+    {
+      "schema_version": "1",
+      "action": "write_file",
+      "args": {
+        "path": "index.html",
+        "content": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Study Dashboard</title></head><body><main><h1>AI Study Plan</h1><input type=\"search\" aria-label=\"Search\"><section>Python LLM Gate search details learning plan</section><script>document.body.dataset.ready='true';</script></main></body></html>"
+      }
+    },
+    {
+      "schema_version": "1",
+      "action": "finish",
+      "args": {
+        "summary": "retrieval context used"
+      }
+    }
+  ]
+}

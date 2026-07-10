@@ -2036,6 +2036,16 @@ SPEC 覆盖：
 - 测试命令统一使用 `$env:PYTHONPATH="src"` 和 `python -m unittest`。
 # 2026-07-10 Context Harness Deepening Implementation Plan
 
+## Task 7 Mock Eval Cases and Documentation
+
+本任务补充三个 mock-first eval case：
+
+1. `retrieval-context-select`：用于 `rag-select` 检索相关 implementation notes。
+2. `context-compression-lifecycle`：用于 `compressed-rag` 展示 tool-result clearing 和关键约束保留。
+3. `isolation-role-boundary`：用于 `isolated-harness` 展示 role context/state isolation evidence。
+
+同步更新 `README.md`、`SPEC.md`、`PLAN.md`、`SPEC_PROCESS.md` 和 `AGENT_LOG.md`，明确本阶段仍以 mock/stub LLM 作为核心验收路径，真实 LLM 实验继续后置。
+
 本轮新增的正式实现计划见：
 
 `docs/superpowers/plans/2026-07-10-context-harness-deepening.md`
