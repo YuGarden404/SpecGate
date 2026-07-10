@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 from pathlib import Path
 
@@ -36,10 +37,12 @@ def _render_selected_files(selection: ContextSelection, strategy: str = "baselin
         if item.status not in {"selected", "truncated"}:
             continue
         if strategy == "injection-safe":
+            escaped_path = html.escape(item.path, quote=True)
+            escaped_content = html.escape(item.content)
             blocks.append(
-                f'### {item.path}\n'
-                f'<untrusted_data name="{item.path}">\n'
-                f"{item.content}\n"
+                f"### {escaped_path}\n"
+                f'<untrusted_data name="{escaped_path}">\n'
+                f"{escaped_content}\n"
                 "</untrusted_data>"
             )
         else:
@@ -73,11 +76,35 @@ def _compress_payload(value: object, limit: int = 420) -> object:
     return value
 
 
+def _select_compressed_events(events: list[dict], limit: int = 5) -> list[dict]:
+    selected_indexes: set[int] = set()
+
+    def remember_latest(predicate) -> None:
+        for index in range(len(events) - 1, -1, -1):
+            if predicate(events[index]):
+                selected_indexes.add(index)
+                return
+
+    remember_latest(lambda event: event.get("type") == "parse_error")
+    remember_latest(
+        lambda event: event.get("type") == "tool_result"
+        and (event.get("blocked") is True or event.get("result", {}).get("blocked") is True)
+    )
+    remember_latest(lambda event: event.get("type") == "gate_result")
+
+    for index in range(len(events) - 1, -1, -1):
+        if len(selected_indexes) >= limit:
+            break
+        selected_indexes.add(index)
+
+    return [events[index] for index in sorted(selected_indexes)]
+
+
 def _render_runtime_feedback(events: list[dict] | None, strategy: str = "baseline") -> str:
     if not events:
         return "No runtime feedback yet."
     lines: list[str] = []
-    selected_events = events[-5:] if strategy == "baseline" else events[-3:]
+    selected_events = events[-5:] if strategy == "baseline" else _select_compressed_events(events)
     for event in selected_events:
         payload_obj = event if strategy == "baseline" else _compress_payload(event)
         payload = json.dumps(payload_obj, ensure_ascii=False, sort_keys=True)
