@@ -141,6 +141,21 @@ class EvalRunnerExecutionTests(unittest.TestCase):
             self.assertEqual(data["results"][0]["context_chars_max"], suite.results[0].context_chars_max)
             self.assertGreater(data["results"][0]["context_chars_max"], 0)
 
+    def test_direct_finish_counts_failed_final_gate_without_gate_trace_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._case_dir(root, "direct-finish")
+            responses = {
+                "direct-finish": [
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "done"}}
+                ]
+            }
+
+            suite = run_eval_suite(root, strategy="baseline", scripted_responses=responses)
+
+            self.assertFalse(suite.results[0].passed)
+            self.assertEqual(suite.results[0].gate_failures, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -148,6 +148,8 @@ def run_eval_suite(
             parse_errors, blocked_actions, gate_failures = _count_trace_events(
                 workspace / "runs" / "latest" / "trace.jsonl"
             )
+            if run_result.final_gate and not run_result.final_gate.passed and gate_failures == 0:
+                gate_failures = 1
 
             expected_passed = case.expected_should_pass
             expected_match = expected_passed is None or expected_passed == run_result.passed
