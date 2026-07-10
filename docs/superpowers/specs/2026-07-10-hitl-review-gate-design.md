@@ -1,110 +1,110 @@
-# HITL Review Gate Design
+# HITL 审批门设计
 
-## Background
+## 背景
 
-SpecGate already has the core pieces of a small Coding Agent Harness: an agent loop, strict JSON actions, a policy layer, file tools, Gate feedback, trace output, eval cases, real-LLM compatibility, and a governance metrics layer.
+SpecGate 现在已经具备一个小型 Coding Agent Harness 的核心结构：agent 主循环、严格 JSON action、策略层、文件工具、Gate 反馈、trace 输出、eval cases、真实 LLM 兼容接口，以及治理指标层。
 
-The latest governance metrics work makes runs auditable after the fact. It records what the agent tried to do, whether tool calls succeeded or were blocked, and whether the final result is trusted, warning, or failed. The next step should make governance active before execution, not only visible after execution.
+上一阶段的治理指标工作解决了“事后可审计”的问题。它能记录 agent 试图做什么、工具调用是否成功或被阻断，以及最终结果是 `trusted`、`warning` 还是 `failed`。下一阶段应该把治理从“事后可见”推进到“执行前生效”。
 
-This stage adds a Human-in-the-loop (HITL) Review Gate. The harness classifies actions by risk. Safe actions can execute automatically. Blocked actions are denied. Review actions are paused and written to a pending approval queue instead of being executed.
+本阶段加入 Human-in-the-loop（HITL）审批门。Harness 会对 action 做风险分级：安全动作可以自动执行，硬性违规动作直接拒绝，需要人工判断的动作会暂停并写入待审批队列，而不是直接执行。
 
-This keeps SpecGate focused on Harness Engineering rather than model benchmarking. The LLM proposes actions, but the harness owns the final decision about whether an action may mutate the workspace.
+这能让 SpecGate 继续聚焦 Harness Engineering，而不是变成模型排行榜。LLM 只负责提出 action，是否允许这个 action 修改工作区，由 harness 决定。
 
-## Product Goal
+## 产品目标
 
-Build a deterministic review gate for SpecGate so a run can answer:
+为 SpecGate 构建一个确定性的审批门，让每次运行都能回答：
 
-1. Which actions were safe enough to execute automatically?
-2. Which actions were blocked by hard policy?
-3. Which actions required human review and were therefore not executed?
-4. What evidence should a human reviewer inspect before approving or denying the action?
+1. 哪些动作足够安全，可以自动执行？
+2. 哪些动作被硬性策略阻断？
+3. 哪些动作需要人工审批，因此没有自动执行？
+4. 人类 reviewer 在批准或拒绝动作前，需要查看哪些证据？
 
-The first implementation is intentionally non-interactive inside the agent loop. It records pending approvals and stops the risky action from executing. A later stage can add resume-after-approval.
+第一版刻意不在 agent 主循环里做交互式审批。它只负责记录 pending approval，并阻止高风险动作执行。审批后恢复执行留到后续阶段。
 
-## Research Question
+## 研究问题
 
-This stage answers a harness-level question:
+本阶段回答一个 harness 层面的研究问题：
 
-> Can a small coding-agent harness enforce reversible vs irreversible action boundaries deterministically, independent of model quality?
+> 一个小型 coding-agent harness 能否用确定性代码机制，强制区分可逆动作和不可逆动作，而不依赖模型质量？
 
-The expected answer is demonstrated with MockLLM tests. A mock model can request safe writes, blocked writes, and review-required actions. The harness should produce stable approval decisions without depending on a real model's judgement.
+预期答案通过 MockLLM 测试证明。mock 模型可以请求安全写入、违规写入、需要审批的动作。Harness 应该稳定地产生审批决策，不依赖真实模型自己的判断能力。
 
-## Scope
+## 范围
 
-### Included
+### 本阶段包含
 
-- A deterministic action risk classifier.
-- A `review` governance profile that turns review-classified actions into pending approvals.
-- A structured pending approval data model.
-- A persisted approval queue under the run artifact directory.
-- Trace events for approval requests.
-- Report sections that show pending approvals and review-required actions.
-- CLI command to list pending approvals for a workspace.
-- MockLLM-driven tests for safe, blocked, and review-required actions.
-- Eval/result fields that expose pending approval counts.
+- 确定性的 action 风险分类器。
+- `review` governance profile：把需要审批的 action 转成 pending approval。
+- 结构化 pending approval 数据模型。
+- 在运行产物目录下持久化审批队列。
+- 为审批请求写入 trace event。
+- 在报告中展示 pending approvals 和 review-required actions。
+- 增加 CLI 命令，用于查看某个 workspace 的待审批项。
+- 使用 MockLLM 测试 safe、blocked、review 三类动作。
+- 在 eval/result 字段中暴露 pending approval 数量。
 
-### Excluded
+### 本阶段不包含
 
-- No interactive terminal prompt inside the agent loop.
-- No automatic resume after approval in this stage.
-- No shell execution tool.
-- No browser UI for approval.
-- No external database.
-- No network dependency in tests.
-- No weakening of existing path allowlists, snapshot checks, or secret redaction.
+- 不做 agent 主循环里的交互式终端询问。
+- 不做审批后自动恢复执行。
+- 不增加 shell 执行工具。
+- 不做审批 Web UI。
+- 不引入外部数据库。
+- 测试不依赖网络。
+- 不削弱现有 path allowlist、snapshot 检查和 secret redaction。
 
-## Concepts
+## 核心概念
 
-### Risk Level
+### 风险等级
 
-Every parsed action is classified into one of three levels:
+每个解析后的 action 会被分类为三种风险等级之一：
 
-- `safe`: the action can execute automatically if it also passes existing policy checks.
-- `review`: the action should not execute automatically in the `review` profile. It is persisted as a pending approval.
-- `blocked`: the action is denied regardless of profile.
+- `safe`：如果同时通过现有 policy 检查，可以自动执行。
+- `review`：在 `review` profile 下不能自动执行，需要写入 pending approval。
+- `blocked`：无论 profile 是什么，都直接拒绝。
 
-The risk level is separate from the existing policy allowlist. A path can be allowed by policy but still require review because the action is irreversible or targets a protected file.
+风险等级和现有 policy allowlist 是两层机制。一个路径可以被 policy 允许，但仍然因为动作不可逆或目标文件敏感而需要人工审批。
 
-### Governance Profile
+### 治理 Profile
 
-Existing profiles remain:
+现有 profile 继续保留：
 
-- `strict`: hard policy enforcement. Review-classified actions are blocked.
-- `demo`: same enforcement as `strict`, with classroom-friendly reporting.
-- `review`: review-classified actions produce pending approvals and do not execute.
+- `strict`：硬性策略执行。需要审批的动作在该 profile 下按阻断处理。
+- `demo`：执行语义和 `strict` 相同，但报告表述更适合课堂演示。
+- `review`：需要审批的动作会生成 pending approval，并且不会执行。
 
-The important behavior change is in `review`: the harness distinguishes "needs a human" from "hard denied".
+关键变化在 `review`：harness 能区分“需要人类判断”和“硬性拒绝”。
 
-### Pending Approval
+### 待审批项
 
-A pending approval is a durable record of a requested action that the harness refused to execute automatically. It includes:
+Pending approval 是一条持久化记录，表示模型请求了一个 harness 不允许自动执行的动作。字段包括：
 
-- `id`: stable deterministic identifier for this run and step.
-- `step`: agent loop step number.
-- `action`: action name.
-- `path`: target path when present.
-- `risk_level`: normally `review`.
-- `reason`: human-readable review reason.
-- `profile`: governance profile that produced the decision.
-- `arguments_preview`: redacted action arguments.
-- `status`: initially `pending`.
-- `created_at`: ISO timestamp if available; tests may use deterministic construction without asserting exact wall time.
+- `id`：在本次 run 和 step 内稳定生成的标识。
+- `step`：agent 主循环步数。
+- `action`：动作名。
+- `path`：如果 action 有目标路径，则记录目标路径。
+- `risk_level`：通常为 `review`。
+- `reason`：给人看的审批原因。
+- `profile`：触发该决策的 governance profile。
+- `arguments_preview`：经过 redaction 的 action 参数预览。
+- `status`：第一版固定为 `pending`。
+- `created_at`：ISO 时间戳；测试可以不断言具体时间。
 
-The first implementation only creates and lists pending approvals. It does not approve, deny, or resume them.
+第一版只创建和查看 pending approvals，不做批准、拒绝或 resume。
 
-### Review Rules
+### 审批规则
 
-Initial deterministic rules:
+第一版采用确定性规则：
 
-- `write_file` to an ordinary allowed task artifact is `safe`.
-- `replace_file` is `review` when the target already exists and matches a configured review path.
-- `delete_file` is `review` if the action exists in the registry later; if unsupported today, it remains blocked as an unknown action.
-- Any action targeting `.env`, paths outside the workspace, or disallowed policy paths is `blocked`.
-- Any unknown action is `blocked`.
+- `write_file` 写普通允许范围内的任务产物，分类为 `safe`。
+- `replace_file` 如果目标已存在，且命中配置的 review path，分类为 `review`。
+- `delete_file` 如果以后进入工具注册表，则分类为 `review`；如果当前还不支持，则仍按 unknown action 阻断。
+- 任何指向 `.env`、workspace 外部路径、policy 不允许路径的 action，分类为 `blocked`。
+- 任何 unknown action，分类为 `blocked`。
 
-The first version should support configurable review paths and review actions through `specgate.toml`.
+第一版需要支持在 `specgate.toml` 中配置 review paths 和 review actions。
 
-Example:
+示例：
 
 ```toml
 [governance]
@@ -114,13 +114,13 @@ review_paths = ["README.md", "src/**"]
 blocked_paths = [".env", "../*"]
 ```
 
-If no governance config is present, the existing default behavior should remain conservative.
+如果没有 governance 配置，默认行为必须保持保守。
 
-## Architecture
+## 架构设计
 
-### New Module: `specgate.approvals`
+### 新模块：`specgate.approvals`
 
-This module owns review gate data structures and pure classification helpers:
+该模块负责审批门的数据结构和纯分类逻辑：
 
 - `RiskLevel`
 - `ApprovalStatus`
@@ -129,22 +129,22 @@ This module owns review gate data structures and pure classification helpers:
 - `ApprovalQueue`
 - `classify_action_risk(action, policy, governance_config) -> ActionRisk`
 
-The module should keep file IO small and explicit. Pure classification must be unit-testable without touching the filesystem.
+文件 IO 要保持小而明确。纯分类逻辑必须能在不接触文件系统的情况下单元测试。
 
-### Config Integration
+### 配置集成
 
-The existing config loader should parse optional governance fields:
+现有 config loader 需要解析可选的 governance 字段：
 
 - `profile`
 - `review_actions`
 - `review_paths`
 - `blocked_paths`
 
-Missing fields should default to empty lists plus the existing default profile. Invalid profile names should fail closed, following the current CLI behavior.
+缺失字段使用空列表和现有默认 profile。无效 profile 必须 fail closed，和当前 CLI 行为保持一致。
 
-### Runner Integration
+### Runner 集成
 
-`AgentRunner` remains the owner of the agent loop. The runner should insert a review decision point after action parsing and before mutation:
+`AgentRunner` 继续负责 agent 主循环。Runner 在 action parse 之后、实际修改文件之前插入 review decision point：
 
 ```text
 parse action
@@ -155,17 +155,17 @@ parse action
   -> if safe: dispatch tool normally
 ```
 
-The model should receive feedback when an action is routed to review, similar to existing blocked-tool feedback. That allows a following step to choose a safer action.
+当 action 进入 review 队列时，模型应该收到类似 blocked-tool 的反馈。这样下一步它可以选择更安全的 action。
 
-### Approval Queue Storage
+### 审批队列存储
 
-Pending approvals should be stored in:
+Pending approvals 存储在：
 
 ```text
 runs/latest/pending_approvals.json
 ```
 
-The JSON shape should be stable and human-readable:
+JSON 结构应该稳定、可读：
 
 ```json
 {
@@ -185,62 +185,65 @@ The JSON shape should be stable and human-readable:
 }
 ```
 
-The queue belongs to a run artifact, not long-term memory. It should be reset for each run, just like the latest trace.
+审批队列属于 run artifact，不属于长期记忆。它应该像 latest trace 一样，每次 run 重置。
 
-### Trace and Metrics
+### Trace 和 Metrics
 
-Trace gains an `approval_requested` event with the pending approval payload. Existing `permission_decision` and `run_summary` events should continue to exist.
+Trace 增加 `approval_requested` event，内容为 pending approval payload。已有的 `permission_decision` 和 `run_summary` event 继续保留。
 
-Metrics should gain:
+Metrics 增加：
 
 - `approval_requests`
 - `pending_approvals`
 
-Trust summary should classify a run with pending approvals as `warning` when the final Gate passes and `failed` when the run cannot complete because the requested action was required for success.
+Trust summary 规则：
+
+- 如果最终 Gate 通过，但存在 pending approvals，状态为 `warning`。
+- 如果因为必需动作进入 pending approval 导致运行无法完成，状态为 `failed`。
 
 ### CLI
 
-Add a small command group:
+增加一个小命令组：
 
 ```powershell
 python -m specgate.cli approvals list <workspace>
 ```
 
-The command reads `runs/latest/pending_approvals.json` and prints a compact table:
+该命令读取 `runs/latest/pending_approvals.json` 并打印简洁表格：
 
 ```text
 ID              STATUS    ACTION        PATH       REASON
 approval-step-2 pending   replace_file  README.md  replace_file on protected path requires human review
 ```
 
-If no queue exists, it should print a clear "no pending approvals" message and exit successfully.
+如果队列不存在，输出清晰的 “no pending approvals” 信息，并以成功状态退出。
 
-Approval and denial commands are intentionally excluded from this stage because they imply resume semantics. They should be designed after the pending queue is stable.
+本阶段刻意不加入 approve 和 deny 命令，因为它们会引入 resume 语义。等 pending queue 稳定后再单独设计。
 
 ### Report
 
-The static report should add a `Pending Approvals` section showing:
+静态报告增加 `Pending Approvals` 区块，展示：
 
-- count
+- 数量
 - id
 - status
 - action
 - path
 - reason
 
-Dynamic fields must be HTML-escaped, following the governance report escaping fix already added in the previous branch.
+所有动态字段必须 HTML escape，沿用上一阶段治理报告转义修复的原则。
 
 ### Eval Runner
 
-Eval results should include:
+Eval 结果增加：
 
 - `approval_requests`
 - `pending_approvals`
 - `trust_status`
 
-The console summary can stay compact. Detailed approval data belongs in `results.json` and case workspaces when `--save-workspaces` is used.
+控制台摘要可以保持简洁。详细审批数据写入 `results.json`；如果使用 `--save-workspaces`，case workspace 中也应保留相关产物。
 
-## Data Flow
+## 数据流
 
 ```text
 LLM output
@@ -255,76 +258,76 @@ LLM output
   -> Gate/report/trace/eval summaries
 ```
 
-## Error Handling
+## 错误处理
 
-- Malformed approval queue JSON should produce a readable CLI error without traceback.
-- Unknown governance profile should fail closed during config/CLI parsing.
-- Unsupported approval commands should not be added prematurely.
-- Review-required actions must never partially mutate the target file.
-- Secrets in action arguments must pass through existing redaction before trace/report storage.
-- If queue persistence fails, the risky action must remain unexecuted and the run should be marked failed or warning with a clear reason.
+- malformed approval queue JSON 应该产生可读 CLI 错误，不打印 traceback。
+- unknown governance profile 应该在 config/CLI parsing 阶段 fail closed。
+- 不提前增加未设计完成的 approve/deny 命令。
+- review-required action 绝不能部分修改目标文件。
+- action 参数中的 secret 必须经过现有 redaction 后才能进入 trace/report。
+- 如果审批队列持久化失败，高风险动作仍然不能执行，并且 run 应标记为 failed 或 warning，原因要清楚。
 
-## Testing Strategy
+## 测试策略
 
-All core tests use MockLLM or direct unit inputs. No real LLM or network call is required.
+所有核心测试使用 MockLLM 或直接构造输入，不依赖真实 LLM 或网络。
 
-Unit tests:
+单元测试：
 
 - `tests/test_approvals.py`
-  - classifies ordinary allowed write as `safe`.
-  - classifies protected replace as `review`.
-  - classifies `.env` or path escape as `blocked`.
-  - serializes and loads `PendingApproval` records.
+  - 普通允许写入分类为 `safe`。
+  - protected replace 分类为 `review`。
+  - `.env` 或 path escape 分类为 `blocked`。
+  - 可以序列化和加载 `PendingApproval`。
 
-Runner tests:
+Runner 测试：
 
-- review profile records pending approval and does not mutate protected file.
-- strict profile blocks the same action instead of creating approval.
-- safe write still executes and can pass Gate.
-- review feedback reaches the next context.
+- `review` profile 记录 pending approval，且不修改 protected file。
+- `strict` profile 下，同一 action 被阻断，而不是创建 approval。
+- safe write 仍然正常执行，并能通过 Gate。
+- review feedback 会进入下一轮 context。
 
-CLI tests:
+CLI 测试：
 
-- `approvals list` prints no pending approvals when queue is missing.
-- `approvals list` prints pending approval rows when queue exists.
-- malformed queue produces a clean error.
+- `approvals list` 在队列缺失时输出 no pending approvals。
+- `approvals list` 在队列存在时输出 pending approval 行。
+- malformed queue 产生干净错误。
 
-Report tests:
+Report 测试：
 
-- report includes `Pending Approvals`.
-- report escapes dynamic approval fields.
+- report 包含 `Pending Approvals`。
+- report 会转义 approval 动态字段。
 
-Eval tests:
+Eval 测试：
 
-- eval result includes approval counts.
-- saved workspace includes `runs/latest/pending_approvals.json` for review cases.
+- eval result 包含 approval counts。
+- review case 在 `--save-workspaces` 下保留 `runs/latest/pending_approvals.json`。
 
-## Acceptance Criteria
+## 验收标准
 
-- A MockLLM run can deterministically produce a pending approval without mutating the protected target.
-- A blocked action remains blocked and is not mislabeled as review.
-- A safe action still follows the existing dispatch path.
-- `runs/latest/pending_approvals.json` is written for review-required actions.
-- `python -m specgate.cli approvals list <workspace>` can display pending approvals.
-- Trace, report, metrics, and eval outputs include approval evidence.
-- The full unit test suite passes without network access.
+- MockLLM run 能确定性地产生 pending approval，且不会修改 protected target。
+- blocked action 保持 blocked，不会被错误标成 review。
+- safe action 仍走现有 dispatch 路径。
+- review-required action 会写入 `runs/latest/pending_approvals.json`。
+- `python -m specgate.cli approvals list <workspace>` 可以展示 pending approvals。
+- Trace、report、metrics、eval 输出都包含审批证据。
+- 完整单元测试套件在无网络环境下通过。
 
-## Follow-up Work
+## 后续工作
 
-After this stage, a separate design should cover:
+本阶段结束后，可以单独设计：
 
 - `approvals approve`
 - `approvals deny`
-- resume-after-approval
-- signed approval records
-- WebUI approval view
-- session replay or checkpoint restore
+- 审批后恢复执行
+- 签名审批记录
+- WebUI 审批视图
+- session replay 或 checkpoint restore
 
-Those features are intentionally outside this spec so the current branch stays focused on deterministic review gating.
+这些功能刻意不放进本 spec，避免当前分支范围失控。
 
-## Spec Self-Review
+## Spec 自审
 
-- Placeholder scan: no unfinished placeholder markers remain.
-- Consistency check: the design treats pending approval as non-executing evidence, not as approval/resume.
-- Scope check: the stage is limited to queue creation, listing, trace/report/eval evidence, and deterministic tests.
-- Ambiguity check: `review` is distinct from `blocked`; neither path mutates the workspace.
+- 占位符检查：没有未完成占位标记。
+- 一致性检查：本设计把 pending approval 定义为“不执行的证据记录”，不是 approval/resume。
+- 范围检查：本阶段限定在队列创建、查看、trace/report/eval 证据，以及确定性测试。
+- 歧义检查：`review` 和 `blocked` 明确区分，二者都不会修改 workspace。
