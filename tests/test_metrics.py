@@ -22,6 +22,7 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(classify_rule_family("unknown tool: shell"), "tool")
         self.assertEqual(classify_rule_family("tool call rejected"), "tool")
         self.assertEqual(classify_rule_family("finish requested"), "none")
+        self.assertEqual(classify_rule_family("model not allowed by provider"), "none")
 
     def test_run_metrics_has_complete_defaults_and_to_dict(self):
         metrics = RunMetrics()
@@ -58,10 +59,22 @@ class MetricsTests(unittest.TestCase):
             max_steps_reached=True,
         )
 
-        self.assertEqual(metrics.to_dict()["context_chars_max"], 4096)
-        self.assertEqual(metrics.to_dict()["parse_errors"], 2)
-        self.assertEqual(metrics.to_dict()["gate_runs"], 2)
-        self.assertEqual(metrics.to_dict()["gate_failures"], 1)
+        self.assertEqual(
+            metrics.to_dict(),
+            {
+                "steps": 7,
+                "context_chars_max": 4096,
+                "llm_calls": 6,
+                "tool_calls": 5,
+                "successful_tool_calls": 4,
+                "blocked_actions": 3,
+                "parse_errors": 2,
+                "gate_runs": 2,
+                "gate_failures": 1,
+                "finish_actions": 1,
+                "max_steps_reached": True,
+            },
+        )
 
     def test_permission_decision_from_tool_result_shape(self):
         decision = PermissionDecision(
@@ -124,6 +137,12 @@ class MetricsTests(unittest.TestCase):
         )
 
         trust = build_trust_summary(True, metrics)
+
+        self.assertEqual(trust.status, "trusted")
+        self.assertEqual(trust.reasons, ["clean_finish"])
+
+    def test_trusted_summary_uses_final_gate_verdict_not_historical_failures(self):
+        trust = build_trust_summary(True, RunMetrics(finish_actions=1, gate_failures=1))
 
         self.assertEqual(trust.status, "trusted")
         self.assertEqual(trust.reasons, ["clean_finish"])

@@ -51,7 +51,7 @@ def classify_rule_family(reason: str) -> str:
         return "action"
     if "path escapes" in lowered or "path must" in lowered or "missing required path" in lowered:
         return "path"
-    if "not allowed" in lowered:
+    if "write path not allowed" in lowered or "read path not allowed" in lowered:
         return "allowlist"
     if "changed since run started" in lowered or "snapshot" in lowered:
         return "snapshot"
@@ -60,10 +60,14 @@ def classify_rule_family(reason: str) -> str:
     return "none"
 
 
-def build_trust_summary(gate_passed: bool, metrics: RunMetrics) -> TrustSummary:
+def build_trust_summary(final_gate_passed: bool, metrics: RunMetrics) -> TrustSummary:
+    """Build final trust status.
+
+    gate_failures is historical repair evidence; final_gate_passed is the final artifact verdict.
+    """
     reasons: list[str] = []
 
-    if not gate_passed:
+    if not final_gate_passed:
         reasons.append("gate_failed")
     if metrics.max_steps_reached:
         reasons.append("max_steps_reached")
