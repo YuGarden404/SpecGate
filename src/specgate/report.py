@@ -127,7 +127,7 @@ def generate_report(
 </head>
 <body>
   <h1>SpecGate Run Report</h1>
-  <p>Steps: {steps}</p>
+  <p>Steps: {escape(str(steps))}</p>
   <p>Gate: {escape(gate.summary)}</p>
   {trust_summary}
   {metrics_summary}

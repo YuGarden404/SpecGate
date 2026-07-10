@@ -56,35 +56,42 @@ class ReportTests(unittest.TestCase):
                 PermissionDecision(
                     step=2,
                     action="write_file",
-                    path=".env",
+                    path="<script>evil_path()</script>",
                     allowed=False,
                     blocked=True,
-                    reason="write path not allowed: .env",
-                    profile="review",
+                    reason="write path not allowed: <script>evil_reason()</script>",
+                    profile="<script>alert(1)</script>",
                     rule_family="allowlist",
                 )
             ]
-            trust = TrustSummary("warning", ["blocked_actions_present"])
+            trust = TrustSummary(
+                "<img src=x onerror=alert(1)>",
+                ["blocked_actions_present", "<img src=x onerror=alert(1)>"],
+            )
 
             output = generate_report(
                 root,
                 gate,
-                steps=2,
+                steps="<script>alert(2)</script>",  # type: ignore[arg-type]
                 metrics=metrics,
                 permission_decisions=decisions,
                 trust=trust,
-                profile="review",
+                profile="<script>alert(1)</script>",
             )
 
             html = output.read_text(encoding="utf-8")
             self.assertIn("Trust Summary", html)
-            self.assertIn("warning", html)
             self.assertIn("blocked_actions_present", html)
             self.assertIn("Run Metrics", html)
             self.assertIn("llm_calls", html)
             self.assertIn("Permission Decisions", html)
-            self.assertIn("write path not allowed: .env", html)
-            self.assertIn("review", html)
+            self.assertIn("&lt;script&gt;alert(2)&lt;/script&gt;", html)
+            self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+            self.assertIn("&lt;img src=x onerror=alert(1)&gt;", html)
+            self.assertIn("write path not allowed: &lt;script&gt;evil_reason()&lt;/script&gt;", html)
+            self.assertIn("&lt;script&gt;evil_path()&lt;/script&gt;", html)
+            self.assertNotIn("<script>", html)
+            self.assertNotIn("<img src=x onerror=alert(1)>", html)
 
 
 if __name__ == "__main__":
