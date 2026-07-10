@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from specgate.eval_runner import discover_eval_cases, run_eval_suite
+from specgate.llm import LLMProviderError
 
 
 class EvalRunnerDiscoveryTests(unittest.TestCase):
@@ -132,6 +133,11 @@ class EvalRunnerExecutionTests(unittest.TestCase):
             self.assertEqual(suite.expected_matches, 1)
             self.assertEqual(original_html, "draft")
             self.assertEqual((case / "index.html").read_text(encoding="utf-8"), "draft")
+            self.assertIsInstance(suite.results[0].tool_calls, int)
+            self.assertGreater(suite.results[0].tool_calls, 0)
+            self.assertIsInstance(suite.results[0].successful_tool_calls, int)
+            self.assertIsInstance(suite.results[0].gate_runs, int)
+            self.assertIn(suite.results[0].trust_status, {"trusted", "warning", "failed"})
 
             results_path = root / "eval-runs" / "latest" / "results.json"
             self.assertTrue(results_path.exists())
@@ -140,6 +146,9 @@ class EvalRunnerExecutionTests(unittest.TestCase):
             self.assertEqual(data["results"][0]["case_id"], "mock-case")
             self.assertEqual(data["results"][0]["context_chars_max"], suite.results[0].context_chars_max)
             self.assertGreater(data["results"][0]["context_chars_max"], 0)
+            self.assertIn("trust_status", data["results"][0])
+            self.assertIn("tool_calls", data["results"][0])
+            self.assertIn("gate_runs", data["results"][0])
 
     def test_direct_finish_counts_failed_final_gate_without_gate_trace_event(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -187,6 +196,147 @@ class EvalRunnerExecutionTests(unittest.TestCase):
             self.assertGreater(result.blocked_actions, 0)
             self.assertTrue(result.expected_match)
             self.assertEqual(suite.expected_matches, 1)
+
+    def test_run_eval_suite_accepts_llm_factory(self):
+        class FakeLLM:
+            def complete(self, context: str) -> str:
+                html = (
+                    "<!doctype html><html><head>"
+                    '<meta name="viewport" content="width=device-width, initial-scale=1">'
+                    "<title>Factory checklist page</title></head>"
+                    '<body><input type="search" aria-label="search">'
+                    "<main><h1>search</h1><section>detail checklist</section></main>"
+                    "</body></html>"
+                )
+                return json.dumps(
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": html},
+                    }
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._case_dir(root, "factory-case")
+            seen_cases = []
+
+            def llm_factory(case):
+                seen_cases.append(case.case_id)
+                return FakeLLM()
+
+            suite = run_eval_suite(root, strategy="baseline", llm_factory=llm_factory, max_steps=1)
+
+            self.assertEqual(seen_cases, ["factory-case"])
+            self.assertEqual(suite.total_cases, 1)
+            self.assertEqual(suite.passed_cases, 1)
+            self.assertEqual(suite.expected_matches, 1)
+
+    def test_run_eval_suite_uses_real_expected_with_llm_factory(self):
+        class FakeLLM:
+            def complete(self, context: str) -> str:
+                html = (
+                    "<!doctype html><html><head>"
+                    '<meta name="viewport" content="width=device-width, initial-scale=1">'
+                    "<title>Real expected page</title></head>"
+                    '<body><input type="search" aria-label="search">'
+                    "<main><h1>search</h1><section>detail checklist</section></main>"
+                    "</body></html>"
+                )
+                return json.dumps(
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": html},
+                    }
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = self._case_dir(root, "real-expected-case")
+            (case / "case.json").write_text(
+                json.dumps(
+                    {
+                        "id": "real-expected-case",
+                        "title": "Real expected case",
+                        "category": "generation",
+                        "expected": {"should_pass": False, "must_block": False},
+                        "real_expected": {"should_pass": True, "must_block": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            mock_suite = run_eval_suite(
+                root,
+                strategy="baseline",
+                scripted_responses={
+                    "real-expected-case": [
+                        {"schema_version": "1", "action": "finish", "args": {"summary": "mock failure"}}
+                    ]
+                },
+            )
+            real_suite = run_eval_suite(
+                root,
+                strategy="baseline",
+                llm_factory=lambda _case: FakeLLM(),
+                max_steps=1,
+            )
+
+            self.assertTrue(mock_suite.results[0].expected_match)
+            self.assertEqual(real_suite.results[0].expected_passed, True)
+            self.assertTrue(real_suite.results[0].expected_match)
+
+    def test_run_eval_suite_can_save_final_workspaces(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._case_dir(root, "saved-case")
+            html = (
+                "<!doctype html><html><head>"
+                '<meta name="viewport" content="width=device-width, initial-scale=1">'
+                "<title>Saved checklist page</title></head>"
+                '<body><input type="search" aria-label="search">'
+                "<main><h1>search</h1><section>detail checklist</section></main>"
+                "</body></html>"
+            )
+            responses = {
+                "saved-case": [
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": html},
+                    }
+                ]
+            }
+
+            suite = run_eval_suite(root, strategy="baseline", scripted_responses=responses, save_workspaces=True)
+
+            saved_workspace = root / "eval-runs" / "latest" / "workspaces" / "saved-case"
+            self.assertTrue((saved_workspace / "index.html").exists())
+            self.assertTrue((saved_workspace / "runs" / "latest" / "trace.jsonl").exists())
+            self.assertEqual(suite.results[0].workspace_path, "eval-runs/latest/workspaces/saved-case")
+
+    def test_failed_eval_does_not_delete_previous_saved_workspaces(self):
+        class FailingLLM:
+            def complete(self, context: str) -> str:
+                raise LLMProviderError("connection closed by provider")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._case_dir(root, "saved-case")
+            previous_workspace = root / "eval-runs" / "latest" / "workspaces" / "saved-case"
+            previous_workspace.mkdir(parents=True)
+            (previous_workspace / "index.html").write_text("previous artifact", encoding="utf-8")
+
+            with self.assertRaises(LLMProviderError):
+                run_eval_suite(
+                    root,
+                    strategy="baseline",
+                    llm_factory=lambda _case: FailingLLM(),
+                    save_workspaces=True,
+                )
+
+            self.assertEqual((previous_workspace / "index.html").read_text(encoding="utf-8"), "previous artifact")
 
 
 class EvalRunnerSecurityTests(unittest.TestCase):
