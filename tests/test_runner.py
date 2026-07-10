@@ -355,6 +355,14 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("approval-step-1", approval_queue_path(root).read_text(encoding="utf-8"))
             self.assertEqual(result.metrics.approval_requests, 1)
             self.assertEqual(result.metrics.pending_approvals, 1)
+            self.assertIsNotNone(result.permission_decisions)
+            self.assertGreaterEqual(len(result.permission_decisions), 1)
+            decision = result.permission_decisions[0]
+            self.assertEqual(decision.action, "replace_file")
+            self.assertFalse(decision.allowed)
+            self.assertFalse(decision.blocked)
+            self.assertIn("requires human review", decision.reason)
+            self.assertEqual(decision.profile, "review")
             self.assertEqual(result.trust.status, "warning")
             self.assertEqual(len(llm.contexts), 2)
             self.assertIn("approval_requested", llm.contexts[1])
@@ -362,6 +370,7 @@ class RunnerTests(unittest.TestCase):
                 json.loads(line)["event_type"]
                 for line in (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
             ]
+            self.assertIn("permission_decision", trace_events)
             self.assertIn("approval_requested", trace_events)
 
     def test_strict_profile_blocks_review_action_without_creating_approval(self):
@@ -370,23 +379,15 @@ class RunnerTests(unittest.TestCase):
             (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
             (root / "CHECKLIST.md").write_text("", encoding="utf-8")
             (root / "README.md").write_text("original", encoding="utf-8")
-            llm = MockLLM(
-                [
-                    {
-                        "schema_version": "1",
-                        "action": "replace_file",
-                        "args": {"path": "README.md", "content": "changed"},
-                    },
-                ]
-            )
-            policy = WorkspacePolicy(root, {"replace_file"}, {"TASK_SPEC.md"}, {"README.md"})
+            llm = ApprovalFeedbackLLM()
+            policy = WorkspacePolicy(root, {"replace_file", "finish"}, {"TASK_SPEC.md"}, {"README.md"})
             from specgate.approvals import GovernanceConfig, approval_queue_path
 
             result = AgentRunner(
                 root,
                 llm,
                 policy,
-                max_steps=1,
+                max_steps=2,
                 governance_profile="strict",
                 governance_config=GovernanceConfig(
                     profile="strict",
@@ -398,6 +399,11 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "original")
             self.assertFalse(approval_queue_path(root).exists())
             self.assertEqual(result.metrics.blocked_actions, 1)
+            self.assertEqual(len(llm.contexts), 2)
+            self.assertIn("Runtime Feedback", llm.contexts[1])
+            self.assertIn("tool_result", llm.contexts[1])
+            self.assertIn("blocked", llm.contexts[1])
+            self.assertIn("requires human review", llm.contexts[1])
             trace_events = [
                 json.loads(line)["event_type"]
                 for line in (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8").splitlines()

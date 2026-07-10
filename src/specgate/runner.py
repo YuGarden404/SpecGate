@@ -210,6 +210,14 @@ class AgentRunner:
                 )
                 queue = ApprovalQueue.read(queue_path).append(approval)
                 queue.write(queue_path)
+                record_permission_decision(
+                    step,
+                    action.action,
+                    action_path,
+                    ok=False,
+                    blocked=False,
+                    message=risk.reason,
+                )
                 metrics = replace(
                     metrics,
                     approval_requests=metrics.approval_requests + 1,
