@@ -584,3 +584,9 @@
   - 先用 MockLLM / StubLLM 完成确定性评估。
   - 不把真实 LLM 成功率作为核心验收；真实 LLM 只作为后续实验扩展。
   - 用 eval cases 比较 `baseline`、`compressed`、`injection-safe`，并把结果写入 `eval-runs/latest/results.json`。
+- 验证证据：
+  - `$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 通过，83 个测试 OK。
+  - `$env:PYTHONPATH='src'; python -m specgate.cli eval examples/eval_cases --context-strategy baseline` 通过，`cases=4, expected_matches=4`。
+  - `$env:PYTHONPATH='src'; python -m specgate.cli eval examples/eval_cases --context-strategy compressed` 通过，`cases=4, expected_matches=4`。
+  - `$env:PYTHONPATH='src'; python -m specgate.cli eval examples/eval_cases --context-strategy injection-safe` 通过，`cases=4, expected_matches=4`。
+  - Docker 人工验证：用户在本机 PowerShell 执行 `docker build -t specgate:context-eval .` 成功，`docker run --rm specgate:context-eval` 无报错，`docker run --rm specgate:context-eval python -m specgate.cli eval examples/eval_cases --context-strategy injection-safe` 输出 `SpecGate eval finished: strategy=injection-safe, cases=4, passed=0, expected_matches=4`。
