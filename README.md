@@ -118,7 +118,7 @@ python -m specgate.cli eval examples/eval_cases --context-strategy injection-saf
 examples/eval_cases/eval-runs/latest/results.json
 ```
 
-当前 eval 默认使用 MockLLM / StubLLM，不需要真实 API key。真实 LLM 评估只作为后续扩展，不作为确定性单元测试的前提。
+当前 eval 默认使用 MockLLM / StubLLM，不需要真实 API key。真实 LLM eval 是可选演示/人工实验能力，不作为确定性单元测试前提。
 
 ## 真实 LLM 运行
 
