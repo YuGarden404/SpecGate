@@ -662,3 +662,54 @@
   - `docs/superpowers/plans/2026-07-10-context-harness-deepening.md`
   - `PLAN.md` 追加计划摘要。
   - `SPEC_PROCESS.md` 追加计划记录。
+
+## 2026-07-10 Task 8 Final Review, Process Evidence, and Verification
+
+- Task 1: Lightweight Retrieval Core
+  - Subagent/process: subagent-driven development with spec and quality review.
+  - Spec review: approved after implementation.
+  - Code review: approved after implementation.
+  - Verification: retrieval/context tests and full suite passed during task execution.
+  - Commit: `526f54c`
+- Task 2: RAG Select Context Strategy
+  - Subagent/process: subagent-driven development with spec and quality review.
+  - Spec review: approved after implementation.
+  - Code review: approved after implementation.
+  - Verification: context strategy tests and full suite passed during task execution.
+  - Commit: `ac4842a`
+- Task 3: Retrieval Evidence in Trace, Metrics, Report, and Eval
+  - Subagent/process: subagent-driven development with spec and quality review.
+  - Spec review: approved after implementation.
+  - Code review: approved after implementation.
+  - Verification: runner/report/eval metrics tests and full suite passed during task execution.
+  - Commit: `5c6a51b`
+- Task 4: Deterministic Context Lifecycle Compression
+  - Subagent/process: subagent-driven development with spec and quality review.
+  - Spec review: approved after implementation.
+  - Code review: approved after implementation.
+  - Verification: context lifecycle tests and full suite passed during task execution.
+  - Commit: `2b0691c`
+- Task 5: Role Isolation Core
+  - Subagent/process: subagent-driven development with spec and quality review.
+  - Spec review: approved after implementation.
+  - Code review: approved after implementation.
+  - Verification: isolation/runner/report tests and full suite passed during task execution.
+  - Commit: `a386dff`
+- Task 6: Multi-Strategy Benchmark Aggregation
+  - Subagent/process: subagent-driven development with spec and quality review.
+  - Spec review: approved after implementation.
+  - Code review: approved after implementation.
+  - Verification: benchmark CLI/tests and full suite passed during task execution.
+  - Commit: `50bbb88`
+- Task 7: Mock Eval Cases and Documentation
+  - Subagent/process: spec reviewer `019f4d0a-69da-7df0-964e-ae02c8676799`, quality reviewer `019f4d0b-0108-7a82-b4d1-41490445274c`.
+  - Spec review: issues fixed (`eval-runs/` ignore rule).
+  - Code review: issues fixed (README/SPEC evidence wording).
+  - Verification: `rag-select` / `compressed-rag` / `isolated-harness` eval all `expected_matches=7`; benchmark `strategies=4, cases=7`; full suite `Ran 190 tests ... OK`.
+  - Commit: `8a602cb`
+- Task 8: Final evidence and verification
+  - Subagent/process: controller final pass.
+  - Spec review: plan checklist reconciled against commits.
+  - Code review: final verification before completion.
+  - Verification: full suite `Ran 190 tests ... OK`; benchmark `strategies=4, cases=7`; `git status --short --branch --ignored` shows only process docs modified plus ignored local artifacts.
+  - Commit: final process-evidence commit.

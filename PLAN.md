@@ -2036,6 +2036,17 @@ SPEC 覆盖：
 - 测试命令统一使用 `$env:PYTHONPATH="src"` 和 `python -m unittest`。
 # 2026-07-10 Context Harness Deepening Implementation Plan
 
+### Completion Status
+
+- [x] Task 1 completed in `526f54c` - Lightweight Retrieval Core.
+- [x] Task 2 completed in `ac4842a` - RAG Select Context Strategy.
+- [x] Task 3 completed in `5c6a51b` - Retrieval Evidence in Trace, Metrics, Report, and Eval.
+- [x] Task 4 completed in `2b0691c` - Deterministic Context Lifecycle Compression.
+- [x] Task 5 completed in `a386dff` - Role Isolation Core.
+- [x] Task 6 completed in `50bbb88` - Multi-Strategy Benchmark Aggregation.
+- [x] Task 7 completed in `8a602cb` - Mock Eval Cases and Documentation.
+- [x] Task 8 completed by the final process-evidence commit - Final Review, Process Evidence, and Verification.
+
 ## Task 7 Mock Eval Cases and Documentation
 
 本任务补充三个 mock-first eval case：

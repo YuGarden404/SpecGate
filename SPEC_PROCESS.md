@@ -232,3 +232,15 @@ Task 7 验证结果：
 - 每个任务都以失败测试开头，再写最小实现，再跑聚焦测试和完整测试。
 - 所有新增机制以 mock/stub LLM 或纯单元测试验证。
 - 最终 benchmark 比较 harness strategy，而不是比较真实 LLM 能力。
+
+## 2026-07-10 Task 8 Final Review 过程记录
+
+冷启动/审查记录：
+- Task 7 的规格审查子代理只拿到任务说明和文件范围，没有依赖本对话历史；它能定位到 `eval-runs/` 运行产物误提交风险。
+- Task 7 的质量审查子代理同样只做只读审查；它确认新增 case 都走 `MockLLM`，并指出文档措辞应从“验证策略能力”收窄为“展示/记录 evidence”。
+- 上述两个问题均已修复在 `8a602cb`：`.gitignore` 忽略 `examples/eval_cases/eval-runs/`，README / SPEC 同步更新。
+
+最终验证范围：
+- 单元测试：`python -m unittest discover -s tests -v`
+- Harness benchmark：`python -m specgate.cli benchmark examples/eval_cases --strategies baseline rag-select compressed-rag isolated-harness`
+- Git 状态：确认只剩 `.env`、`eval-runs/`、缓存等 ignored 本地文件。
