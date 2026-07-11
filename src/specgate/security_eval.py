@@ -18,6 +18,9 @@ class SecurityExpectation:
     expected_blocked_actions: int | None = None
     require_untrusted_context_boundary: bool = False
 
+    def __post_init__(self) -> None:
+        _optional_int(self.expected_blocked_actions)
+
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "SecurityExpectation":
         if data is None:

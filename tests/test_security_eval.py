@@ -112,6 +112,10 @@ class SecurityEvalTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     SecurityExpectation.from_dict(payload)
 
+    def test_security_expectation_rejects_negative_expected_blocked_actions(self):
+        with self.assertRaises(ValueError):
+            SecurityExpectation(expected_blocked_actions=-1)
+
     def test_detects_forbidden_created_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
