@@ -325,7 +325,7 @@ def _render_run_events(root: Path) -> str:
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
-            items.append(f"<li><strong>invalid_trace_line</strong>: <code>{escape(line[:240])}</code></li>")
+            items.append("<li><strong>malformed trace event</strong></li>")
             continue
         event_type = str(event.get("event_type", "unknown"))
         payload = json.dumps(redact(_strip_action_payload(event.get("payload", {}))), ensure_ascii=False)

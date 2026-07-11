@@ -169,6 +169,26 @@ class ReportTests(unittest.TestCase):
             self.assertNotIn("action_payload", html)
             self.assertNotIn("sk-test-secret", html)
 
+    def test_generate_report_does_not_render_malformed_trace_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+            trace_path = root / "runs" / "latest" / "trace.jsonl"
+            trace_path.parent.mkdir(parents=True)
+            trace_path.write_text(
+                '{"event_type": "approval_requested", "payload": {"action_payload": '
+                '{"args": {"content": "secret sk-test-secret-1234567890"}}}\n',
+                encoding="utf-8",
+            )
+
+            output = generate_report(root, gate, steps=1)
+
+            html = output.read_text(encoding="utf-8")
+            self.assertIn("malformed trace event", html)
+            self.assertNotIn("invalid_trace_line", html)
+            self.assertNotIn("action_payload", html)
+            self.assertNotIn("sk-test-secret", html)
+
     def test_generate_report_includes_retrieval_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
