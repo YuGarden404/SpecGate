@@ -131,6 +131,35 @@ class ReportTests(unittest.TestCase):
             self.assertNotIn("sk-test-secret", html)
             self.assertNotIn("<script>", html)
 
+    def test_generate_report_redacts_approval_history_text_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-secret-reason",
+                        step=1,
+                        action="replace_file",
+                        path="README.md",
+                        risk_level="review",
+                        reason="review contains sk-test-secret-1234567890",
+                        profile="review",
+                        status="denied",
+                        decision_reason="denied because sk-test-secret-0987654321",
+                    )
+                ]
+            ).write(approval_queue_path(root))
+
+            output = generate_report(root, gate, 1, profile="review")
+
+            html = output.read_text(encoding="utf-8")
+            self.assertIn("approval-secret-reason", html)
+            self.assertIn("denied", html)
+            self.assertIn("replace_file", html)
+            self.assertIn("README.md", html)
+            self.assertNotIn("sk-test-secret", html)
+
     def test_generate_report_strips_action_payload_from_run_events(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

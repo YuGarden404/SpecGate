@@ -71,6 +71,12 @@ def _render_permission_decisions(permission_decisions: list[PermissionDecision] 
     )
 
 
+def _safe_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(redact(str(value)))
+
+
 def _render_approval_history(root: Path) -> str:
     try:
         queue = ApprovalQueue.read(approval_queue_path(root))
@@ -85,12 +91,12 @@ def _render_approval_history(root: Path) -> str:
 
     rows = "\n".join(
         "<tr>"
-        f"<td>{escape(approval.id)}</td>"
-        f"<td>{escape(approval.status)}</td>"
-        f"<td>{escape(approval.action)}</td>"
-        f"<td>{escape(approval.path or '')}</td>"
-        f"<td>{escape(approval.reason)}</td>"
-        f"<td>{escape(approval.decision_reason or '')}</td>"
+        f"<td>{escape(_safe_text(approval.id))}</td>"
+        f"<td>{escape(_safe_text(approval.status))}</td>"
+        f"<td>{escape(_safe_text(approval.action))}</td>"
+        f"<td>{escape(_safe_text(approval.path))}</td>"
+        f"<td>{escape(_safe_text(approval.reason))}</td>"
+        f"<td>{escape(_safe_text(approval.decision_reason))}</td>"
         "</tr>"
         for approval in queue.approvals
     )
