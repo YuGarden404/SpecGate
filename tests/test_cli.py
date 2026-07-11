@@ -488,6 +488,58 @@ review_actions = ["replace_file"]
             self.assertIn("could not resume", output.getvalue())
             self.assertNotIn("Traceback", output.getvalue())
 
+    def test_resume_cli_redacts_secret_from_parse_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Task Search Detail</body></html>',
+                encoding="utf-8",
+            )
+            (root / "specgate.toml").write_text(
+                """
+[policy]
+allowed_actions = ["replace_file", "finish"]
+allowed_read_paths = ["TASK_SPEC.md", "CHECKLIST.md", "index.html"]
+allowed_write_paths = ["README.md"]
+
+[governance]
+profile = "review"
+review_actions = ["replace_file"]
+""".strip(),
+                encoding="utf-8",
+            )
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-step-1",
+                        step=1,
+                        action="replace_file",
+                        path="README.md",
+                        risk_level="review",
+                        reason="requires human review",
+                        profile="review",
+                        status="approved",
+                        action_payload={
+                            "schema_version": "sk-test-secret-1234567890",
+                            "action": "replace_file",
+                            "args": {"path": "README.md", "content": "approved content"},
+                        },
+                    )
+                ]
+            ).write(approval_queue_path(root))
+
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["resume", tmp])
+
+            text = output.getvalue()
+            self.assertNotEqual(code, 0)
+            self.assertIn("could not resume", text)
+            self.assertNotIn("sk-test-secret", text)
+            self.assertNotIn("Traceback", text)
+
     def test_credentials_cli_status_set_and_clear(self):
         with tempfile.TemporaryDirectory() as tmp:
             env_file = Path(tmp) / ".env"

@@ -17,6 +17,7 @@ from specgate.llm import LLMProviderError, MockLLM, OpenAICompatibleLLM
 from specgate.policy import WorkspacePolicy
 from specgate.report import generate_report
 from specgate.runner import AgentRunner
+from specgate.trace import redact
 
 
 GOVERNANCE_PROFILES = ("strict", "demo", "review")
@@ -533,8 +534,8 @@ def run_resume(root: Path, max_steps: int, governance_profile: str | None = None
             governance_profile=governance_profile,
             governance_config=settings.governance,
         ).resume_from_approval()
-    except (json.JSONDecodeError, TypeError, ValueError, AttributeError) as exc:
-        print(f"could not resume: {exc}")
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        print(f"could not resume: {redact(str(exc))}")
         return 1
     gate = result.final_gate or run_html_gate(root / "index.html", root / "CHECKLIST.md")
     generate_report(
