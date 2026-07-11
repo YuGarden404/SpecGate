@@ -1,36 +1,36 @@
-# HITL Approve / Deny / Resume Implementation Plan
+# HITL Approve / Deny / Resume 实现计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **给 agentic workers 的要求：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 按任务逐项执行。本计划使用 checkbox（`- [ ]`）记录进度。
 
-**Goal:** Build a mock-first HITL loop where review actions can be queued, approved or denied, and resumed without bypassing policy, hard path blocks, snapshot protection, trace redaction, or reporting.
+**目标：** 构建 mock-first 的 HITL 闭环：需要复核的 action 可以进入队列、被批准或拒绝，并通过 resume 恢复执行，同时不能绕过 policy、硬阻断路径、快照保护、trace 脱敏和报告机制。
 
-**Architecture:** Extend the existing `ApprovalQueue` model so it stores a redacted preview plus a private action payload, add CLI state transitions for `approve` and `deny`, and add an `AgentRunner.resume_from_approval()` path that consumes exactly one approved or denied item before continuing the normal loop. Keep the current runner architecture intact and extract only the minimum shared helpers needed to avoid duplicating permission, tool, gate, and finish bookkeeping.
+**架构：** 扩展现有 `ApprovalQueue` 模型，让它同时保存脱敏 preview 和内部使用的 action payload；在 CLI 中增加 `approve` / `deny` 状态流转；在 `AgentRunner` 中增加 `resume_from_approval()` 路径，每次只消费一个 approved 或 denied 项，然后继续普通 agent loop。保持当前 runner 架构不大改，只抽取必要共享逻辑，避免重复实现 permission、tool、gate、finish 记录。
 
-**Tech Stack:** Python standard library, `unittest`, existing SpecGate modules (`approvals`, `runner`, `cli`, `metrics`, `report`, `eval_runner`, `tools`, `snapshot`).
+**技术栈：** Python 标准库、`unittest`、现有 SpecGate 模块（`approvals`、`runner`、`cli`、`metrics`、`report`、`eval_runner`、`tools`、`snapshot`）。
 
 ---
 
-## File Structure
+## 文件结构
 
-- Modify `src/specgate/approvals.py`
-  - Owns approval status validation, queue parsing, approval state transitions, action payload serialization, and secret-safe previews.
-- Modify `src/specgate/runner.py`
-  - Owns queue creation during `run()` and one-item resume handling during `resume_from_approval()`.
-- Modify `src/specgate/cli.py`
-  - Adds `approvals approve`, `approvals deny`, and `resume`.
-- Modify `src/specgate/metrics.py`
-  - Adds approval lifecycle counters and trust summary reasons.
-- Modify `src/specgate/report.py`
-  - Renames the approval display from pending-only to approval history and includes decision fields.
-- Modify `src/specgate/eval_runner.py`
-  - Adds optional support for approval lifecycle counts if needed by new eval cases.
-- Create `examples/eval_cases/hitl-approve-resume/`
-  - Demonstrates approved review action followed by resume.
-- Create `examples/eval_cases/hitl-deny-resume/`
-  - Demonstrates denied review action followed by resume feedback.
-- Modify `README.md`
-  - Documents the CLI flow in Chinese.
-- Modify tests:
+- 修改 `src/specgate/approvals.py`
+  - 负责审批状态校验、队列解析、审批状态流转、action payload 序列化、secret-safe preview。
+- 修改 `src/specgate/runner.py`
+  - 负责 `run()` 中创建审批队列，以及 `resume_from_approval()` 中单个审批项的恢复处理。
+- 修改 `src/specgate/cli.py`
+  - 增加 `approvals approve`、`approvals deny`、`resume`。
+- 修改 `src/specgate/metrics.py`
+  - 增加审批生命周期计数和 trust summary 原因。
+- 修改 `src/specgate/report.py`
+  - 把 pending-only 展示升级为 approval history，并展示 decision 字段。
+- 修改 `src/specgate/eval_runner.py`
+  - 如果新 eval case 需要，补充审批生命周期计数字段。
+- 创建 `examples/eval_cases/hitl-approve-resume/`
+  - 展示被批准的 review action 如何通过 resume 执行。
+- 创建 `examples/eval_cases/hitl-deny-resume/`
+  - 展示被拒绝的 review action 如何通过 resume 反馈。
+- 修改 `README.md`
+  - 用中文说明 CLI 使用流程。
+- 修改测试：
   - `tests/test_approvals.py`
   - `tests/test_cli.py`
   - `tests/test_runner.py`
@@ -1529,7 +1529,7 @@ git commit -m "docs: 说明HITL审批恢复流程"
 
 ---
 
-## Final Verification
+## 最终验证
 
 After all tasks are committed, run:
 
@@ -1541,19 +1541,19 @@ python -m specgate.cli eval examples/eval_cases --suite governance --context-str
 git status --short --branch
 ```
 
-Expected:
+预期结果：
 
-- Unit tests pass.
-- Security benchmark still reports 5 strategies and 6 security cases.
-- Governance eval runs without provider credentials.
-- Working tree is clean except ignored runtime outputs.
+- 单元测试全部通过。
+- security benchmark 仍然报告 5 个策略和 6 个安全 case。
+- governance eval 不需要 provider credentials 即可运行。
+- 工作区干净，除了被忽略的运行时输出。
 
-## Review Checklist
+## 审查清单
 
-- `approve` never executes an action directly.
-- `resume` processes exactly one approved or denied approval before continuing.
-- Approved actions still pass through policy, hard blocked paths, and snapshot protection.
-- Denied actions never mutate files.
-- Approval list and report never print full `action_payload`.
-- Trace and report do not leak secret-like strings.
-- Existing prompt injection benchmark still passes.
+- `approve` 不能直接执行 action。
+- `resume` 每次继续前只处理一个 approved 或 denied approval。
+- approved action 仍然必须经过 policy、硬阻断路径和快照保护。
+- denied action 不能修改文件。
+- approval list 和 report 不能打印完整 `action_payload`。
+- trace 和 report 不能泄漏 secret-like 字符串。
+- 现有 prompt injection benchmark 仍然通过。
