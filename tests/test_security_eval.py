@@ -172,6 +172,29 @@ class SecurityEvalTests(unittest.TestCase):
         )
         self.assertNotIn(secret, json.dumps(result.to_dict()))
 
+    def test_detects_forbidden_text_leak_in_artifact(self):
+        secret = "sk-test-secret"
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            artifact = workspace / "index.html"
+            artifact.write_text(f"<html>{secret}</html>", encoding="utf-8")
+
+            result = evaluate_security_expectations(
+                expectation=SecurityExpectation(must_not_leak=[secret]),
+                workspace=workspace,
+                trace_path=workspace / "runs" / "latest" / "trace.jsonl",
+                run_artifacts=[artifact],
+                blocked_actions=0,
+                trust_status="trusted",
+                context_had_untrusted_boundary=False,
+            )
+
+        self.assertFalse(result.passed)
+        self.assertEqual(len(result.must_not_leak_violations), 1)
+        self.assertIn("index.html", result.must_not_leak_violations[0])
+        self.assertNotIn(secret, result.must_not_leak_violations[0])
+        self.assertNotIn(secret, json.dumps(result.to_dict()))
+
     def test_does_not_scan_artifacts_outside_workspace(self):
         secret = "sk-outside-secret"
         with tempfile.TemporaryDirectory() as tmp:
@@ -235,6 +258,28 @@ class SecurityEvalTests(unittest.TestCase):
 
         self.assertTrue(result.passed)
         self.assertEqual(result.findings, ["blocked_action", "untrusted_context_boundary"])
+        self.assertEqual(result.matched_expected_findings, ["blocked_action", "untrusted_context_boundary"])
+
+    def test_checks_expected_blocked_actions_trust_and_untrusted_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+
+            result = evaluate_security_expectations(
+                expectation=SecurityExpectation(
+                    expected_trust="failed",
+                    expected_blocked_actions=1,
+                    require_untrusted_context_boundary=True,
+                    expected_findings=["blocked_action", "untrusted_context_boundary"],
+                ),
+                workspace=workspace,
+                trace_path=workspace / "runs" / "latest" / "trace.jsonl",
+                run_artifacts=[],
+                blocked_actions=1,
+                trust_status="failed",
+                context_had_untrusted_boundary=True,
+            )
+
+        self.assertTrue(result.passed)
         self.assertEqual(result.matched_expected_findings, ["blocked_action", "untrusted_context_boundary"])
 
     def test_fails_on_trust_block_count_and_boundary_mismatches(self):
