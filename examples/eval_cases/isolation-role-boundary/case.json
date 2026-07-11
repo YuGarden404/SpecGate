@@ -14,5 +14,30 @@
         "summary": "role isolation evidence rendered"
       }
     }
-  ]
+  ],
+  "mock_responses_by_strategy": {
+    "multi-agent-isolated": [
+      {
+        "schema_version": "1",
+        "action": "finish",
+        "args": {
+          "summary": "Plan: preserve role isolation evidence page."
+        }
+      },
+      {
+        "schema_version": "1",
+        "action": "finish",
+        "args": {
+          "summary": "Existing role isolation page already satisfies the task."
+        }
+      },
+      {
+        "schema_version": "1",
+        "action": "finish",
+        "args": {
+          "summary": "Review: role isolation evidence page passes."
+        }
+      }
+    ]
+  }
 }

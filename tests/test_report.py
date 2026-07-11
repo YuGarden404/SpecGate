@@ -334,6 +334,47 @@ class ReportTests(unittest.TestCase):
             self.assertIn("draft_patch", html)
             self.assertNotIn("reviewer<script>", html)
 
+    def test_generate_report_includes_role_execution_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(False, [GateCheck("doctype", False, "failed")], [], "Gate failed")
+            run_dir = root / "runs" / "latest"
+            run_dir.mkdir(parents=True)
+            (run_dir / "isolation.json").write_text(
+                json.dumps(
+                    {
+                        "strategy": "multi-agent-isolated",
+                        "role_runs": 1,
+                        "role_blocked_actions": 1,
+                        "review_repairs": 0,
+                        "executions": [
+                            {
+                                "role": "planner",
+                                "phase": "plan",
+                                "context_chars": 100,
+                                "visible_sections": ["Task"],
+                                "allowed_actions": ["finish"],
+                                "attempted_action": "write_file",
+                                "action_allowed_by_role": False,
+                                "blocked_reason": "role planner cannot perform write_file",
+                                "summary": "<script>alert(1)</script>",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            output = generate_report(root, gate, steps=1)
+
+            html = output.read_text(encoding="utf-8")
+            self.assertIn("Role Execution Evidence", html)
+            self.assertIn("planner", html)
+            self.assertIn("write_file", html)
+            self.assertIn("role planner cannot perform write_file", html)
+            self.assertNotIn("<script>alert(1)</script>", html)
+            self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+
     def test_generate_report_includes_prompt_injection_safety(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -380,10 +421,27 @@ class ReportTests(unittest.TestCase):
                                 "avg_context_chars": 1200,
                                 "avg_retrieved_chunks": 2.5,
                                 "blocked_actions": 0,
+                                "effective_blocked_actions": 1,
                                 "approval_requests": 0,
                                 "parse_errors": 0,
                                 "gate_runs": 2,
-                            }
+                                "role_runs": 3,
+                                "role_blocked_actions": 1,
+                                "review_repairs": 1,
+                            },
+                            {
+                                "strategy": "baseline",
+                                "total_cases": 1,
+                                "passed_cases": 1,
+                                "expected_matches": 1,
+                                "avg_context_chars": 500,
+                                "avg_retrieved_chunks": 0,
+                                "blocked_actions": 0,
+                                "effective_blocked_actions": 0,
+                                "approval_requests": 0,
+                                "parse_errors": 0,
+                                "gate_runs": 1,
+                            },
                         ]
                     }
                 ),
@@ -396,6 +454,13 @@ class ReportTests(unittest.TestCase):
             self.assertIn("Benchmark Summary", html)
             self.assertIn("rag&lt;script&gt;", html)
             self.assertIn("2.5", html)
+            self.assertIn("Role Runs", html)
+            self.assertIn("Role Blocks", html)
+            self.assertIn("Review Repairs", html)
+            self.assertIn("Effective Blocks", html)
+            self.assertIn(">3<", html)
+            self.assertIn(">1<", html)
+            self.assertIn("<td>baseline</td><td>1</td><td>1</td><td>1</td><td>500</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>1</td><td>0</td><td>0</td><td>0</td>", html)
             self.assertNotIn("rag<script>", html)
 
     def test_generate_report_handles_missing_pending_approvals_queue(self):

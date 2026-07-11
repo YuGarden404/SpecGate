@@ -62,6 +62,16 @@ class RecordingLLM:
         return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
 
 
+class ContextRecordingMockLLM(MockLLM):
+    def __init__(self, responses: list[dict]):
+        super().__init__(responses)
+        self.contexts: list[str] = []
+
+    def complete(self, context: str) -> str:
+        self.contexts.append(context)
+        return super().complete(context)
+
+
 class ApprovalFeedbackLLM:
     def __init__(self):
         self.contexts: list[str] = []
@@ -77,6 +87,439 @@ class ApprovalFeedbackLLM:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_multi_agent_isolated_runs_planner_implementer_reviewer_in_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build a Search Details page.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            llm = ContextRecordingMockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "finish",
+                        "args": {"summary": "Plan: write valid Search Details HTML"},
+                    },
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {
+                            "path": "index.html",
+                            "content": (
+                                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                "<title>Search Details</title></head><body>"
+                                '<input type="search"><main>Search Details</main></body></html>'
+                            ),
+                        },
+                    },
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "review complete"}},
+                ]
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"read_file", "list_files", "write_file", "replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=5, context_strategy="multi-agent-isolated").run()
+
+            self.assertTrue(result.passed)
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.role_runs, 3)
+            self.assertEqual(result.metrics.planner_runs, 1)
+            self.assertEqual(result.metrics.implementer_runs, 1)
+            self.assertEqual(result.metrics.reviewer_runs, 1)
+            self.assertIn("Plan: write valid Search Details HTML", llm.contexts[1])
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertLess(trace_text.index('"role": "planner"'), trace_text.index('"role": "implementer"'))
+            self.assertLess(trace_text.index('"role": "implementer"'), trace_text.index('"role": "reviewer"'))
+
+    def test_multi_agent_role_block_prevents_trusted_clean_finish(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Keep the passing page.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                "<title>Search Details</title></head><body>"
+                '<input type="search"><main>Search Details</main></body></html>',
+                encoding="utf-8",
+            )
+            llm = ContextRecordingMockLLM(
+                [
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "Plan: no changes"}},
+                    {"schema_version": "1", "action": "delete_file", "args": {"path": "index.html"}},
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "review complete"}},
+                ]
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"read_file", "list_files", "write_file", "replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=5, context_strategy="multi-agent-isolated").run()
+
+            self.assertTrue(result.passed)
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.role_blocked_actions, 1)
+            self.assertIsNotNone(result.trust)
+            self.assertEqual(result.trust.status, "warning")
+            self.assertIn("role_blocked_actions_present", result.trust.reasons)
+
+    def test_multi_agent_blocks_planner_write_before_tool_dispatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build page", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"write_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": "bad"},
+                    },
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "no-op"}},
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "review"}},
+                ]
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=5, context_strategy="multi-agent-isolated").run()
+
+            self.assertFalse((root / "index.html").exists())
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.role_blocked_actions, 1)
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("role_action_blocked", trace_text)
+            self.assertIn("role planner cannot perform write_file", trace_text)
+
+    def test_multi_agent_blocks_reviewer_write_before_tool_dispatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build page", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text("", encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"write_file", "replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            llm = MockLLM(
+                [
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {
+                            "path": "index.html",
+                            "content": '<html><body><input type="search">Task</body></html>',
+                        },
+                    },
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": "reviewer overwrite"},
+                    },
+                ]
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=5, context_strategy="multi-agent-isolated").run()
+
+            self.assertNotIn("reviewer overwrite", (root / "index.html").read_text(encoding="utf-8"))
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.role_blocked_actions, 1)
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("role reviewer cannot perform write_file", trace_text)
+
+    def test_multi_agent_implementer_write_still_obeys_workspace_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build page", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"write_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                set(),
+            )
+            llm = MockLLM(
+                [
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": "blocked by policy"},
+                    },
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "review"}},
+                ]
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=5, context_strategy="multi-agent-isolated").run()
+
+            self.assertFalse((root / "index.html").exists())
+            self.assertIsNotNone(result.metrics)
+            self.assertGreaterEqual(result.metrics.blocked_actions, 1)
+            self.assertEqual(result.metrics.role_blocked_actions, 0)
+
+    def test_multi_agent_implementer_review_action_creates_pending_approval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build page", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text("old", encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            governance = GovernanceConfig(
+                profile="review",
+                review_actions={"replace_file"},
+                review_paths={"index.html"},
+            )
+            llm = MockLLM(
+                [
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {"path": "index.html", "content": "needs approval"},
+                    },
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "review"}},
+                ]
+            )
+
+            result = AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=5,
+                context_strategy="multi-agent-isolated",
+                governance_config=governance,
+            ).run()
+
+            self.assertEqual((root / "index.html").read_text(encoding="utf-8"), "old")
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.approval_requests, 1)
+            self.assertEqual(result.metrics.pending_approvals, 1)
+            self.assertTrue(approval_queue_path(root).exists())
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            self.assertEqual(len(queue.approvals), 1)
+            approval = queue.approvals[0]
+            self.assertEqual(approval.status, "pending")
+            self.assertEqual(approval.action, "replace_file")
+            self.assertEqual(approval.path, "index.html")
+            self.assertEqual(approval.action_payload["action"], "replace_file")
+            self.assertEqual(approval.action_payload["args"]["path"], "index.html")
+            self.assertEqual(approval.action_payload["args"]["content"], "needs approval")
+
+    def test_multi_agent_reviewer_can_request_one_repair_cycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build a page with Search and Details.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("Must include Search and Details.", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"read_file", "list_files", "write_file", "replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            llm = MockLLM(
+                [
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "Plan Search Details"}},
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {
+                            "path": "index.html",
+                            "content": (
+                                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                "<title>Search</title></head><body><input type=\"search\">Search</body></html>"
+                            ),
+                        },
+                    },
+                    {
+                        "schema_version": "1",
+                        "action": "finish",
+                        "args": {"summary": "request_repair: missing Details"},
+                    },
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {
+                            "path": "index.html",
+                            "content": (
+                                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                "<title>Search Details</title></head><body>"
+                                '<input type="search"><main>Search Details</main></body></html>'
+                            ),
+                        },
+                    },
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "review complete"}},
+                ]
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=5, context_strategy="multi-agent-isolated").run()
+
+            self.assertTrue(result.passed)
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.review_repairs, 1)
+            self.assertEqual(result.metrics.implementer_runs, 2)
+            self.assertEqual(result.metrics.reviewer_runs, 2)
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("role_repair_requested", trace_text)
+
+    def test_multi_agent_repair_cycle_limit_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build a page with Search and Details.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("Must include Search and Details.", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"read_file", "list_files", "write_file", "replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            incomplete_html = (
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                "<title>Search</title></head><body><input type=\"search\">Search</body></html>"
+            )
+            llm = MockLLM(
+                [
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "Plan Search Details"}},
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {"path": "index.html", "content": incomplete_html},
+                    },
+                    {
+                        "schema_version": "1",
+                        "action": "finish",
+                        "args": {"summary": "request_repair: missing Details"},
+                    },
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {"path": "index.html", "content": incomplete_html},
+                    },
+                    {
+                        "schema_version": "1",
+                        "action": "finish",
+                        "args": {"summary": "request_repair: still missing Details"},
+                    },
+                ]
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=5, context_strategy="multi-agent-isolated").run()
+
+            self.assertFalse(result.passed)
+            self.assertIsNotNone(result.metrics)
+            self.assertTrue(result.metrics.role_cycle_limit_reached)
+            self.assertIsNotNone(result.trust)
+            self.assertIn("role_cycle_limit_reached", result.trust.reasons)
+
+    def test_multi_agent_respects_max_steps_before_reviewer_default_finish(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build a page with Search and Details.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("Must include Search and Details.", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"read_file", "list_files", "write_file", "replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            llm = MockLLM(
+                [
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "Plan Search Details"}},
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {
+                            "path": "index.html",
+                            "content": (
+                                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                "<title>Search Details</title></head><body>"
+                                '<input type="search"><main>Search Details</main></body></html>'
+                            ),
+                        },
+                    },
+                ]
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=2, context_strategy="multi-agent-isolated").run()
+
+            self.assertFalse(result.passed)
+            self.assertIsNotNone(result.metrics)
+            self.assertTrue(result.metrics.max_steps_reached)
+            self.assertEqual(result.metrics.reviewer_runs, 0)
+            self.assertEqual(llm.calls, 2)
+            self.assertIsNotNone(result.trust)
+            self.assertIn("max_steps_reached", result.trust.reasons)
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("role_step_limit_reached", trace_text)
+            self.assertNotIn('"role": "reviewer"', trace_text)
+
+    def test_multi_agent_reviewer_parse_error_fails_closed(self):
+        class ReviewerParseErrorLLM:
+            def __init__(self):
+                self.calls = 0
+
+            def complete(self, context: str) -> str:
+                self.calls += 1
+                if self.calls == 1:
+                    return '{"schema_version":"1","action":"finish","args":{"summary":"Plan Search Details"}}'
+                if self.calls == 2:
+                    return (
+                        '{"schema_version":"1","action":"replace_file","args":{"path":"index.html",'
+                        '"content":"<!doctype html><html><head><meta name=\\"viewport\\" '
+                        'content=\\"width=device-width\\"><title>Search Details</title></head><body>'
+                        '<input type=\\"search\\"><main>Search Details</main></body></html>"}}'
+                    )
+                return "not json"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build a page with Search and Details.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("Must include Search and Details.", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"read_file", "list_files", "write_file", "replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            result = AgentRunner(
+                root,
+                ReviewerParseErrorLLM(),
+                policy,
+                max_steps=5,
+                context_strategy="multi-agent-isolated",
+            ).run()
+
+            self.assertFalse(result.passed)
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.parse_errors, 1)
+            self.assertTrue(result.metrics.max_steps_reached or result.metrics.role_cycle_limit_reached)
+            self.assertIsNotNone(result.trust)
+            self.assertEqual(result.trust.status, "failed")
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("reviewer_failed", trace_text)
+
     def test_rag_select_run_records_retrieval_evidence_and_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

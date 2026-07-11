@@ -16,6 +16,23 @@ class RoleContext:
         return {key: list(value) if isinstance(value, tuple) else value for key, value in data.items()}
 
 
+@dataclass(frozen=True)
+class RoleExecution:
+    role: str
+    phase: str
+    context_chars: int
+    visible_sections: tuple[str, ...]
+    allowed_actions: tuple[str, ...]
+    attempted_action: str
+    action_allowed_by_role: bool
+    blocked_reason: str | None
+    summary: str | None
+
+    def to_dict(self) -> dict[str, object]:
+        data = asdict(self)
+        return {key: list(value) if isinstance(value, tuple) else value for key, value in data.items()}
+
+
 ROLE_CONTEXTS = (
     RoleContext(
         role="planner",
@@ -45,17 +62,40 @@ def build_role_contexts() -> list[RoleContext]:
     return list(ROLE_CONTEXTS)
 
 
-def filter_state_for_role(role: str, state: dict[str, object]) -> dict[str, object]:
+def role_context_for(role: str) -> RoleContext:
     context = next((item for item in ROLE_CONTEXTS if item.role == role), None)
     if context is None:
         raise ValueError(f"unknown role: {role}")
+    return context
+
+
+def action_allowed_for_role(role: str, action: str) -> bool:
+    return action in role_context_for(role).allowed_actions
+
+
+def filter_state_for_role(role: str, state: dict[str, object]) -> dict[str, object]:
+    context = role_context_for(role)
     return {key: value for key, value in state.items() if key in context.state_keys}
 
 
-def isolation_metadata() -> dict[str, object]:
+def build_isolation_evidence(
+    strategy: str = "isolated-harness",
+    executions: list[RoleExecution] | None = None,
+    review_repairs: int = 0,
+) -> dict[str, object]:
     contexts = build_role_contexts()
+    role_executions = executions or []
     return {
+        "strategy": strategy,
         "roles": [context.to_dict() for context in contexts],
         "role_contexts": len(contexts),
         "isolated_state_keys": sum(len(context.state_keys) for context in contexts),
+        "role_runs": len(role_executions),
+        "role_blocked_actions": sum(not execution.action_allowed_by_role for execution in role_executions),
+        "review_repairs": review_repairs,
+        "executions": [execution.to_dict() for execution in role_executions],
     }
+
+
+def isolation_metadata() -> dict[str, object]:
+    return build_isolation_evidence(strategy="isolated-harness")

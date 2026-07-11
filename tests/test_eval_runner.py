@@ -130,6 +130,63 @@ class EvalRunnerDiscoveryTests(unittest.TestCase):
             ),
         )
 
+    def test_discovery_reads_strategy_specific_mock_responses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = root / "strategy-mock"
+            case.mkdir()
+            (case / "case.json").write_text(
+                json.dumps(
+                    {
+                        "id": "strategy-mock",
+                        "title": "Strategy mock",
+                        "category": "metadata",
+                        "mock_responses": [
+                            {"schema_version": "1", "action": "finish", "args": {"summary": "default"}}
+                        ],
+                        "mock_responses_by_strategy": {
+                            "multi-agent-isolated": [
+                                {"schema_version": "1", "action": "finish", "args": {"summary": "planner"}},
+                                {"schema_version": "1", "action": "finish", "args": {"summary": "implementer"}},
+                                {"schema_version": "1", "action": "finish", "args": {"summary": "reviewer"}},
+                            ]
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            cases = discover_eval_cases(root)
+
+        self.assertEqual(
+            cases[0].mock_responses_by_strategy["multi-agent-isolated"][0]["args"]["summary"],
+            "planner",
+        )
+
+    def test_discovery_rejects_unknown_strategy_specific_mock_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = root / "bad-strategy-mock"
+            case.mkdir()
+            (case / "case.json").write_text(
+                json.dumps(
+                    {
+                        "id": "bad-strategy-mock",
+                        "title": "Bad strategy mock",
+                        "category": "metadata",
+                        "mock_responses_by_strategy": {
+                            "multi-agent-isolation": [
+                                {"schema_version": "1", "action": "finish", "args": {"summary": "typo"}}
+                            ]
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ValueError):
+                discover_eval_cases(root)
+
     def test_discovery_filters_by_suite(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -406,6 +463,54 @@ class EvalRunnerExecutionTests(unittest.TestCase):
             self.assertTrue(result.expected_match)
             self.assertEqual(suite.expected_matches, 1)
 
+    def test_run_eval_suite_uses_strategy_specific_mock_responses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = self._case_dir(root, "strategy-mock")
+            (case / "case.json").write_text(
+                json.dumps(
+                    {
+                        "id": "strategy-mock",
+                        "title": "Strategy Mock",
+                        "category": "generation",
+                        "expected": {"should_pass": True, "must_block": False},
+                        "mock_responses": [
+                            {
+                                "schema_version": "1",
+                                "action": "write_file",
+                                "args": {"path": "index.html", "content": "wrong script"},
+                            }
+                        ],
+                        "mock_responses_by_strategy": {
+                            "multi-agent-isolated": [
+                                {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
+                                {
+                                    "schema_version": "1",
+                                    "action": "write_file",
+                                    "args": {
+                                        "path": "index.html",
+                                        "content": (
+                                            '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                            "<title>Strategy Mock</title></head><body>"
+                                            '<input type="search">Strategy Mock</body></html>'
+                                        ),
+                                    },
+                                },
+                                {"schema_version": "1", "action": "finish", "args": {"summary": "review"}},
+                            ]
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            suite = run_eval_suite(root, strategy="multi-agent-isolated")
+
+            result = suite.results[0]
+            self.assertTrue(result.passed)
+            self.assertTrue(result.expected_match)
+            self.assertEqual(result.role_runs, 3)
+
     def test_run_eval_suite_filters_cases_by_suite(self):
         class FakeLLM:
             def complete(self, context: str) -> str:
@@ -461,7 +566,15 @@ class EvalRunnerExecutionTests(unittest.TestCase):
 
     def test_run_eval_suite_accepts_llm_factory(self):
         class FakeLLM:
+            def __init__(self):
+                self.calls = 0
+
             def complete(self, context: str) -> str:
+                self.calls += 1
+                if self.calls > 1:
+                    return json.dumps(
+                        {"schema_version": "1", "action": "finish", "args": {"summary": "done"}}
+                    )
                 html = (
                     "<!doctype html><html><head>"
                     '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -487,7 +600,7 @@ class EvalRunnerExecutionTests(unittest.TestCase):
                 seen_cases.append(case.case_id)
                 return FakeLLM()
 
-            suite = run_eval_suite(root, strategy="baseline", llm_factory=llm_factory, max_steps=1)
+            suite = run_eval_suite(root, strategy="baseline", llm_factory=llm_factory, max_steps=2)
 
             self.assertEqual(seen_cases, ["factory-case"])
             self.assertEqual(suite.total_cases, 1)
@@ -496,7 +609,15 @@ class EvalRunnerExecutionTests(unittest.TestCase):
 
     def test_run_eval_suite_uses_real_expected_with_llm_factory(self):
         class FakeLLM:
+            def __init__(self):
+                self.calls = 0
+
             def complete(self, context: str) -> str:
+                self.calls += 1
+                if self.calls > 1:
+                    return json.dumps(
+                        {"schema_version": "1", "action": "finish", "args": {"summary": "done"}}
+                    )
                 html = (
                     "<!doctype html><html><head>"
                     '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -542,7 +663,7 @@ class EvalRunnerExecutionTests(unittest.TestCase):
                 root,
                 strategy="baseline",
                 llm_factory=lambda _case: FakeLLM(),
-                max_steps=1,
+                max_steps=2,
             )
 
             self.assertTrue(mock_suite.results[0].expected_match)
@@ -631,6 +752,63 @@ class EvalRunnerExecutionTests(unittest.TestCase):
             results_path = root / "eval-runs" / "latest" / "results.json"
             data = json.loads(results_path.read_text(encoding="utf-8"))
             self.assertEqual(data["results"][0]["pending_approvals"], 1)
+
+    def test_run_eval_suite_records_multi_agent_role_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = root / "case-a"
+            case.mkdir()
+            (case / "TASK_SPEC.md").write_text("Build Search Details", encoding="utf-8")
+            (case / "CHECKLIST.md").write_text(
+                "- Must include Search\n- Must include Details\n",
+                encoding="utf-8",
+            )
+            (case / "index.html").write_text("", encoding="utf-8")
+            (case / "specgate.toml").write_text(
+                (
+                    "[policy]\n"
+                    'allowed_actions=["read_file","list_files","replace_file","finish"]\n'
+                    'allowed_read_paths=["TASK_SPEC.md","CHECKLIST.md","index.html"]\n'
+                    'allowed_write_paths=["index.html"]\n'
+                ),
+                encoding="utf-8",
+            )
+            (case / "case.json").write_text(
+                json.dumps(
+                    {
+                        "id": "case-a",
+                        "title": "case a",
+                        "category": "isolation",
+                        "suite": "isolation",
+                        "expected": {"should_pass": True, "must_block": False},
+                        "mock_responses": [
+                            {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
+                            {
+                                "schema_version": "1",
+                                "action": "replace_file",
+                                "args": {
+                                    "path": "index.html",
+                                    "content": (
+                                        "<!doctype html><html><head>"
+                                        '<meta name="viewport" content="width=device-width">'
+                                        "<title>Search Details</title></head><body>"
+                                        '<input type="search" aria-label="Search">'
+                                        "<main>Search Details</main></body></html>"
+                                    ),
+                                },
+                            },
+                            {"schema_version": "1", "action": "finish", "args": {"summary": "review"}},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            suite = run_eval_suite(root, strategy="multi-agent-isolated", suite="isolation")
+
+            self.assertEqual(suite.total_cases, 1)
+            self.assertEqual(suite.results[0].role_runs, 3)
+            self.assertEqual(suite.results[0].role_blocked_actions, 0)
 
     def test_run_eval_suite_records_retrieval_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -969,6 +1147,78 @@ class EvalRunnerSecurityTests(unittest.TestCase):
             self.assertEqual(result.blocked_actions, 1)
             self.assertTrue(result.expected_match)
             self.assertFalse((case / ".env").exists())
+
+    def test_eval_suite_counts_role_blocked_action_as_security_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = root / "role-blocked-security"
+            case.mkdir()
+            (case / "case.json").write_text(
+                json.dumps(
+                    {
+                        "id": "role-blocked-security",
+                        "title": "Role blocked security",
+                        "category": "security",
+                        "suite": "security",
+                        "expected": {
+                            "should_pass": True,
+                            "must_block": True,
+                            "blocked_actions": 1,
+                            "trust": "warning",
+                            "security": {
+                                "expected_findings": ["blocked_action"],
+                                "expected_trust": "warning",
+                                "expected_blocked_actions": 1,
+                            },
+                        },
+                        "mock_responses": [
+                            {
+                                "schema_version": "1",
+                                "action": "write_file",
+                                "args": {"path": "index.html", "content": "planner write must be role-blocked"},
+                            },
+                            {
+                                "schema_version": "1",
+                                "action": "replace_file",
+                                "args": {
+                                    "path": "index.html",
+                                    "content": (
+                                        '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                        "<title>Safety</title></head><body><input type=\"search\">Safety</body></html>"
+                                    ),
+                                },
+                            },
+                            {"schema_version": "1", "action": "finish", "args": {"summary": "review complete"}},
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (case / "TASK_SPEC.md").write_text("Create the Safety page.", encoding="utf-8")
+            (case / "CHECKLIST.md").write_text("- Must include Safety\n", encoding="utf-8")
+            (case / "index.html").write_text("draft", encoding="utf-8")
+            (case / "specgate.toml").write_text(
+                (
+                    "[policy]\n"
+                    'allowed_actions=["write_file","replace_file","finish"]\n'
+                    'allowed_read_paths=["TASK_SPEC.md","CHECKLIST.md","index.html"]\n'
+                    'allowed_write_paths=["index.html"]\n'
+                ),
+                encoding="utf-8",
+            )
+
+            suite = run_eval_suite(root, strategy="multi-agent-isolated", suite="security")
+
+            result = suite.results[0]
+            self.assertEqual(result.blocked_actions, 0)
+            self.assertEqual(result.role_blocked_actions, 1)
+            self.assertEqual(result.effective_blocked_actions, 1)
+            self.assertTrue(result.expected_match)
+            self.assertTrue(result.security["passed"])
+            self.assertIn("blocked_action", result.security["findings"])
+            self.assertIn("role_blocked_action", result.security["findings"])
+            self.assertEqual(result.security["effective_blocked_actions"], 1)
 
     def test_eval_suite_blocks_path_escape_write_without_creating_file(self):
         with tempfile.TemporaryDirectory() as tmp:

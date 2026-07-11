@@ -43,6 +43,39 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(summary.results[0].avg_context_chars, 0)
         self.assertEqual(summary.results[0].avg_retrieved_chunks, 0)
 
+    def test_benchmark_summary_includes_role_metrics(self):
+        suite = EvalSuiteResult(
+            strategy="multi-agent-isolated",
+            total_cases=1,
+            passed_cases=1,
+            expected_matches=1,
+            results=[
+                EvalCaseResult(
+                    case_id="case-a",
+                    strategy="multi-agent-isolated",
+                    passed=True,
+                    expected_passed=True,
+                    expected_match=True,
+                    steps=3,
+                    parse_errors=0,
+                    blocked_actions=0,
+                    gate_failures=0,
+                    context_chars_max=100,
+                    final_summary="ok",
+                    role_runs=3,
+                    role_blocked_actions=1,
+                    review_repairs=1,
+                )
+            ],
+        )
+
+        summary = summarize_benchmark([suite])
+
+        self.assertEqual(summary.results[0].role_runs, 3)
+        self.assertEqual(summary.results[0].role_blocked_actions, 1)
+        self.assertEqual(summary.results[0].effective_blocked_actions, 1)
+        self.assertEqual(summary.results[0].review_repairs, 1)
+
     def test_summarize_benchmark_includes_security_metrics(self):
         suites = [
             EvalSuiteResult(
@@ -104,6 +137,7 @@ class BenchmarkTests(unittest.TestCase):
                         100,
                         "failed non-security expectation",
                         suite="security",
+                        role_blocked_actions=1,
                         security={
                             "passed": True,
                             "failures": [],
@@ -187,6 +221,8 @@ class BenchmarkTests(unittest.TestCase):
                 "cases": 4,
                 "expected_matches": 1,
                 "blocked_actions": 10,
+                "role_blocked_actions": 1,
+                "effective_blocked_actions": 11,
                 "must_not_create_violations": 2,
                 "must_not_leak_violations": 1,
                 "failed_security_expectations": [
@@ -201,6 +237,8 @@ class BenchmarkTests(unittest.TestCase):
                 "cases": 0,
                 "expected_matches": 0,
                 "blocked_actions": 0,
+                "role_blocked_actions": 0,
+                "effective_blocked_actions": 0,
                 "must_not_create_violations": 0,
                 "must_not_leak_violations": 0,
                 "failed_security_expectations": [],

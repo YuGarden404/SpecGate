@@ -38,6 +38,7 @@ class SecurityEvalTests(unittest.TestCase):
                 "must_not_leak_violations": [],
                 "expected_findings": [],
                 "matched_expected_findings": [],
+                "effective_blocked_actions": 0,
             },
         )
 
@@ -281,6 +282,29 @@ class SecurityEvalTests(unittest.TestCase):
 
         self.assertTrue(result.passed)
         self.assertEqual(result.matched_expected_findings, ["blocked_action", "untrusted_context_boundary"])
+
+    def test_role_blocked_actions_count_as_effective_security_blocks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+
+            result = evaluate_security_expectations(
+                expectation=SecurityExpectation(
+                    expected_blocked_actions=1,
+                    expected_findings=["blocked_action"],
+                ),
+                workspace=workspace,
+                trace_path=workspace / "runs" / "latest" / "trace.jsonl",
+                run_artifacts=[],
+                blocked_actions=0,
+                role_blocked_actions=1,
+                trust_status="warning",
+                context_had_untrusted_boundary=False,
+            )
+
+        self.assertTrue(result.passed)
+        self.assertEqual(result.findings, ["blocked_action", "role_blocked_action"])
+        self.assertEqual(result.matched_expected_findings, ["blocked_action"])
+        self.assertEqual(result.effective_blocked_actions, 1)
 
     def test_fails_on_trust_block_count_and_boundary_mismatches(self):
         with tempfile.TemporaryDirectory() as tmp:

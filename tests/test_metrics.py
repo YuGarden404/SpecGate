@@ -55,6 +55,13 @@ class MetricsTests(unittest.TestCase):
                 "cleared_tool_results": 0,
                 "role_contexts": 0,
                 "isolated_state_keys": 0,
+                "role_runs": 0,
+                "role_blocked_actions": 0,
+                "review_repairs": 0,
+                "planner_runs": 0,
+                "implementer_runs": 0,
+                "reviewer_runs": 0,
+                "role_cycle_limit_reached": False,
                 "max_steps_reached": False,
             },
         )
@@ -86,6 +93,13 @@ class MetricsTests(unittest.TestCase):
             cleared_tool_results=2,
             role_contexts=3,
             isolated_state_keys=9,
+            role_runs=3,
+            role_blocked_actions=1,
+            review_repairs=2,
+            planner_runs=1,
+            implementer_runs=1,
+            reviewer_runs=1,
+            role_cycle_limit_reached=True,
             max_steps_reached=True,
         )
 
@@ -117,6 +131,13 @@ class MetricsTests(unittest.TestCase):
                 "cleared_tool_results": 2,
                 "role_contexts": 3,
                 "isolated_state_keys": 9,
+                "role_runs": 3,
+                "role_blocked_actions": 1,
+                "review_repairs": 2,
+                "planner_runs": 1,
+                "implementer_runs": 1,
+                "reviewer_runs": 1,
+                "role_cycle_limit_reached": True,
                 "max_steps_reached": True,
             },
         )
@@ -135,6 +156,25 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(data["retrieved_chunks"], 3)
         self.assertEqual(data["retrieval_candidate_chunks"], 8)
         self.assertEqual(data["retrieval_context_chars"], 900)
+
+    def test_run_metrics_includes_role_level_fields(self):
+        metrics = RunMetrics(
+            role_runs=3,
+            role_blocked_actions=1,
+            review_repairs=1,
+            planner_runs=1,
+            implementer_runs=1,
+            reviewer_runs=1,
+        )
+
+        data = metrics.to_dict()
+
+        self.assertEqual(data["role_runs"], 3)
+        self.assertEqual(data["role_blocked_actions"], 1)
+        self.assertEqual(data["review_repairs"], 1)
+        self.assertEqual(data["planner_runs"], 1)
+        self.assertEqual(data["implementer_runs"], 1)
+        self.assertEqual(data["reviewer_runs"], 1)
 
     def test_permission_decision_from_tool_result_shape(self):
         decision = PermissionDecision(
@@ -222,6 +262,15 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(trust.status, "warning")
         self.assertIn("blocked_actions_present", trust.reasons)
 
+    def test_warning_summary_when_role_blocked_actions_present(self):
+        trust = build_trust_summary(
+            True,
+            RunMetrics(finish_actions=1, role_blocked_actions=1),
+        )
+
+        self.assertEqual(trust.status, "warning")
+        self.assertIn("role_blocked_actions_present", trust.reasons)
+
     def test_warning_summary_when_gate_passes_with_parse_errors(self):
         metrics = RunMetrics(
             steps=3,
@@ -268,6 +317,15 @@ class MetricsTests(unittest.TestCase):
         self.assertIn("gate_failed", gate_failed.reasons)
         self.assertEqual(exhausted.status, "failed")
         self.assertIn("max_steps_reached", exhausted.reasons)
+
+    def test_failed_summary_when_role_cycle_limit_reached(self):
+        trust = build_trust_summary(
+            True,
+            RunMetrics(finish_actions=1, role_cycle_limit_reached=True),
+        )
+
+        self.assertEqual(trust.status, "failed")
+        self.assertIn("role_cycle_limit_reached", trust.reasons)
 
 
 if __name__ == "__main__":

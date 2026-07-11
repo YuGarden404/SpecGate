@@ -30,6 +30,13 @@ class RunMetrics:
     cleared_tool_results: int = 0
     role_contexts: int = 0
     isolated_state_keys: int = 0
+    role_runs: int = 0
+    role_blocked_actions: int = 0
+    review_repairs: int = 0
+    planner_runs: int = 0
+    implementer_runs: int = 0
+    reviewer_runs: int = 0
+    role_cycle_limit_reached: bool = False
     max_steps_reached: bool = False
 
     def to_dict(self) -> dict[str, int | bool]:
@@ -86,6 +93,8 @@ def build_trust_summary(final_gate_passed: bool, metrics: RunMetrics) -> TrustSu
         reasons.append("gate_failed")
     if metrics.max_steps_reached:
         reasons.append("max_steps_reached")
+    if metrics.role_cycle_limit_reached:
+        reasons.append("role_cycle_limit_reached")
     if metrics.finish_actions == 0:
         reasons.append("missing_finish")
     if metrics.failed_approvals:
@@ -95,6 +104,8 @@ def build_trust_summary(final_gate_passed: bool, metrics: RunMetrics) -> TrustSu
 
     if metrics.blocked_actions:
         reasons.append("blocked_actions_present")
+    if metrics.role_blocked_actions:
+        reasons.append("role_blocked_actions_present")
     if metrics.parse_errors:
         reasons.append("parse_errors_present")
     if metrics.pending_approvals:

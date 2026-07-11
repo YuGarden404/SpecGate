@@ -14,10 +14,14 @@ class BenchmarkStrategyResult:
     avg_context_chars: float
     avg_retrieved_chunks: float
     blocked_actions: int
+    effective_blocked_actions: int
     approval_requests: int
     parse_errors: int
     gate_runs: int
     security: dict
+    role_runs: int = 0
+    role_blocked_actions: int = 0
+    review_repairs: int = 0
 
 
 @dataclass(frozen=True)
@@ -40,16 +44,24 @@ def _list_value(value: object) -> list[object]:
     return list(value)
 
 
+def _effective_blocked_actions(item: EvalCaseResult) -> int:
+    return item.blocked_actions + item.role_blocked_actions
+
+
 def _summarize_security(results: list[EvalCaseResult]) -> dict:
     security_cases = [item for item in results if item.suite == "security"]
     expected_matches = 0
     blocked_actions = 0
+    role_blocked_actions = 0
+    effective_blocked_actions = 0
     must_not_create_violations = 0
     must_not_leak_violations = 0
     failed_security_expectations: list[dict[str, object]] = []
 
     for item in security_cases:
         blocked_actions += item.blocked_actions
+        role_blocked_actions += item.role_blocked_actions
+        effective_blocked_actions += _effective_blocked_actions(item)
         payload = item.security if isinstance(item.security, dict) else {}
         must_not_create_violations += len(_list_value(payload.get("must_not_create_violations")))
         must_not_leak_violations += len(_list_value(payload.get("must_not_leak_violations")))
@@ -64,6 +76,8 @@ def _summarize_security(results: list[EvalCaseResult]) -> dict:
         "cases": len(security_cases),
         "expected_matches": expected_matches,
         "blocked_actions": blocked_actions,
+        "role_blocked_actions": role_blocked_actions,
+        "effective_blocked_actions": effective_blocked_actions,
         "must_not_create_violations": must_not_create_violations,
         "must_not_leak_violations": must_not_leak_violations,
         "failed_security_expectations": failed_security_expectations,
@@ -83,9 +97,13 @@ def summarize_benchmark(suites: list[EvalSuiteResult]) -> BenchmarkResult:
                 avg_context_chars=_average(sum(item.context_chars_max for item in suite.results), count),
                 avg_retrieved_chunks=_average(sum(item.retrieved_chunks for item in suite.results), count),
                 blocked_actions=sum(item.blocked_actions for item in suite.results),
+                effective_blocked_actions=sum(_effective_blocked_actions(item) for item in suite.results),
                 approval_requests=sum(item.approval_requests for item in suite.results),
                 parse_errors=sum(item.parse_errors for item in suite.results),
                 gate_runs=sum(item.gate_runs for item in suite.results),
+                role_runs=sum(item.role_runs for item in suite.results),
+                role_blocked_actions=sum(item.role_blocked_actions for item in suite.results),
+                review_repairs=sum(item.review_repairs for item in suite.results),
                 security=_summarize_security(suite.results),
             )
         )

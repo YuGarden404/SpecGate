@@ -8,7 +8,7 @@ from pathlib import Path
 from specgate.context_lifecycle import CompressionConfig, compress_runtime_feedback, pin_critical_sections
 from specgate.context_selector import ContextSelection, select_context_files
 from specgate.gate import GateResult
-from specgate.isolation import build_role_contexts, isolation_metadata
+from specgate.isolation import build_isolation_evidence, build_role_contexts, role_context_for
 from specgate.memory import load_memory_summary
 from specgate.policy import WorkspacePolicy
 from specgate.retrieval import RetrievalConfig, build_query_terms, retrieve_chunks
@@ -23,7 +23,10 @@ VALID_CONTEXT_STRATEGIES = {
     "rag-select",
     "compressed-rag",
     "isolated-harness",
+    "multi-agent-isolated",
 }
+
+ISOLATED_HARNESS_STRATEGIES = {"isolated-harness", "multi-agent-isolated"}
 
 
 def _read_allowed(path: Path, policy: WorkspacePolicy | None) -> bool:
@@ -81,7 +84,7 @@ def _render_selected_files(selection: ContextSelection, strategy: str = "baselin
         else:
             content = (
                 _compress_selected_content(rendered_content)
-                if strategy in {"compressed", "compressed-rag", "isolated-harness"}
+                if strategy in {"compressed", "compressed-rag", *ISOLATED_HARNESS_STRATEGIES}
                 else rendered_content
             )
             blocks.append(f"### {rendered_path}\n```text\n{content}\n```")
@@ -234,6 +237,41 @@ def _render_runtime_feedback(events: list[dict] | None, strategy: str = "baselin
     return "\n".join(lines)
 
 
+def _render_trace_summary(events: list[dict] | None) -> str:
+    if not events:
+        return "No trace summary yet."
+    lines: list[str] = []
+    for event in redact(events[-5:]):
+        payload = json.dumps(_compress_payload(event), ensure_ascii=False, sort_keys=True)
+        if len(payload) > 700:
+            payload = payload[:700] + "...[truncated]"
+        lines.append(f"- {payload}")
+    return "\n".join(lines)
+
+
+def _runtime_feedback_for_role(role: str, events: list[dict] | None) -> list[dict] | None:
+    if role != "reviewer" or not events:
+        return events
+
+    allowed_event_types = {
+        "gate_result",
+        "tool_result",
+        "parse_error",
+        "role_action_blocked",
+        "approval_requested",
+        "approval_denied",
+        "approval_failed",
+    }
+    evidence_fields = {"type", "step", "action", "ok", "blocked", "passed", "role", "phase", "event_type"}
+    filtered: list[dict] = []
+    for event in events:
+        if event.get("type") not in allowed_event_types:
+            continue
+        filtered_event = {key: event[key] for key in evidence_fields if key in event}
+        filtered.append(filtered_event)
+    return filtered
+
+
 def _split_rendered_section(section: str) -> tuple[str, str]:
     title, _separator, body = section.partition("\n")
     return title.removeprefix("## "), body
@@ -285,8 +323,8 @@ def build_context_pack_with_metadata(
     )
     retrieved_sections: list[str] = []
     retrieval_metadata = None
-    compression_like = strategy in {"compressed-rag", "isolated-harness"}
-    if strategy in {"rag-select", "compressed-rag", "isolated-harness"}:
+    compression_like = strategy in {"compressed-rag", *ISOLATED_HARNESS_STRATEGIES}
+    if strategy in {"rag-select", "compressed-rag", *ISOLATED_HARNESS_STRATEGIES}:
         rendered_retrieval, retrieval_metadata = _render_retrieved_context(root, latest_gate, policy)
         retrieved_sections.append("## Retrieved Context\n" + rendered_retrieval)
     compression_summary = None
@@ -319,7 +357,7 @@ def build_context_pack_with_metadata(
         (_artifact_summary(root / "index.html", policy), ""),
         ("Latest Gate Feedback", gate_summary),
     ]
-    if strategy == "isolated-harness":
+    if strategy in ISOLATED_HARNESS_STRATEGIES:
         body_sections.append(("Role Isolation", _render_role_isolation()))
         body_sections.append(("Compression Evidence", _render_compression_evidence(compression_summary)))
 
@@ -342,7 +380,7 @@ def build_context_pack_with_metadata(
     compression_metadata = compression_summary.to_dict() if compression_summary is not None else None
     if compression_metadata is not None:
         compression_metadata["pinned_sections"] = ["Task Constraints", "Policy Boundary", "Latest Gate Feedback"]
-    isolation = isolation_metadata() if strategy == "isolated-harness" else None
+    isolation = build_isolation_evidence(strategy=strategy) if strategy in ISOLATED_HARNESS_STRATEGIES else None
     return context, {"retrieval": retrieval_metadata, "compression": compression_metadata, "isolation": isolation}
 
 
@@ -355,3 +393,46 @@ def build_context_pack(
 ) -> str:
     context, _metadata = build_context_pack_with_metadata(root, latest_gate, runtime_feedback, strategy, policy)
     return context
+
+
+def build_role_context_pack_with_metadata(
+    root: Path,
+    role: str,
+    shared_state: dict[str, object],
+    latest_gate: GateResult | None,
+    runtime_feedback: list[dict] | None = None,
+    strategy: str = "multi-agent-isolated",
+    policy: WorkspacePolicy | None = None,
+) -> tuple[str, dict]:
+    role_context = role_context_for(role)
+    role_runtime_feedback = _runtime_feedback_for_role(role_context.role, runtime_feedback)
+    context, metadata = build_context_pack_with_metadata(
+        root=root,
+        latest_gate=latest_gate,
+        runtime_feedback=role_runtime_feedback,
+        strategy=strategy,
+        policy=policy,
+    )
+    role_sections = [
+        "## Current Role\n"
+        f"role: {role_context.role}\n"
+        "allowed_actions: " + ", ".join(role_context.allowed_actions) + "\n"
+        "visible_sections: " + ", ".join(role_context.visible_sections),
+    ]
+    if role_context.role == "implementer":
+        plan = str(redact(shared_state.get("plan", "")))
+        role_sections.append("## Plan\n" + (plan if plan else "No plan yet."))
+    if role_context.role == "reviewer":
+        review_notes = str(redact(shared_state.get("review_notes", "")))
+        role_sections.append("## Trace Summary\n" + _render_trace_summary(role_runtime_feedback))
+        role_sections.append("## Review Notes\n" + (review_notes if review_notes else "No review notes yet."))
+
+    role_metadata = dict(metadata)
+    role_metadata.update(
+        {
+            "role": role_context.role,
+            "role_allowed_actions": list(role_context.allowed_actions),
+            "role_visible_sections": list(role_context.visible_sections),
+        }
+    )
+    return context + "\n\n" + "\n\n".join(role_sections), role_metadata
