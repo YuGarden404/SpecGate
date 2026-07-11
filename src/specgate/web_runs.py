@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sqlite3
@@ -83,19 +84,23 @@ def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
         run = _load_run(db_path, run_id)
         project = _load_project(db_path, run["project_id"], run["user_id"])
         paths = project_paths(data_root, run["user_id"], project["id"])
-        _mark_running(db_path, run_id)
+        if not _mark_running(db_path, run_id):
+            return
 
+        index_before = _index_signature(paths.workspace / "index.html")
         result = _run_mock_agent(paths)
         queue = ApprovalQueue.read(approval_queue_path(paths.workspace))
         index_path: Path | None = None
         zip_path: Path | None = None
-        if (paths.workspace / "index.html").is_file():
+        index_after = _index_signature(paths.workspace / "index.html")
+        produced_index = index_after is not None and index_after != index_before
+        if produced_index:
             index_path, zip_path = _publish_artifacts(paths)
 
-        status = _status_for_result(result, queue)
+        status = _status_for_result(result, queue, produced_index=produced_index)
         error_message = None if status in {"completed", "needs_approval"} else "Gate did not pass"
-        if status == "failed" and index_path is None:
-            error_message = "Gate did not pass: index.html was not produced"
+        if status == "failed" and not produced_index:
+            error_message = "Run did not produce index.html"
         trust_level = _trust_level(result, status)
         _finish_run(
             db_path,
@@ -199,19 +204,20 @@ def _load_project(db_path: Path, project_id: int, user_id: int) -> sqlite3.Row:
         conn.close()
 
 
-def _mark_running(db_path: Path, run_id: int) -> None:
+def _mark_running(db_path: Path, run_id: int) -> bool:
     now = utc_now().isoformat()
     conn = connect_db(db_path)
     try:
-        conn.execute(
+        cursor = conn.execute(
             """
             update runs
             set status = ?, started_at = ?, finished_at = null, error_message = null
-            where id = ?
+            where id = ? and status = ?
             """,
-            ("running", now, run_id),
+            ("running", now, run_id, "queued"),
         )
         conn.commit()
+        return cursor.rowcount == 1
     finally:
         conn.close()
 
@@ -278,12 +284,15 @@ def _mark_failed(db_path: Path, run_id: int, error_message: str) -> None:
             update runs
             set status = ?,
                 trust_level = ?,
+                index_artifact_path = null,
+                zip_artifact_path = null,
                 error_message = ?,
                 finished_at = ?
             where id = ?
             """,
             ("failed", "failed", error_message, now, run_id),
         )
+        conn.execute("delete from artifacts where run_id = ?", (run_id,))
         conn.execute(
             """
             update projects
@@ -306,6 +315,14 @@ def _publish_artifacts(paths: ProjectPaths) -> tuple[Path, Path]:
     shutil.copy2(source, index_path)
     zip_path = package_result_zip(paths.artifacts)
     return index_path, zip_path
+
+
+def _index_signature(path: Path) -> tuple[int, int, str] | None:
+    if not path.is_file():
+        return None
+    stat = path.stat()
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return stat.st_mtime_ns, stat.st_size, digest
 
 
 def _record_artifacts(
@@ -362,10 +379,12 @@ def _sync_approvals(conn: sqlite3.Connection, run_id: int, queue: ApprovalQueue)
         )
 
 
-def _status_for_result(result: RunResult, queue: ApprovalQueue) -> str:
+def _status_for_result(result: RunResult, queue: ApprovalQueue, *, produced_index: bool) -> str:
     has_pending_approval = any(approval.status == "pending" for approval in queue.approvals)
     if queue.next_resume_candidate() is not None or has_pending_approval:
         return "needs_approval"
+    if not produced_index:
+        return "failed"
     if result.passed:
         return "completed"
     return "failed"
