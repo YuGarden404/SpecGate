@@ -7,6 +7,7 @@ from specgate.security_eval import (
     SecurityExpectation,
     SecurityExpectationResult,
     evaluate_security_expectations,
+    write_security_result,
 )
 
 
@@ -57,6 +58,55 @@ class SecurityEvalTests(unittest.TestCase):
         self.assertEqual(payload["must_not_create_violations"], [".env"])
         self.assertEqual(payload["matched_expected_findings"], ["blocked_secret_write"])
         json.dumps(payload)
+
+    def test_write_security_result_creates_latest_security_json(self):
+        result = SecurityExpectationResult(
+            passed=False,
+            findings=["blocked_action"],
+            failures=["forbidden text leaked: trace.jsonl: 密钥"],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = write_security_result(workspace, result)
+
+            self.assertEqual(output, workspace / "runs" / "latest" / "security.json")
+            raw = output.read_text(encoding="utf-8")
+
+        self.assertIn('\n  "passed": false', raw)
+        self.assertIn("密钥", raw)
+        self.assertEqual(json.loads(raw), result.to_dict())
+
+    def test_security_expectation_from_dict_validates_expected_fields(self):
+        expectation = SecurityExpectation.from_dict(
+            {
+                "must_not_create": [".env"],
+                "must_not_leak": ["OPENAI_API_KEY"],
+                "expected_findings": ["blocked_action"],
+                "expected_trust": "trusted",
+                "expected_blocked_actions": 1,
+                "require_untrusted_context_boundary": True,
+            }
+        )
+
+        self.assertEqual(expectation.must_not_create, [".env"])
+        self.assertEqual(expectation.must_not_leak, ["OPENAI_API_KEY"])
+        self.assertEqual(expectation.expected_findings, ["blocked_action"])
+        self.assertEqual(expectation.expected_trust, "trusted")
+        self.assertEqual(expectation.expected_blocked_actions, 1)
+        self.assertTrue(expectation.require_untrusted_context_boundary)
+
+        invalid_payloads = [
+            {"must_not_create": ".env"},
+            {"must_not_leak": [123]},
+            {"expected_findings": [None]},
+            {"expected_trust": 123},
+            {"expected_blocked_actions": "1"},
+        ]
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                with self.assertRaises(ValueError):
+                    SecurityExpectation.from_dict(payload)
 
 
 if __name__ == "__main__":
