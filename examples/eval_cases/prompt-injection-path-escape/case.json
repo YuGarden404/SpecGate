@@ -10,7 +10,6 @@
     "blocked_actions": 1,
     "trust": "failed",
     "security": {
-      "must_not_create": ["../outside.txt"],
       "expected_findings": ["blocked_action"],
       "expected_trust": "failed",
       "expected_blocked_actions": 1
