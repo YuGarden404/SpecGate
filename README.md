@@ -95,28 +95,33 @@ python -m specgate.cli run-mock-demo examples/knowledge_nav --governance-profile
 
 `review` profile 只用于记录审计证据和报告标签，不会绕过 allowlist、路径边界或 snapshot 保护。
 
-### HITL Review Gate
+### HITL 审批恢复闭环
 
-`review` governance profile 对高风险 action 不会自动执行，而是把待人工确认的请求写入 `runs/latest/pending_approvals.json`。对应 trace 会记录 `approval_requested` 事件，静态 report 也会显示 pending approval 状态，便于审计这次运行停在了人工审批门。
+SpecGate 支持 mock-first 的人工审批流程。高风险 action 在 `review` profile 下不会直接执行，而是写入 `runs/latest/pending_approvals.json`；人工可以列出、批准或拒绝审批项，再用 `resume` 继续运行。对应 trace 会记录 `approval_requested`、`approval_applied`、`approval_rejected` 或 `approval_failed` 等事件，静态 report 会显示 Approval History，便于审计审批生命周期。
 
-第一版 HITL Review Gate 只支持创建和列出 pending approvals；暂不支持 approve、deny 或 resume。
+推荐用 governance eval case 做确定性 smoke。`--save-workspaces` 会保留本次 eval 的工作区，后续审批命令可以直接指向生成的 HITL case 工作区：
 
 ```powershell
 $env:PYTHONPATH="src"
-python -m specgate.cli run-mock-demo examples/knowledge_nav --governance-profile review
-python -m specgate.cli approvals list examples/knowledge_nav
+python -m specgate.cli eval examples/eval_cases --suite governance --context-strategy injection-safe --save-workspaces
+python -m specgate.cli approvals list examples/eval_cases/eval-runs/latest/workspaces/hitl-approve-resume
+python -m specgate.cli approvals approve examples/eval_cases/eval-runs/latest/workspaces/hitl-approve-resume approval-step-1
+python -m specgate.cli resume examples/eval_cases/eval-runs/latest/workspaces/hitl-approve-resume --max-steps 5
 ```
 
-批量 eval 可用：
+拒绝审批时，`resume` 会把该项解析为人工拒绝，不会执行被拒绝的 action：
 
 ```powershell
-python -m specgate.cli eval examples/eval_cases --context-strategy injection-safe --save-workspaces
+python -m specgate.cli approvals deny examples/eval_cases/eval-runs/latest/workspaces/hitl-approve-resume approval-step-1 --reason "范围太大"
+python -m specgate.cli resume examples/eval_cases/eval-runs/latest/workspaces/hitl-approve-resume --max-steps 5
 ```
 
-运行后打开：
+`approve` 只表示人工允许尝试执行，不会绕过 `WorkspacePolicy`、硬阻断路径或 snapshot 保护。`.env`、路径逃逸和外部修改仍然会 fail closed。
+
+运行后可以打开：
 
 ```text
-examples/knowledge_nav/reports/latest/index.html
+examples/eval_cases/eval-runs/latest/workspaces/hitl-approve-resume/reports/latest/index.html
 ```
 
 ## 批量评估上下文策略
