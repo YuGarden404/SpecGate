@@ -53,9 +53,9 @@ def _summarize_security(results: list[EvalCaseResult]) -> dict:
         payload = item.security if isinstance(item.security, dict) else {}
         must_not_create_violations += len(_list_value(payload.get("must_not_create_violations")))
         must_not_leak_violations += len(_list_value(payload.get("must_not_leak_violations")))
-        if payload.get("passed") is True:
+        if item.expected_match is True:
             expected_matches += 1
-        elif payload.get("passed") is False:
+        if payload.get("passed") is False:
             failed_security_expectations.append(
                 {"case_id": item.case_id, "failures": _list_value(payload.get("failures"))}
             )

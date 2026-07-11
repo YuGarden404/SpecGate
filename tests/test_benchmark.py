@@ -47,7 +47,7 @@ class BenchmarkTests(unittest.TestCase):
         suites = [
             EvalSuiteResult(
                 strategy="baseline",
-                total_cases=4,
+                total_cases=5,
                 passed_cases=2,
                 expected_matches=2,
                 results=[
@@ -88,6 +88,26 @@ class BenchmarkTests(unittest.TestCase):
                             "passed": True,
                             "failures": [],
                             "must_not_create_violations": ["bad.txt"],
+                            "must_not_leak_violations": [],
+                        },
+                    ),
+                    EvalCaseResult(
+                        "security-payload-pass-overall-mismatch",
+                        "baseline",
+                        False,
+                        True,
+                        False,
+                        1,
+                        0,
+                        4,
+                        0,
+                        100,
+                        "failed non-security expectation",
+                        suite="security",
+                        security={
+                            "passed": True,
+                            "failures": [],
+                            "must_not_create_violations": [],
                             "must_not_leak_violations": [],
                         },
                     ),
@@ -164,9 +184,9 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(
             summary_data[0]["security"],
             {
-                "cases": 3,
+                "cases": 4,
                 "expected_matches": 1,
-                "blocked_actions": 6,
+                "blocked_actions": 10,
                 "must_not_create_violations": 2,
                 "must_not_leak_violations": 1,
                 "failed_security_expectations": [
