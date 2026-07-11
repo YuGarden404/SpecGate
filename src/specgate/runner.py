@@ -22,7 +22,7 @@ from specgate.isolation import RoleExecution, action_allowed_for_role, build_iso
 from specgate.llm import LLMClient
 from specgate.memory import append_memory
 from specgate.metrics import PermissionDecision, RunMetrics, TrustSummary, build_trust_summary, classify_rule_family
-from specgate.multi_agent import MultiAgentState, ROLE_SEQUENCE, phase_for_role
+from specgate.multi_agent import MultiAgentState, phase_for_role, summary_requests_repair
 from specgate.policy import WorkspacePolicy
 from specgate.snapshot import FileSnapshot
 from specgate.tools import ToolDispatcher
@@ -171,8 +171,9 @@ class AgentRunner:
                 "trust": trust.to_dict(),
             },
         )
+        passed = final_gate.passed and not metrics.role_cycle_limit_reached
         result = RunResult(
-            final_gate.passed,
+            passed,
             step,
             final_gate,
             metrics.context_chars_max,
@@ -448,6 +449,106 @@ class AgentRunner:
             latest_gate, metrics = self._run_gate_with_feedback(step, metrics, runtime_feedback)
         return latest_gate, metrics
 
+    def _run_multi_agent_role_once(
+        self,
+        step: int,
+        role: str,
+        state: MultiAgentState,
+        latest_gate: GateResult | None,
+        metrics: RunMetrics,
+        runtime_feedback: list[dict],
+        permission_decisions: list[PermissionDecision],
+    ) -> tuple[GateResult | None, RunMetrics]:
+        phase = phase_for_role(role)
+        role_context = role_context_for(role)
+        self.trace.append("role_started", {"step": step, "role": role, "phase": phase})
+        context, context_metadata = build_role_context_pack_with_metadata(
+            self.root,
+            role=role,
+            shared_state=state.to_shared_state(),
+            latest_gate=latest_gate,
+            runtime_feedback=runtime_feedback,
+            strategy=self.context_strategy,
+            policy=self.policy,
+        )
+        metrics = self._record_retrieval(metrics, context_metadata)
+        metrics = self._record_compression(metrics, context_metadata)
+        context_chars = len(context)
+        metrics = replace(
+            metrics,
+            steps=step,
+            context_chars_max=max(metrics.context_chars_max, context_chars),
+            role_runs=metrics.role_runs + 1,
+            planner_runs=metrics.planner_runs + (1 if role == "planner" else 0),
+            implementer_runs=metrics.implementer_runs + (1 if role == "implementer" else 0),
+            reviewer_runs=metrics.reviewer_runs + (1 if role == "reviewer" else 0),
+        )
+        self.trace.append(
+            "role_context_built",
+            {"step": step, "role": role, "phase": phase, "context_chars": context_chars},
+        )
+        raw = self.llm.complete(context)
+        metrics = replace(metrics, llm_calls=metrics.llm_calls + 1)
+        self.trace.append("llm_response", {"step": step, "role": role, "phase": phase, "text": raw})
+
+        try:
+            action = parse_action(raw)
+        except ActionParseError as exc:
+            metrics = replace(metrics, parse_errors=metrics.parse_errors + 1)
+            event = {"step": step, "role": role, "phase": phase, "type": "parse_error", "error": str(exc)}
+            runtime_feedback.append(redact(event))
+            self.trace.append("parse_error", event)
+            return latest_gate, metrics
+
+        summary_value = action.args.get("summary", "")
+        summary = summary_value if isinstance(summary_value, str) else ""
+        allowed_by_role = action_allowed_for_role(role, action.action)
+        execution = RoleExecution(
+            role=role,
+            phase=phase,
+            context_chars=context_chars,
+            visible_sections=role_context.visible_sections,
+            allowed_actions=role_context.allowed_actions,
+            attempted_action=action.action,
+            action_allowed_by_role=allowed_by_role,
+            blocked_reason=None if allowed_by_role else f"role {role} cannot perform {action.action}",
+            summary=summary or None,
+        )
+        state.executions.append(execution)
+        self.trace.append("role_action", execution.to_dict())
+
+        if not allowed_by_role:
+            metrics = replace(metrics, role_blocked_actions=metrics.role_blocked_actions + 1)
+            self.trace.append("role_action_blocked", execution.to_dict())
+            runtime_feedback.append(redact({"step": step, "type": "role_action_blocked", **execution.to_dict()}))
+            return latest_gate, metrics
+
+        if role == "planner" and action.action == "finish":
+            state.plan = summary
+            metrics = replace(metrics, finish_actions=metrics.finish_actions + 1)
+            self.trace.append("role_finished", execution.to_dict())
+            return latest_gate, metrics
+
+        if role == "reviewer" and action.action == "finish":
+            state.review_notes = summary
+            state.repair_requested = summary_requests_repair(summary)
+            metrics = replace(metrics, finish_actions=metrics.finish_actions + 1)
+            self.trace.append("role_finished", execution.to_dict())
+            return latest_gate, metrics
+
+        if role == "implementer":
+            latest_gate, metrics = self._execute_agent_action(
+                step,
+                action,
+                metrics,
+                runtime_feedback,
+                permission_decisions,
+                latest_gate,
+            )
+            self.trace.append("role_finished", execution.to_dict())
+
+        return latest_gate, metrics
+
     def _run_multi_agent_loop(self, reset_queue: bool) -> RunResult:
         if reset_queue:
             self._reset_approval_queue()
@@ -457,113 +558,71 @@ class AgentRunner:
         metrics = RunMetrics()
         latest_gate: GateResult | None = None
         state = MultiAgentState()
+        max_role_cycles = 2
+        step = 0
 
-        for step, role in enumerate(ROLE_SEQUENCE, start=1):
-            phase = phase_for_role(role)
-            role_context = role_context_for(role)
-            self.trace.append("role_started", {"step": step, "role": role, "phase": phase})
-            context, context_metadata = build_role_context_pack_with_metadata(
-                self.root,
-                role=role,
-                shared_state=state.to_shared_state(),
-                latest_gate=latest_gate,
-                runtime_feedback=runtime_feedback,
+        def finish_with_isolation(final_step: int, final_metrics: RunMetrics) -> RunResult:
+            nonlocal latest_gate
+            if latest_gate is None:
+                latest_gate, final_metrics = self._run_gate_with_feedback(final_step, final_metrics, runtime_feedback)
+            evidence = build_isolation_evidence(
                 strategy=self.context_strategy,
-                policy=self.policy,
+                executions=state.executions,
+                review_repairs=state.review_repairs,
             )
-            metrics = self._record_retrieval(metrics, context_metadata)
-            metrics = self._record_compression(metrics, context_metadata)
-            context_chars = len(context)
-            metrics = replace(
-                metrics,
-                steps=step,
-                context_chars_max=max(metrics.context_chars_max, context_chars),
-                role_runs=metrics.role_runs + 1,
-                planner_runs=metrics.planner_runs + (1 if role == "planner" else 0),
-                implementer_runs=metrics.implementer_runs + (1 if role == "implementer" else 0),
-                reviewer_runs=metrics.reviewer_runs + (1 if role == "reviewer" else 0),
-            )
-            self.trace.append(
-                "role_context_built",
-                {"step": step, "role": role, "phase": phase, "context_chars": context_chars},
-            )
-            raw = self.llm.complete(context)
-            metrics = replace(metrics, llm_calls=metrics.llm_calls + 1)
-            self.trace.append("llm_response", {"step": step, "role": role, "phase": phase, "text": raw})
+            final_metrics = self._record_isolation(final_metrics, {"isolation": redact(evidence)})
+            return self._finish_result(final_step, latest_gate, final_metrics, permission_decisions)
 
-            try:
-                action = parse_action(raw)
-            except ActionParseError as exc:
-                metrics = replace(metrics, parse_errors=metrics.parse_errors + 1)
-                event = {"step": step, "role": role, "phase": phase, "type": "parse_error", "error": str(exc)}
-                runtime_feedback.append(redact(event))
-                self.trace.append("parse_error", event)
-                continue
-
-            summary_value = action.args.get("summary", "")
-            summary = summary_value if isinstance(summary_value, str) else ""
-            allowed_by_role = action_allowed_for_role(role, action.action)
-            execution = RoleExecution(
-                role=role,
-                phase=phase,
-                context_chars=context_chars,
-                visible_sections=role_context.visible_sections,
-                allowed_actions=role_context.allowed_actions,
-                attempted_action=action.action,
-                action_allowed_by_role=allowed_by_role,
-                blocked_reason=None if allowed_by_role else f"role {role} cannot perform {action.action}",
-                summary=summary or None,
-            )
-            state.executions.append(execution)
-            self.trace.append("role_action", execution.to_dict())
-
-            if not allowed_by_role:
-                metrics = replace(metrics, role_blocked_actions=metrics.role_blocked_actions + 1)
-                self.trace.append("role_action_blocked", execution.to_dict())
-                runtime_feedback.append(redact({"step": step, "type": "role_action_blocked", **execution.to_dict()}))
-                continue
-
-            if role == "planner" and action.action == "finish":
-                state.plan = summary
-                metrics = replace(metrics, finish_actions=metrics.finish_actions + 1)
-                self.trace.append("role_finished", execution.to_dict())
-                continue
-
-            if role == "reviewer" and action.action == "finish":
-                state.review_notes = summary
-                metrics = replace(metrics, finish_actions=metrics.finish_actions + 1)
-                self.trace.append("role_finished", execution.to_dict())
-                if latest_gate is None:
-                    latest_gate, metrics = self._run_gate_with_feedback(step, metrics, runtime_feedback)
-                evidence = build_isolation_evidence(
-                    strategy=self.context_strategy,
-                    executions=state.executions,
-                    review_repairs=state.review_repairs,
-                )
-                metrics = self._record_isolation(metrics, {"isolation": redact(evidence)})
-                return self._finish_result(step, latest_gate, metrics, permission_decisions)
-
-            if role == "implementer":
-                latest_gate, metrics = self._execute_agent_action(
-                    step,
-                    action,
-                    metrics,
-                    runtime_feedback,
-                    permission_decisions,
-                    latest_gate,
-                )
-                self.trace.append("role_finished", execution.to_dict())
-
-        if latest_gate is None:
-            latest_gate, metrics = self._run_gate_with_feedback(len(ROLE_SEQUENCE), metrics, runtime_feedback)
-        evidence = build_isolation_evidence(
-            strategy=self.context_strategy,
-            executions=state.executions,
-            review_repairs=state.review_repairs,
+        step += 1
+        latest_gate, metrics = self._run_multi_agent_role_once(
+            step,
+            "planner",
+            state,
+            latest_gate,
+            metrics,
+            runtime_feedback,
+            permission_decisions,
         )
-        metrics = self._record_isolation(metrics, {"isolation": redact(evidence)})
-        metrics = replace(metrics, max_steps_reached=True)
-        return self._finish_result(len(ROLE_SEQUENCE), latest_gate, metrics, permission_decisions)
+
+        while True:
+            step += 1
+            latest_gate, metrics = self._run_multi_agent_role_once(
+                step,
+                "implementer",
+                state,
+                latest_gate,
+                metrics,
+                runtime_feedback,
+                permission_decisions,
+            )
+
+            step += 1
+            state.repair_requested = False
+            latest_gate, metrics = self._run_multi_agent_role_once(
+                step,
+                "reviewer",
+                state,
+                latest_gate,
+                metrics,
+                runtime_feedback,
+                permission_decisions,
+            )
+
+            if not state.repair_requested:
+                return finish_with_isolation(step, metrics)
+
+            if state.review_repairs >= max_role_cycles - 1:
+                metrics = replace(metrics, role_cycle_limit_reached=True, max_steps_reached=True)
+                self.trace.append("role_cycle_limit_reached", {"review_repairs": state.review_repairs})
+                return finish_with_isolation(step, metrics)
+
+            state.review_repairs += 1
+            metrics = replace(metrics, review_repairs=state.review_repairs)
+            self.trace.append(
+                "role_repair_requested",
+                {"review_repairs": state.review_repairs, "review_notes": redact(state.review_notes)},
+            )
+            state.repair_requested = False
 
     def _run_loop(
         self,

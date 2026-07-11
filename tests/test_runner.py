@@ -323,6 +323,113 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(approval.action_payload["args"]["path"], "index.html")
             self.assertEqual(approval.action_payload["args"]["content"], "needs approval")
 
+    def test_multi_agent_reviewer_can_request_one_repair_cycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build a page with Search and Details.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("Must include Search and Details.", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"read_file", "list_files", "write_file", "replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            llm = MockLLM(
+                [
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "Plan Search Details"}},
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {
+                            "path": "index.html",
+                            "content": (
+                                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                "<title>Search</title></head><body><input type=\"search\">Search</body></html>"
+                            ),
+                        },
+                    },
+                    {
+                        "schema_version": "1",
+                        "action": "finish",
+                        "args": {"summary": "request_repair: missing Details"},
+                    },
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {
+                            "path": "index.html",
+                            "content": (
+                                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                "<title>Search Details</title></head><body>"
+                                '<input type="search"><main>Search Details</main></body></html>'
+                            ),
+                        },
+                    },
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "review complete"}},
+                ]
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=5, context_strategy="multi-agent-isolated").run()
+
+            self.assertTrue(result.passed)
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.review_repairs, 1)
+            self.assertEqual(result.metrics.implementer_runs, 2)
+            self.assertEqual(result.metrics.reviewer_runs, 2)
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("role_repair_requested", trace_text)
+
+    def test_multi_agent_repair_cycle_limit_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build a page with Search and Details.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("Must include Search and Details.", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"read_file", "list_files", "write_file", "replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            incomplete_html = (
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                "<title>Search</title></head><body><input type=\"search\">Search</body></html>"
+            )
+            llm = MockLLM(
+                [
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "Plan Search Details"}},
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {"path": "index.html", "content": incomplete_html},
+                    },
+                    {
+                        "schema_version": "1",
+                        "action": "finish",
+                        "args": {"summary": "request_repair: missing Details"},
+                    },
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {"path": "index.html", "content": incomplete_html},
+                    },
+                    {
+                        "schema_version": "1",
+                        "action": "finish",
+                        "args": {"summary": "request_repair: still missing Details"},
+                    },
+                ]
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=5, context_strategy="multi-agent-isolated").run()
+
+            self.assertFalse(result.passed)
+            self.assertIsNotNone(result.metrics)
+            self.assertTrue(result.metrics.role_cycle_limit_reached)
+            self.assertIsNotNone(result.trust)
+            self.assertIn("role_cycle_limit_reached", result.trust.reasons)
+
     def test_rag_select_run_records_retrieval_evidence_and_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
