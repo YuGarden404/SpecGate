@@ -210,6 +210,126 @@ class ApprovalTests(unittest.TestCase):
         self.assertIsNotNone(candidate)
         self.assertEqual(candidate.id, "approval-step-2")
 
+    def test_resolve_applies_approved_approval(self):
+        queue = ApprovalQueue(
+            [
+                PendingApproval(
+                    id="approval-step-1",
+                    step=1,
+                    action="replace_file",
+                    path="README.md",
+                    risk_level="review",
+                    reason="requires human review",
+                    profile="review",
+                    status="approved",
+                )
+            ]
+        )
+
+        updated = queue.resolve("approval-step-1", "applied", resolved_at="2026-07-11T10:02:00Z")
+
+        self.assertEqual(updated.approvals[0].status, "applied")
+        self.assertEqual(updated.approvals[0].resolved_at, "2026-07-11T10:02:00Z")
+
+    def test_resolve_rejects_denied_approval(self):
+        queue = ApprovalQueue(
+            [
+                PendingApproval(
+                    id="approval-step-1",
+                    step=1,
+                    action="replace_file",
+                    path="README.md",
+                    risk_level="review",
+                    reason="requires human review",
+                    profile="review",
+                    status="denied",
+                    decision_reason="too broad",
+                )
+            ]
+        )
+
+        updated = queue.resolve("approval-step-1", "rejected", resolved_at="2026-07-11T10:02:00Z")
+
+        self.assertEqual(updated.approvals[0].status, "rejected")
+        self.assertEqual(updated.approvals[0].decision_reason, "too broad")
+
+    def test_resolve_fails_approved_approval_with_reason(self):
+        queue = ApprovalQueue(
+            [
+                PendingApproval(
+                    id="approval-step-1",
+                    step=1,
+                    action="replace_file",
+                    path="README.md",
+                    risk_level="review",
+                    reason="requires human review",
+                    profile="review",
+                    status="approved",
+                )
+            ]
+        )
+
+        updated = queue.resolve(
+            "approval-step-1",
+            "failed",
+            resolved_at="2026-07-11T10:02:00Z",
+            reason="snapshot changed",
+        )
+
+        self.assertEqual(updated.approvals[0].status, "failed")
+        self.assertEqual(updated.approvals[0].decision_reason, "snapshot changed")
+
+    def test_resolve_rejects_pending_and_terminal_approvals(self):
+        for status in ("pending", "applied", "rejected", "failed"):
+            with self.subTest(status=status):
+                queue = ApprovalQueue(
+                    [
+                        PendingApproval(
+                            id="approval-step-1",
+                            step=1,
+                            action="replace_file",
+                            path="README.md",
+                            risk_level="review",
+                            reason="requires human review",
+                            profile="review",
+                            status=status,
+                        )
+                    ]
+                )
+
+                with self.assertRaises(ValueError) as error:
+                    queue.resolve("approval-step-1", "applied", resolved_at="2026-07-11T10:02:00Z")
+
+                self.assertIn("approval is not resumable", str(error.exception))
+
+    def test_resolve_enforces_approved_and_denied_target_statuses(self):
+        invalid_transitions = [
+            ("approved", "rejected"),
+            ("denied", "applied"),
+            ("denied", "failed"),
+        ]
+        for source_status, target_status in invalid_transitions:
+            with self.subTest(source_status=source_status, target_status=target_status):
+                queue = ApprovalQueue(
+                    [
+                        PendingApproval(
+                            id="approval-step-1",
+                            step=1,
+                            action="replace_file",
+                            path="README.md",
+                            risk_level="review",
+                            reason="requires human review",
+                            profile="review",
+                            status=source_status,
+                        )
+                    ]
+                )
+
+                with self.assertRaises(ValueError) as error:
+                    queue.resolve("approval-step-1", target_status, resolved_at="2026-07-11T10:02:00Z")
+
+                self.assertIn("invalid approval transition", str(error.exception))
+
     def test_queue_append_returns_new_queue_without_mutating_original(self):
         approval = PendingApproval(
             id="approval-step-3",

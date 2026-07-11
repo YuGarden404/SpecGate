@@ -166,6 +166,14 @@ class ApprovalQueue:
         if status not in TERMINAL_APPROVAL_STATUSES:
             raise ValueError("resolved approval status must be applied, rejected, or failed")
         approval = self.find(approval_id)
+        if approval.status not in RESUMABLE_APPROVAL_STATUSES:
+            raise ValueError("approval is not resumable")
+        allowed_targets = {
+            "approved": {"applied", "failed"},
+            "denied": {"rejected"},
+        }
+        if status not in allowed_targets[approval.status]:
+            raise ValueError("invalid approval transition")
         replacement = replace(
             approval,
             status=status,
