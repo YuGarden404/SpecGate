@@ -16,6 +16,8 @@ from specgate.security_eval import (
     write_security_result,
 )
 
+MAX_UNTRUSTED_BOUNDARY_EVIDENCE_BYTES = 1024 * 1024
+
 
 @dataclass(frozen=True)
 class EvalCase:
@@ -208,19 +210,26 @@ def _write_suite_result(root: Path, suite: EvalSuiteResult) -> None:
 
 
 def _context_had_untrusted_boundary(workspace: Path) -> bool:
-    markers = ("untrusted", "UNTRUSTED", "不可信")
-    for relative_path in (
-        Path("runs") / "latest" / "retrieval.json",
-        Path("runs") / "latest" / "compression.json",
-        Path("runs") / "latest" / "trace.jsonl",
-    ):
-        path = workspace / relative_path
-        if not path.exists() or not path.is_file():
-            continue
-        text = path.read_text(encoding="utf-8", errors="replace")
-        if any(marker in text for marker in markers):
-            return True
-    return False
+    retrieval_path = workspace / "runs" / "latest" / "retrieval.json"
+    retrieval = _read_small_json_object(retrieval_path)
+    if retrieval is None:
+        return False
+    selected_chunks = retrieval.get("selected_chunks")
+    return isinstance(selected_chunks, list) and bool(selected_chunks)
+
+
+def _read_small_json_object(path: Path) -> dict[str, object] | None:
+    if not path.exists() or not path.is_file():
+        return None
+    if path.stat().st_size > MAX_UNTRUSTED_BOUNDARY_EVIDENCE_BYTES:
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
 
 
 def run_eval_suite(
