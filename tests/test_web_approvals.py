@@ -148,6 +148,52 @@ class WebApprovalsTests(unittest.TestCase):
         self.assertEqual(queue.approvals[0].decided_at, row["decided_at"])
         self.assertIsNone(queue.approvals[0].decision_reason)
 
+    def test_approve_web_approval_rejects_duplicate_decisions_without_diverging(self):
+        db_path, data_root, alice, _bob, alice_project, _bob_project = self.make_context()
+        _run, web_approval = self.add_web_approval(db_path, data_root, alice, alice_project)
+        approved = approve_web_approval(db_path, data_root, alice["id"], web_approval["id"])
+
+        with self.assertRaises(ValueError):
+            deny_web_approval(db_path, data_root, alice["id"], web_approval["id"], "too broad")
+        with self.assertRaises(ValueError):
+            approve_web_approval(db_path, data_root, alice["id"], web_approval["id"])
+
+        paths = project_paths(data_root, alice["id"], alice_project["id"])
+        queue = ApprovalQueue.read(approval_queue_path(paths.workspace))
+        with closing(connect_db(db_path)) as conn:
+            db_row = conn.execute(
+                "select status, decided_at from approvals where id = ?",
+                (web_approval["id"],),
+            ).fetchone()
+        self.assertEqual(queue.approvals[0].status, "approved")
+        self.assertEqual(queue.approvals[0].decided_at, approved["decided_at"])
+        self.assertEqual(db_row["status"], "approved")
+        self.assertEqual(db_row["decided_at"], approved["decided_at"])
+
+    def test_approve_web_approval_rejects_non_pending_db_row_before_writing_queue(self):
+        db_path, data_root, alice, _bob, alice_project, _bob_project = self.make_context()
+        _run, web_approval = self.add_web_approval(db_path, data_root, alice, alice_project)
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                "update approvals set status = 'approved', decided_at = '2026-07-11T10:01:00Z' where id = ?",
+                (web_approval["id"],),
+            )
+            conn.commit()
+
+        with self.assertRaises(ValueError):
+            approve_web_approval(db_path, data_root, alice["id"], web_approval["id"])
+
+        paths = project_paths(data_root, alice["id"], alice_project["id"])
+        queue = ApprovalQueue.read(approval_queue_path(paths.workspace))
+        with closing(connect_db(db_path)) as conn:
+            db_row = conn.execute(
+                "select status, decided_at from approvals where id = ?",
+                (web_approval["id"],),
+            ).fetchone()
+        self.assertEqual(queue.approvals[0].status, "pending")
+        self.assertEqual(db_row["status"], "approved")
+        self.assertEqual(db_row["decided_at"], "2026-07-11T10:01:00Z")
+
     def test_deny_web_approval_updates_queue_and_db(self):
         db_path, data_root, alice, _bob, alice_project, _bob_project = self.make_context()
         _run, web_approval = self.add_web_approval(db_path, data_root, alice, alice_project)
@@ -160,6 +206,45 @@ class WebApprovalsTests(unittest.TestCase):
         self.assertEqual(queue.approvals[0].status, "denied")
         self.assertEqual(queue.approvals[0].decided_at, row["decided_at"])
         self.assertEqual(queue.approvals[0].decision_reason, "too broad")
+
+    def test_approve_web_approval_rejects_project_mismatch(self):
+        db_path, data_root, alice, _bob, alice_project, _bob_project = self.make_context()
+        other_project = create_manual_project(
+            db_path,
+            data_root,
+            alice["id"],
+            name="Other Alice Site",
+            spec_text="# Spec\nBuild another page.",
+            checklist_text="- Ship HTML.",
+            index_html=None,
+        )
+        _run, web_approval = self.add_web_approval(db_path, data_root, alice, alice_project)
+        other_paths = project_paths(data_root, alice["id"], other_project["id"])
+        ApprovalQueue(
+            [
+                PendingApproval(
+                    id=web_approval["approval_id"],
+                    step=1,
+                    action="write_file",
+                    path="index.html",
+                    risk_level="review",
+                    reason="write_file requires human review",
+                    profile="review",
+                )
+            ]
+        ).write(approval_queue_path(other_paths.workspace))
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                "update approvals set project_id = ? where id = ?",
+                (other_project["id"], web_approval["id"]),
+            )
+            conn.commit()
+
+        with self.assertRaises(ValueError):
+            approve_web_approval(db_path, data_root, alice["id"], web_approval["id"])
+
+        queue = ApprovalQueue.read(approval_queue_path(other_paths.workspace))
+        self.assertEqual(queue.approvals[0].status, "pending")
 
     def test_resume_run_once_only_resumes_needs_approval_runs(self):
         db_path, data_root, alice, _bob, alice_project, _bob_project = self.make_context()
@@ -212,6 +297,17 @@ class WebApprovalsTests(unittest.TestCase):
         with patch("specgate.web_runs._run_resume_agent") as runner:
             with self.assertRaises(ValueError):
                 resume_run_once(db_path, data_root, bob["id"], needs_run["id"])
+
+        runner.assert_not_called()
+        self.assertEqual(get_run(db_path, alice["id"], needs_run["id"])["status"], "needs_approval")
+
+    def test_resume_run_once_rejects_pending_approval_without_marking_failed(self):
+        db_path, data_root, alice, _bob, alice_project, _bob_project = self.make_context()
+        needs_run, _approval = self.add_web_approval(db_path, data_root, alice, alice_project)
+
+        with patch("specgate.web_runs._run_resume_agent") as runner:
+            with self.assertRaises(ValueError):
+                resume_run_once(db_path, data_root, alice["id"], needs_run["id"])
 
         runner.assert_not_called()
         self.assertEqual(get_run(db_path, alice["id"], needs_run["id"])["status"], "needs_approval")

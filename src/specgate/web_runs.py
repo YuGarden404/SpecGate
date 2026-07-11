@@ -120,14 +120,21 @@ def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
 
 
 def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -> sqlite3.Row | None:
-    run: sqlite3.Row | None = None
-    try:
-        run = _mark_resume_running(db_path, user_id, run_id)
-        if run is None:
-            return None
+    run = get_run(db_path, user_id, run_id)
+    if run["status"] != "needs_approval":
+        return None
 
-        project = _load_project(db_path, run["project_id"], user_id)
-        paths = project_paths(data_root, user_id, project["id"])
+    project = _load_project(db_path, run["project_id"], user_id)
+    paths = project_paths(data_root, user_id, project["id"])
+    queue = ApprovalQueue.read(approval_queue_path(paths.workspace))
+    if queue.next_resume_candidate() is None:
+        raise ValueError("no approved or denied approval to resume")
+
+    running_run: sqlite3.Row | None = None
+    try:
+        running_run = _mark_resume_running(db_path, user_id, run_id)
+        if running_run is None:
+            return None
 
         index_before = _index_signature(paths.workspace / "index.html")
         result = _run_resume_agent(paths)
@@ -156,7 +163,7 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
         )
         return get_run(db_path, user_id, run_id)
     except Exception as exc:
-        if run is not None:
+        if running_run is not None:
             _mark_failed(db_path, run_id, _safe_error(exc))
             return get_run(db_path, user_id, run_id)
         raise

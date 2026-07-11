@@ -55,30 +55,37 @@ def _decide_web_approval(
     status: str,
     reason: str | None,
 ) -> sqlite3.Row:
-    row = _load_owned_approval(db_path, user_id, web_approval_id)
-    paths = project_paths(data_root, user_id, row["project_id"])
-    queue_path = approval_queue_path(paths.workspace)
-    decided_at = utc_now().isoformat()
-
-    queue = ApprovalQueue.read(queue_path)
-    if status == "approved":
-        queue = queue.approve(row["approval_id"], decided_at)
-    elif status == "denied":
-        queue = queue.deny(row["approval_id"], reason or "", decided_at)
-    else:
-        raise ValueError("invalid approval decision")
-    queue.write(queue_path)
-
     conn = connect_db(db_path)
     try:
-        conn.execute(
+        conn.execute("begin immediate")
+        row = _load_web_approval(conn, user_id, web_approval_id)
+        if row["status"] != "pending":
+            raise ValueError("approval is not pending")
+
+        paths = project_paths(data_root, user_id, row["project_id"])
+        queue_path = approval_queue_path(paths.workspace)
+        decided_at = utc_now().isoformat()
+
+        queue = ApprovalQueue.read(queue_path)
+        if status == "approved":
+            queue = queue.approve(row["approval_id"], decided_at)
+        elif status == "denied":
+            queue = queue.deny(row["approval_id"], reason or "", decided_at)
+        else:
+            raise ValueError("invalid approval decision")
+
+        cursor = conn.execute(
             """
             update approvals
             set status = ?, decided_at = ?
-            where id = ?
+            where id = ? and status = 'pending'
             """,
             (status, decided_at, web_approval_id),
         )
+        if cursor.rowcount != 1:
+            raise ValueError("approval is not pending")
+
+        queue.write(queue_path)
         conn.commit()
         return conn.execute("select * from approvals where id = ?", (web_approval_id,)).fetchone()
     except Exception:
@@ -88,20 +95,24 @@ def _decide_web_approval(
         conn.close()
 
 
-def _load_owned_approval(db_path: Path, user_id: int, web_approval_id: int) -> sqlite3.Row:
-    conn = connect_db(db_path)
-    try:
-        row = conn.execute(
-            """
-            select approvals.*
-            from approvals
-            join runs on runs.id = approvals.run_id
-            where approvals.id = ? and runs.user_id = ?
-            """,
-            (web_approval_id, user_id),
-        ).fetchone()
-        if row is None:
-            raise ValueError("approval not found")
-        return row
-    finally:
-        conn.close()
+def _load_web_approval(
+    conn: sqlite3.Connection,
+    user_id: int,
+    web_approval_id: int,
+) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        select approvals.*
+        from approvals
+        join runs on runs.id = approvals.run_id
+        join projects on projects.id = runs.project_id
+        where approvals.id = ?
+          and runs.user_id = ?
+          and projects.user_id = ?
+          and approvals.project_id = runs.project_id
+        """,
+        (web_approval_id, user_id, user_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("approval not found")
+    return row
