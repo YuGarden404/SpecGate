@@ -2034,3 +2034,48 @@ SPEC 覆盖：
 
 - `Action`、`ToolResult`、`GateResult`、`TraceStore`、`MockLLM`、`AgentRunner` 在各任务中命名一致。
 - 测试命令统一使用 `$env:PYTHONPATH="src"` 和 `python -m unittest`。
+# 2026-07-10 Context Harness Deepening Implementation Plan
+
+### Completion Status
+
+- [x] Task 1 completed in `526f54c` - Lightweight Retrieval Core.
+- [x] Task 2 completed in `ac4842a` - RAG Select Context Strategy.
+- [x] Task 3 completed in `5c6a51b` - Retrieval Evidence in Trace, Metrics, Report, and Eval.
+- [x] Task 4 completed in `2b0691c` - Deterministic Context Lifecycle Compression.
+- [x] Task 5 completed in `a386dff` - Role Isolation Core.
+- [x] Task 6 completed in `50bbb88` - Multi-Strategy Benchmark Aggregation.
+- [x] Task 7 completed in `8a602cb` - Mock Eval Cases and Documentation.
+- [x] Task 8 completed by the final process-evidence commit - Final Review, Process Evidence, and Verification.
+
+## Task 7 Mock Eval Cases and Documentation
+
+本任务补充三个 mock-first eval case：
+
+1. `retrieval-context-select`：用于 `rag-select` 检索相关 implementation notes。
+2. `context-compression-lifecycle`：用于 `compressed-rag` 展示 tool-result clearing 和关键约束保留。
+3. `isolation-role-boundary`：用于 `isolated-harness` 展示 role context/state isolation evidence。
+
+同步更新 `README.md`、`SPEC.md`、`PLAN.md`、`SPEC_PROCESS.md` 和 `AGENT_LOG.md`，明确本阶段仍以 mock/stub LLM 作为核心验收路径，真实 LLM 实验继续后置。
+
+本轮新增的正式实现计划见：
+
+`docs/superpowers/plans/2026-07-10-context-harness-deepening.md`
+
+目标是在 `feat-context-harness-deepening` 分支上按阶段完成：
+
+1. Lightweight Retrieval Core
+2. RAG Select Context Strategy
+3. Retrieval Evidence in Trace, Metrics, Report, and Eval
+4. Deterministic Context Lifecycle Compression
+5. Role Isolation Core
+6. Multi-Strategy Benchmark Aggregation
+7. Mock Eval Cases and Documentation
+8. Final Review, Process Evidence, and Verification
+
+执行约束：
+
+- 使用 mock/stub LLM 作为核心验收路径。
+- 每个任务遵循 TDD。
+- 每个任务完成后进行 spec review 和 code quality review。
+- 每个任务独立提交，并把 commit hash 记录回本文件、`SPEC_PROCESS.md` 和 `AGENT_LOG.md`。
+- 不提交 `examples/eval_cases/eval-runs/` 运行产物。

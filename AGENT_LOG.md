@@ -590,3 +590,127 @@
   - `$env:PYTHONPATH='src'; python -m specgate.cli eval examples/eval_cases --context-strategy compressed` 通过，`cases=4, expected_matches=4`。
   - `$env:PYTHONPATH='src'; python -m specgate.cli eval examples/eval_cases --context-strategy injection-safe` 通过，`cases=4, expected_matches=4`。
   - Docker 人工验证：用户在本机 PowerShell 执行 `docker build -t specgate:context-eval .` 成功，`docker run --rm specgate:context-eval` 无报错，`docker run --rm specgate:context-eval python -m specgate.cli eval examples/eval_cases --context-strategy injection-safe` 输出 `SpecGate eval finished: strategy=injection-safe, cases=4, passed=0, expected_matches=4`。
+# 2026-07-10 23:40:00 +08:00
+
+- Task：启动 `Context Harness Deepening` 大工程规格设计。
+- Branch：`feat-context-harness-deepening`。
+- Skill/process：
+  - 使用 Superpowers `brainstorming` 收束方向。
+  - 读取课程通用要求、A 类 Coding Agent Harness 要求和 PE/CE/HE 课件。
+- 人工决策：
+  - 授权在一条大分支上连续推进四个阶段。
+  - 授权阶段完成后自动写规格/计划、派发 subagent、审查、测试、提交，并继续下一阶段。
+  - 授权根目录 `SPEC.md`、`PLAN.md`、`SPEC_PROCESS.md`、`AGENT_LOG.md` 从本轮开始作为最终交付物持续维护。
+  - 确认核心验收以 mock/stub LLM 为准，真实 LLM 只作为后续可选实验。
+- Agent 决策：
+  - 采用方案 A：Select / RAG Harness -> Explainable Select -> Compress Lifecycle -> Isolate + Benchmark。
+  - 第一版 Select/RAG 不引入向量库或 embedding API，先使用本地 lexical retrieval。
+  - 第一版 Compress 不依赖 LLM 摘要，先使用 deterministic summarizer。
+  - 第一版 Isolate 不做真实并发进程，只做 role context/state isolation。
+- 输出：
+  - `docs/superpowers/specs/2026-07-10-context-harness-deepening-design.md`
+  - `SPEC.md` 追加深化规格摘要。
+  - `SPEC_PROCESS.md` 追加本轮 brainstorming 过程记录。
+
+## 2026-07-10 23:50:00 +08:00
+
+## 2026-07-10 Task 7 Mock Eval Cases and Documentation
+
+- Task: 补充 Context Harness Deepening 的 mock eval cases 与说明文档。
+- Branch: `feat-context-harness-deepening`
+- Superpowers:
+  - 继续使用 `subagent-driven-development` 主流程。
+  - 保持 mock/stub LLM 为核心验收路径。
+- 新增样例:
+  - `examples/eval_cases/retrieval-context-select`
+  - `examples/eval_cases/context-compression-lifecycle`
+  - `examples/eval_cases/isolation-role-boundary`
+- 文档更新:
+  - `README.md`
+  - `SPEC.md`
+  - `PLAN.md`
+  - `SPEC_PROCESS.md`
+  - `AGENT_LOG.md`
+- 验证计划:
+  - `python -m specgate.cli eval examples/eval_cases --context-strategy rag-select`
+  - `python -m specgate.cli eval examples/eval_cases --context-strategy compressed-rag`
+  - `python -m specgate.cli eval examples/eval_cases --context-strategy isolated-harness`
+  - `python -m specgate.cli benchmark examples/eval_cases --strategies baseline rag-select compressed-rag isolated-harness`
+- Review 结果:
+  - 规格审查发现 `examples/eval_cases/eval-runs/` 是运行产物，需要避免误提交。
+  - 质量审查建议将文档措辞从“验证策略能力”收窄为“展示/记录 evidence”。
+  - 已在 `.gitignore` 增加 `examples/eval_cases/eval-runs/`，并同步修正文档说明。
+- 验证结果:
+  - `rag-select`: `cases=7, expected_matches=7`
+  - `compressed-rag`: `cases=7, expected_matches=7`
+  - `isolated-harness`: `cases=7, expected_matches=7`
+  - `benchmark`: `strategies=4, cases=7`
+  - `python -m unittest discover -s tests -v`: `Ran 190 tests ... OK`
+
+- Task：编写 `Context Harness Deepening` 实现计划。
+- Skill/process：
+  - 使用 Superpowers `writing-plans`。
+  - 根据已确认规格拆分为 8 个 TDD 任务。
+- 人工决策：
+  - 已确认规格。
+  - 已授权按方案 A 连续推进。
+- Agent 决策：
+  - 任务顺序固定为 retrieval core -> rag strategy -> evidence -> compression -> isolation -> benchmark -> eval/docs -> final verification。
+  - 不并行派发实现任务，避免共享文件冲突。
+  - 每个任务完成后再进入下一任务。
+- 输出：
+  - `docs/superpowers/plans/2026-07-10-context-harness-deepening.md`
+  - `PLAN.md` 追加计划摘要。
+  - `SPEC_PROCESS.md` 追加计划记录。
+
+## 2026-07-10 Task 8 Final Review, Process Evidence, and Verification
+
+- Task 1: Lightweight Retrieval Core
+  - Subagent/process: subagent-driven development with spec and quality review.
+  - Spec review: approved after implementation.
+  - Code review: approved after implementation.
+  - Verification: retrieval/context tests and full suite passed during task execution.
+  - Commit: `526f54c`
+- Task 2: RAG Select Context Strategy
+  - Subagent/process: subagent-driven development with spec and quality review.
+  - Spec review: approved after implementation.
+  - Code review: approved after implementation.
+  - Verification: context strategy tests and full suite passed during task execution.
+  - Commit: `ac4842a`
+- Task 3: Retrieval Evidence in Trace, Metrics, Report, and Eval
+  - Subagent/process: subagent-driven development with spec and quality review.
+  - Spec review: approved after implementation.
+  - Code review: approved after implementation.
+  - Verification: runner/report/eval metrics tests and full suite passed during task execution.
+  - Commit: `5c6a51b`
+- Task 4: Deterministic Context Lifecycle Compression
+  - Subagent/process: subagent-driven development with spec and quality review.
+  - Spec review: approved after implementation.
+  - Code review: approved after implementation.
+  - Verification: context lifecycle tests and full suite passed during task execution.
+  - Commit: `2b0691c`
+- Task 5: Role Isolation Core
+  - Subagent/process: subagent-driven development with spec and quality review.
+  - Spec review: approved after implementation.
+  - Code review: approved after implementation.
+  - Verification: isolation/runner/report tests and full suite passed during task execution.
+  - Commit: `a386dff`
+- Task 6: Multi-Strategy Benchmark Aggregation
+  - Subagent/process: subagent-driven development with spec and quality review.
+  - Spec review: approved after implementation.
+  - Code review: approved after implementation.
+  - Verification: benchmark CLI/tests and full suite passed during task execution.
+  - Commit: `50bbb88`
+- Task 7: Mock Eval Cases and Documentation
+  - Subagent/process: spec reviewer `019f4d0a-69da-7df0-964e-ae02c8676799`, quality reviewer `019f4d0b-0108-7a82-b4d1-41490445274c`.
+  - Spec review: issues fixed (`eval-runs/` ignore rule).
+  - Code review: issues fixed (README/SPEC evidence wording).
+  - Verification: `rag-select` / `compressed-rag` / `isolated-harness` eval all `expected_matches=7`; benchmark `strategies=4, cases=7`; full suite `Ran 190 tests ... OK`.
+  - Commit: `8a602cb`
+- Task 8: Final evidence and verification
+  - Subagent/process: controller final pass.
+  - Spec review: plan checklist reconciled against commits.
+  - Code review: final reviewer found one Critical issue: RAG retrieval and selected context did not honor `WorkspacePolicy.allowed_read_paths`.
+  - Fix: `9b03490` passes the workspace policy into context construction, filters selected files and retrieved chunks by `allowed_read_paths`, and adds a regression test proving a policy-disallowed matching file is not sent to the LLM context or retrieval evidence.
+  - Verification: full suite `Ran 191 tests ... OK`; benchmark `strategies=4, cases=7`; `rag-select`, `compressed-rag`, and `isolated-harness` eval each reported `expected_matches=7`.
+  - Commit: `52964d4` for process evidence, `9b03490` for the final review security fix.

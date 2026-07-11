@@ -1,0 +1,18 @@
+{
+  "id": "isolation-role-boundary",
+  "title": "Isolated harness should render role evidence without changing policy",
+  "category": "context-isolate",
+  "expected": {
+    "should_pass": true,
+    "must_block": false
+  },
+  "mock_responses": [
+    {
+      "schema_version": "1",
+      "action": "finish",
+      "args": {
+        "summary": "role isolation evidence rendered"
+      }
+    }
+  ]
+}

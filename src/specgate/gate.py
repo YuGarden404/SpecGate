@@ -66,13 +66,13 @@ def _check(code: str, passed: bool, message: str) -> GateCheck:
     return GateCheck(code, passed, message)
 
 
-def _read_checklist(checklist_path: Path) -> str:
-    if not checklist_path.exists():
+def _read_checklist(checklist_path: Path | None) -> str:
+    if checklist_path is None or not checklist_path.exists():
         return ""
     return checklist_path.read_text(encoding="utf-8-sig")
 
 
-def _checklist_terms(checklist_path: Path) -> list[str]:
+def _checklist_terms(checklist_path: Path | None) -> list[str]:
     terms: list[str] = []
     for line in _read_checklist(checklist_path).splitlines():
         line = line.strip()
@@ -94,7 +94,7 @@ def _required_node_count(checklist_text: str) -> int:
     return 10
 
 
-def run_html_gate(html_path: Path, checklist_path: Path) -> GateResult:
+def run_html_gate(html_path: Path, checklist_path: Path | None) -> GateResult:
     checks: list[GateCheck] = []
     issues: list[GateIssue] = []
 

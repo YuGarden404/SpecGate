@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 from pathlib import Path
 
-from specgate.config import load_policy
+from specgate.approvals import ApprovalQueue, GovernanceConfig, approval_queue_path
+from specgate.benchmark import summarize_benchmark
+from specgate.config import WorkspaceConfig, load_workspace_config
 from specgate.context import VALID_CONTEXT_STRATEGIES
 from specgate.credentials import clear_credential, credential_status_from_env, read_credential, set_credential
 from specgate.eval_runner import run_eval_suite
@@ -13,6 +16,9 @@ from specgate.llm import LLMProviderError, MockLLM, OpenAICompatibleLLM
 from specgate.policy import WorkspacePolicy
 from specgate.report import generate_report
 from specgate.runner import AgentRunner
+
+
+GOVERNANCE_PROFILES = ("strict", "demo", "review")
 
 
 def _fixed_demo_html() -> str:
@@ -389,13 +395,57 @@ def _default_demo_policy(root: Path) -> WorkspacePolicy:
 
 
 def _load_demo_policy(root: Path) -> WorkspacePolicy:
+    return _load_workspace_settings(root).policy
+
+
+def _load_workspace_settings(root: Path) -> WorkspaceConfig:
     config_path = root / "specgate.toml"
     if config_path.exists():
-        return load_policy(config_path)
-    return _default_demo_policy(root)
+        return load_workspace_config(config_path)
+    return WorkspaceConfig(policy=_default_demo_policy(root), governance=GovernanceConfig())
 
 
-def run_mock_demo(root: Path) -> int:
+def list_approvals(root: Path) -> int:
+    try:
+        queue = ApprovalQueue.read(approval_queue_path(root))
+
+        if not queue.approvals:
+            print("no pending approvals")
+            return 0
+
+        rows = []
+        for approval in queue.approvals:
+            approval_id = approval.id
+            status = approval.status
+            action = approval.action
+            path = approval.path
+            reason = approval.reason
+            if not all(isinstance(value, str) for value in (approval_id, status, action, reason)):
+                raise ValueError("approval display fields must be strings")
+            if path is not None and not isinstance(path, str):
+                raise ValueError("approval path must be a string or null")
+            rows.append(
+                "\t".join(
+                    [
+                        approval_id,
+                        status,
+                        action,
+                        path or "",
+                        reason,
+                    ]
+                )
+            )
+
+        print("id\tstatus\taction\tpath\treason")
+        for row in rows:
+            print(row)
+    except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
+        print("could not read pending approvals: malformed queue")
+        return 1
+    return 0
+
+
+def run_mock_demo(root: Path, governance_profile: str | None = None) -> int:
     llm = MockLLM(
         [
             {
@@ -407,10 +457,25 @@ def run_mock_demo(root: Path) -> int:
             {"schema_version": "1", "action": "finish", "args": {"summary": "done"}},
         ]
     )
-    policy = _load_demo_policy(root)
-    result = AgentRunner(root, llm, policy, max_steps=5).run()
+    settings = _load_workspace_settings(root)
+    result = AgentRunner(
+        root,
+        llm,
+        settings.policy,
+        max_steps=5,
+        governance_profile=governance_profile,
+        governance_config=settings.governance,
+    ).run()
     gate = result.final_gate or run_html_gate(root / "index.html", root / "CHECKLIST.md")
-    generate_report(root, gate, result.steps)
+    generate_report(
+        root,
+        gate,
+        result.steps,
+        metrics=result.metrics,
+        permission_decisions=result.permission_decisions,
+        trust=result.trust,
+        profile=result.profile,
+    )
     return 0 if result.passed else 1
 
 
@@ -423,6 +488,7 @@ def run_real_llm(
     max_steps: int,
     user_agent: str,
     timeout: float,
+    governance_profile: str | None = None,
 ) -> int:
     status = credential_status_from_env(provider, env_file)
     if not status.safe_to_run:
@@ -443,16 +509,123 @@ def run_real_llm(
         user_agent=user_agent,
         timeout=timeout,
     )
-    policy = _load_demo_policy(root)
+    settings = _load_workspace_settings(root)
     try:
-        result = AgentRunner(root, llm, policy, max_steps=max_steps).run()
+        result = AgentRunner(
+            root,
+            llm,
+            settings.policy,
+            max_steps=max_steps,
+            governance_profile=governance_profile,
+            governance_config=settings.governance,
+        ).run()
     except LLMProviderError as exc:
         print(f"provider request failed: {exc}")
         return 1
     gate = result.final_gate or run_html_gate(root / "index.html", root / "CHECKLIST.md")
-    generate_report(root, gate, result.steps)
+    generate_report(
+        root,
+        gate,
+        result.steps,
+        metrics=result.metrics,
+        permission_decisions=result.permission_decisions,
+        trust=result.trust,
+        profile=result.profile,
+    )
     print(f"SpecGate run finished: passed={result.passed}, steps={result.steps}")
     return 0 if result.passed else 1
+
+
+def run_real_eval(
+    root: Path,
+    strategy: str,
+    provider: str,
+    model: str | None,
+    base_url: str | None,
+    env_file: Path,
+    max_steps: int,
+    user_agent: str,
+    timeout: float,
+    save_workspaces: bool = False,
+    governance_profile: str | None = None,
+) -> int:
+    if not model:
+        print("--model is required when --provider is used")
+        return 1
+    if not base_url:
+        print("--base-url is required when --provider is used")
+        return 1
+    status = credential_status_from_env(provider, env_file)
+    if not status.safe_to_run:
+        print(status.message)
+        return 1
+    if provider != "openai-compatible":
+        print(f"{provider} is configured, but SpecGate eval currently supports openai-compatible only")
+        return 1
+    api_key = read_credential(provider, env_file)
+    if not api_key:
+        print(status.message)
+        return 1
+
+    def llm_factory(_case):
+        return OpenAICompatibleLLM(
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            user_agent=user_agent,
+            timeout=timeout,
+        )
+
+    try:
+        suite = run_eval_suite(
+            root,
+            strategy=strategy,
+            llm_factory=llm_factory,
+            max_steps=max_steps,
+            save_workspaces=save_workspaces,
+            governance_profile=governance_profile,
+        )
+    except LLMProviderError as exc:
+        print(f"provider request failed: {exc}")
+        return 1
+    if suite.total_cases == 0:
+        print(f"SpecGate eval found no cases: {root}")
+        return 1
+    print(
+        "SpecGate eval finished: "
+        f"strategy={suite.strategy}, "
+        f"cases={suite.total_cases}, "
+        f"passed={suite.passed_cases}, "
+        f"expected_matches={suite.expected_matches}"
+    )
+    return 0 if suite.expected_matches == suite.total_cases and suite.total_cases > 0 else 1
+
+
+def run_benchmark(root: Path, strategies: list[str], governance_profile: str | None = None) -> int:
+    suites = []
+    output_dir = root / "eval-runs" / "latest"
+    for strategy in strategies:
+        suite = run_eval_suite(root, strategy=strategy, governance_profile=governance_profile)
+        suites.append(suite)
+        results_path = output_dir / "results.json"
+        if results_path.exists():
+            strategy_results_path = output_dir / f"results-{strategy}.json"
+            strategy_results_path.write_text(results_path.read_text(encoding="utf-8"), encoding="utf-8")
+    if not suites or any(suite.total_cases == 0 for suite in suites):
+        print(f"SpecGate benchmark found no cases: {root}")
+        return 1
+    benchmark = summarize_benchmark(suites)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "benchmark.json").write_text(
+        json.dumps(benchmark.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(
+        "SpecGate benchmark finished: "
+        f"strategies={len(strategies)}, "
+        f"cases={suites[0].total_cases}"
+    )
+    return 0 if all(suite.expected_matches == suite.total_cases for suite in suites) else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -460,6 +633,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     demo = sub.add_parser("run-mock-demo")
     demo.add_argument("workspace")
+    demo.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
     real_run = sub.add_parser("run")
     real_run.add_argument("workspace")
     real_run.add_argument("--provider", default="openai-compatible")
@@ -469,6 +643,7 @@ def main(argv: list[str] | None = None) -> int:
     real_run.add_argument("--max-steps", type=int, default=5)
     real_run.add_argument("--user-agent", default="SpecGate/0.1 OpenAI-Compatible")
     real_run.add_argument("--timeout", type=float, default=60)
+    real_run.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
     eval_parser = sub.add_parser("eval")
     eval_parser.add_argument("cases_root")
     eval_parser.add_argument(
@@ -476,6 +651,24 @@ def main(argv: list[str] | None = None) -> int:
         choices=sorted(VALID_CONTEXT_STRATEGIES),
         default="baseline",
     )
+    eval_parser.add_argument("--provider")
+    eval_parser.add_argument("--model")
+    eval_parser.add_argument("--base-url")
+    eval_parser.add_argument("--env-file", default=".env")
+    eval_parser.add_argument("--max-steps", type=int, default=5)
+    eval_parser.add_argument("--user-agent", default="SpecGate/0.1 OpenAI-Compatible")
+    eval_parser.add_argument("--timeout", type=float, default=60)
+    eval_parser.add_argument("--save-workspaces", action="store_true")
+    eval_parser.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
+    benchmark = sub.add_parser("benchmark")
+    benchmark.add_argument("cases_root")
+    benchmark.add_argument(
+        "--strategies",
+        nargs="+",
+        choices=sorted(VALID_CONTEXT_STRATEGIES),
+        default=["baseline", "rag-select", "compressed-rag", "isolated-harness"],
+    )
+    benchmark.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
     credentials = sub.add_parser("credentials")
     credentials_sub = credentials.add_subparsers(dest="credentials_command", required=True)
     for command in ("status", "clear"):
@@ -486,9 +679,13 @@ def main(argv: list[str] | None = None) -> int:
     set_parser.add_argument("provider")
     set_parser.add_argument("--env-file", default=".env")
     set_parser.add_argument("--value")
+    approvals = sub.add_parser("approvals")
+    approvals_sub = approvals.add_subparsers(dest="approvals_command", required=True)
+    approvals_list = approvals_sub.add_parser("list")
+    approvals_list.add_argument("workspace")
     args = parser.parse_args(argv)
     if args.command == "run-mock-demo":
-        return run_mock_demo(Path(args.workspace))
+        return run_mock_demo(Path(args.workspace), governance_profile=args.governance_profile)
     if args.command == "run":
         return run_real_llm(
             root=Path(args.workspace),
@@ -499,9 +696,29 @@ def main(argv: list[str] | None = None) -> int:
             max_steps=args.max_steps,
             user_agent=args.user_agent,
             timeout=args.timeout,
+            governance_profile=args.governance_profile,
         )
     if args.command == "eval":
-        suite = run_eval_suite(Path(args.cases_root), strategy=args.context_strategy)
+        if args.provider:
+            return run_real_eval(
+                root=Path(args.cases_root),
+                strategy=args.context_strategy,
+                provider=args.provider,
+                model=args.model,
+                base_url=args.base_url,
+                env_file=Path(args.env_file),
+                max_steps=args.max_steps,
+                user_agent=args.user_agent,
+                timeout=args.timeout,
+                save_workspaces=args.save_workspaces,
+                governance_profile=args.governance_profile,
+            )
+        suite = run_eval_suite(
+            Path(args.cases_root),
+            strategy=args.context_strategy,
+            save_workspaces=args.save_workspaces,
+            governance_profile=args.governance_profile,
+        )
         if suite.total_cases == 0:
             print(f"SpecGate eval found no cases: {args.cases_root}")
             return 1
@@ -513,6 +730,12 @@ def main(argv: list[str] | None = None) -> int:
             f"expected_matches={suite.expected_matches}"
         )
         return 0 if suite.expected_matches == suite.total_cases and suite.total_cases > 0 else 1
+    if args.command == "benchmark":
+        return run_benchmark(
+            Path(args.cases_root),
+            strategies=args.strategies,
+            governance_profile=args.governance_profile,
+        )
     if args.command == "credentials":
         env_file = Path(args.env_file)
         if args.credentials_command == "status":
@@ -528,6 +751,9 @@ def main(argv: list[str] | None = None) -> int:
             clear_credential(args.provider, env_file)
             print(f"{args.provider} credential cleared from {env_file}")
             return 0
+    if args.command == "approvals":
+        if args.approvals_command == "list":
+            return list_approvals(Path(args.workspace))
     return 2
 
 

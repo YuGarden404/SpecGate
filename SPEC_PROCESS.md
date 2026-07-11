@@ -184,3 +184,63 @@ Python CLI harness + mock LLM + 静态 HTML 生成/修复
 - WebUI 首页：`https://yugarden404.github.io/SpecGate/`。
 - 知识图谱 demo：`https://yugarden404.github.io/SpecGate/demo/`。
 - 运行报告：`https://yugarden404.github.io/SpecGate/report/`。
+# 2026-07-10 Context Harness Deepening 过程记录
+
+本轮 brainstorming 的目标是确定 SpecGate 在 HITL Review Gate 之后的继续深入方向。人工首先指出项目不应继续陷入真实 LLM 性能比较，而应回到“小 Codex 产品”的 harness 能力建设。随后把候选方向收束为 Context Engineering 与 Harness Engineering 的主线。
+
+关键决策：
+
+- 采用一条大分支 `feat-context-harness-deepening` 连续推进。
+- 采用阶段化方案 A，而不是一次性大改或先做 benchmark 再反推机制。
+- 阶段顺序为 Select / RAG Harness -> Explainable Select -> Compress Lifecycle -> Isolate + Benchmark。
+- 根目录 `SPEC.md`、`PLAN.md`、`SPEC_PROCESS.md`、`AGENT_LOG.md` 重新纳入持续维护范围，作为课程最终交付证据。
+- 所有核心验收以 mock/stub LLM 为主，真实 LLM 只作为后续可选人工实验。
+
+本轮重新参考了课程通用要求、A 类 Coding Agent Harness 要求和 `pecehe-with-notes.pptx`。课件中 PE ⊂ CE ⊂ HE、Write/Select/Compress/Isolate、Agent = Model x Harness、Workflow 优先、先减法再加法等原则，被映射为本轮设计约束：先实现轻量可测机制，不引入向量库、真实并发沙箱或真实 LLM 评测主线。
+
+## 2026-07-10 Context Harness Deepening 计划记录
+
+## 2026-07-10 Task 7 Mock Eval Cases 过程记录
+
+Task 7 将前面已经实现的 Select、Compress、Isolate、Benchmark 机制落到可复现的 mock eval cases 上。新增 case 均不依赖真实 LLM、网络、向量库或外部 agent runner。
+
+新增样例：
+
+- `examples/eval_cases/retrieval-context-select`
+- `examples/eval_cases/context-compression-lifecycle`
+- `examples/eval_cases/isolation-role-boundary`
+
+文档同步更新 `README.md`、`SPEC.md`、`PLAN.md`、`SPEC_PROCESS.md` 和 `AGENT_LOG.md`。核心原则保持不变：真实 LLM 只作为后续可选人工实验，课程验收以 mock/stub LLM 和确定性测试为准。
+
+Task 7 审查与修正：
+- 规格审查确认三个新增 case 和文档基本满足要求，但指出 `examples/eval_cases/eval-runs/` 运行产物需要防误提交。
+- 质量审查确认新增 case 均走 `MockLLM`，不依赖网络或真实 LLM；同时建议把“验证策略能力”的措辞收窄为“展示/记录 evidence”。
+- 已在 `.gitignore` 增加 `examples/eval_cases/eval-runs/`，并更新 README / SPEC 对运行产物和 evidence 的说明。
+
+Task 7 验证结果：
+- `python -m specgate.cli eval examples/eval_cases --context-strategy rag-select`：`cases=7, expected_matches=7`
+- `python -m specgate.cli eval examples/eval_cases --context-strategy compressed-rag`：`cases=7, expected_matches=7`
+- `python -m specgate.cli eval examples/eval_cases --context-strategy isolated-harness`：`cases=7, expected_matches=7`
+- `python -m specgate.cli benchmark examples/eval_cases --strategies baseline rag-select compressed-rag isolated-harness`：`strategies=4, cases=7`
+- `python -m unittest discover -s tests -v`：`Ran 190 tests ... OK`
+
+在规格确认后，使用 Superpowers `writing-plans` 将大工程拆分为 8 个可执行任务。计划保存到 `docs/superpowers/plans/2026-07-10-context-harness-deepening.md`，并同步在根目录 `PLAN.md` 追加摘要。
+
+计划设计原则：
+
+- 不并行派发实现任务，因为多个任务会共同修改 `context.py`、`metrics.py`、`report.py`、`cli.py` 和 `eval_runner.py`。
+- 每个任务都以失败测试开头，再写最小实现，再跑聚焦测试和完整测试。
+- 所有新增机制以 mock/stub LLM 或纯单元测试验证。
+- 最终 benchmark 比较 harness strategy，而不是比较真实 LLM 能力。
+
+## 2026-07-10 Task 8 Final Review 过程记录
+
+冷启动/审查记录：
+- Task 7 的规格审查子代理只拿到任务说明和文件范围，没有依赖本对话历史；它能定位到 `eval-runs/` 运行产物误提交风险。
+- Task 7 的质量审查子代理同样只做只读审查；它确认新增 case 都走 `MockLLM`，并指出文档措辞应从“验证策略能力”收窄为“展示/记录 evidence”。
+- 上述两个问题均已修复在 `8a602cb`：`.gitignore` 忽略 `examples/eval_cases/eval-runs/`，README / SPEC 同步更新。
+
+最终验证范围：
+- 单元测试：`python -m unittest discover -s tests -v`
+- Harness benchmark：`python -m specgate.cli benchmark examples/eval_cases --strategies baseline rag-select compressed-rag isolated-harness`
+- Git 状态：确认只剩 `.env`、`eval-runs/`、缓存等 ignored 本地文件。

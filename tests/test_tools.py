@@ -70,6 +70,24 @@ class ToolDispatcherTests(unittest.TestCase):
             self.assertTrue(result.blocked)
             self.assertIn("unknown action", result.message)
 
+    def test_list_files_only_returns_allowed_read_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "index.html").write_text("ok", encoding="utf-8")
+            (root / "secret_notes.md").write_text("hidden", encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"list_files"},
+                {"index.html"},
+                {"index.html"},
+            )
+            dispatcher = ToolDispatcher(policy)
+
+            result = dispatcher.dispatch(Action("1", "list_files", {}))
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.data["files"], ["index.html"])
+
     def test_snapshot_blocks_write_after_external_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

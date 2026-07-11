@@ -95,8 +95,8 @@ class ToolDispatcher:
 
     def _list_files(self, action: Action) -> ToolResult:
         files = sorted(
-            str(path.relative_to(self.policy.root)).replace("\\", "/")
-            for path in self.policy.root.rglob("*")
-            if path.is_file()
+            relative_path
+            for relative_path in self.policy.allowed_read_paths
+            if (self.policy.root / relative_path).is_file()
         )
         return ToolResult(True, action.action, "listed files", {"files": files})

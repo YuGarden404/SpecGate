@@ -82,6 +82,37 @@ $env:PYTHONPATH="src"
 python -m specgate.cli run-mock-demo examples/knowledge_nav
 ```
 
+## 治理指标
+
+SpecGate 会在 `runs/latest/trace.jsonl` 和 `reports/latest/index.html` 中记录治理证据，包括 `llm_calls`、`tool_calls`、`blocked_actions`、`parse_errors`、`gate_runs`、是否触达 `max_steps_reached`，以及每一次 permission decision 的 action、path、allowed/blocked、reason、profile 和 rule family。报告还会汇总 trust summary，状态为 `trusted`、`warning` 或 `failed`。
+
+可以显式选择治理配置：
+
+```powershell
+$env:PYTHONPATH="src"
+python -m specgate.cli run-mock-demo examples/knowledge_nav --governance-profile strict
+```
+
+`review` profile 只用于记录审计证据和报告标签，不会绕过 allowlist、路径边界或 snapshot 保护。
+
+### HITL Review Gate
+
+`review` governance profile 对高风险 action 不会自动执行，而是把待人工确认的请求写入 `runs/latest/pending_approvals.json`。对应 trace 会记录 `approval_requested` 事件，静态 report 也会显示 pending approval 状态，便于审计这次运行停在了人工审批门。
+
+第一版 HITL Review Gate 只支持创建和列出 pending approvals；暂不支持 approve、deny 或 resume。
+
+```powershell
+$env:PYTHONPATH="src"
+python -m specgate.cli run-mock-demo examples/knowledge_nav --governance-profile review
+python -m specgate.cli approvals list examples/knowledge_nav
+```
+
+批量 eval 可用：
+
+```powershell
+python -m specgate.cli eval examples/eval_cases --context-strategy injection-safe --save-workspaces
+```
+
 运行后打开：
 
 ```text
@@ -105,7 +136,7 @@ python -m specgate.cli eval examples/eval_cases --context-strategy injection-saf
 examples/eval_cases/eval-runs/latest/results.json
 ```
 
-当前 eval 默认使用 MockLLM / StubLLM，不需要真实 API key。真实 LLM 评估只作为后续扩展，不作为确定性单元测试的前提。
+当前 eval 默认使用 MockLLM / StubLLM，不需要真实 API key。真实 LLM eval 是可选演示/人工实验能力，不作为确定性单元测试前提。
 
 ## 真实 LLM 运行
 
@@ -159,6 +190,37 @@ SpecGate 使用 `Tool Registry` 结构化描述可用工具。当前注册的工
 Lab 9-12 的取舍记录见 `docs/AI4SE_Lab_9_12_Alignment.md`。当前结论是：Lab 10 已作为本阶段交付；Lab 9 MCP 暂不做；Lab 11 Hook 和 Lab 12 AgentPack 作为后续候选方向。
 
 Lab 11 Hook 已补充为可选示例：`hooks/pre-commit.sample`。它用于提交前疑似密钥扫描、demo 必要文件检查和测试提示，不会自动安装，也不是 SpecGate runtime 的一部分。
+
+## Context Harness Deepening
+
+这一阶段继续沿着 Context Engineering 和 Harness Engineering 深入，但核心验收仍然使用 MockLLM / StubLLM，不需要真实 API key。
+
+新增策略包括：
+
+- `rag-select`：从 workspace 文本文件中检索相关片段，并把来源、行号、命中词和选择原因写入 evidence。
+- `compressed-rag`：在检索基础上压缩运行反馈，清理大体积 tool result，并把关键约束放在上下文末尾。
+- `isolated-harness`：在压缩检索基础上渲染 planner / implementer / reviewer 的角色上下文隔离证据。
+- `benchmark`：固定 mock eval cases，对比不同 harness strategy，而不是比较真实 LLM 性能。
+
+常用命令：
+
+```powershell
+$env:PYTHONPATH="src"
+python -m specgate.cli eval examples/eval_cases --context-strategy rag-select
+python -m specgate.cli eval examples/eval_cases --context-strategy compressed-rag
+python -m specgate.cli eval examples/eval_cases --context-strategy isolated-harness
+python -m specgate.cli benchmark examples/eval_cases --strategies baseline rag-select compressed-rag isolated-harness
+```
+
+benchmark 会写入：
+
+```text
+examples/eval_cases/eval-runs/latest/benchmark.json
+examples/eval_cases/eval-runs/latest/results.json
+examples/eval_cases/eval-runs/latest/results-<strategy>.json
+```
+
+`examples/eval_cases/eval-runs/` 是本地运行产物，不应提交到 Git。
 
 ## Docker
 
