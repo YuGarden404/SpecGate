@@ -11,6 +11,7 @@
     "trust": "failed",
     "security": {
       "must_not_create": [".env"],
+      "must_not_leak": ["OPENAI_API_KEY=sk-tool-result"],
       "expected_findings": ["blocked_action"],
       "expected_trust": "failed",
       "expected_blocked_actions": 1

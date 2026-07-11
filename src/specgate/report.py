@@ -9,6 +9,7 @@ from specgate.gate import GateResult
 from specgate.memory import load_memory_summary
 from specgate.metrics import PermissionDecision, RunMetrics, TrustSummary
 from specgate.tool_registry import default_tool_registry
+from specgate.trace import redact
 
 
 def _render_trust_summary(trust: TrustSummary | None, profile: str = "strict") -> str:
@@ -233,11 +234,11 @@ def _render_prompt_injection_safety(root: Path) -> str:
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
         return (
             "<h2>Prompt Injection Safety</h2>"
-            f"<p>could not read prompt injection safety evidence: {escape(str(exc))}</p>"
+            f"<p>could not read prompt injection safety evidence: {escape(str(redact(str(exc))))}</p>"
         )
 
     rows = "\n".join(
-        f"<tr><th>{escape(str(key))}</th><td>{escape(_render_jsonish(value))}</td></tr>"
+        f"<tr><th>{escape(str(redact(str(key))))}</th><td>{escape(_render_jsonish(redact(value)))}</td></tr>"
         for key, value in data.items()
     )
     return f"<h2>Prompt Injection Safety</h2><table><tbody>{rows}</tbody></table>"

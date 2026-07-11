@@ -265,6 +265,7 @@ class ReportTests(unittest.TestCase):
             self.assertIn("Prompt Injection Safety", html)
             self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
             self.assertNotIn("<script>alert(1)</script>", html)
+            self.assertNotIn("sk-test-secret", html)
 
     def test_generate_report_includes_benchmark_summary(self):
         with tempfile.TemporaryDirectory() as tmp:

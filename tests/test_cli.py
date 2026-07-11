@@ -479,7 +479,11 @@ class CliTests(unittest.TestCase):
             self.assertIn("SpecGate benchmark finished", output.getvalue())
             benchmark_path = temp_cases / "eval-runs" / "latest" / "benchmark.json"
             self.assertTrue(benchmark_path.exists())
-            data = json.loads(benchmark_path.read_text(encoding="utf-8"))
+            benchmark_text = benchmark_path.read_text(encoding="utf-8")
+            self.assertNotIn("sk-rag-injection", benchmark_text)
+            self.assertNotIn("sk-hidden-html", benchmark_text)
+            self.assertNotIn("sk-tool-result", benchmark_text)
+            data = json.loads(benchmark_text)
             self.assertGreaterEqual(data["results"][0]["security"]["cases"], 6)
 
     def test_benchmark_cli_returns_failure_when_any_strategy_misses_expected_result(self):
