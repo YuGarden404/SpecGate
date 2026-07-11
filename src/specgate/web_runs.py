@@ -1,0 +1,392 @@
+from __future__ import annotations
+
+import json
+import shutil
+import sqlite3
+import threading
+from pathlib import Path
+
+from specgate.approvals import ApprovalQueue, GovernanceConfig, approval_queue_path
+from specgate.config import ContextConfig, WorkspaceConfig
+from specgate.llm import MockLLM
+from specgate.policy import WorkspacePolicy
+from specgate.runner import AgentRunner, RunResult
+from specgate.trace import redact
+from specgate.web_auth import utc_now
+from specgate.web_db import connect_db
+from specgate.web_projects import ProjectPaths, package_result_zip, project_paths
+
+
+def create_run(db_path: Path, project_id: int, user_id: int, prompt: str) -> sqlite3.Row:
+    run_prompt = _require_text(prompt, "prompt")
+    conn = connect_db(db_path)
+    try:
+        project = conn.execute(
+            "select * from projects where id = ? and user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        if project is None:
+            raise ValueError("project not found")
+
+        now = utc_now().isoformat()
+        cursor = conn.execute(
+            """
+            insert into runs (project_id, user_id, status, prompt, created_at)
+            values (?, ?, ?, ?, ?)
+            """,
+            (project_id, user_id, "queued", run_prompt, now),
+        )
+        run_id = int(cursor.lastrowid)
+        conn.execute(
+            """
+            insert into messages (project_id, user_id, role, content, created_at)
+            values (?, ?, ?, ?, ?)
+            """,
+            (project_id, user_id, "user", run_prompt, now),
+        )
+        conn.commit()
+        return conn.execute("select * from runs where id = ?", (run_id,)).fetchone()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_run(db_path: Path, user_id: int, run_id: int) -> sqlite3.Row:
+    conn = connect_db(db_path)
+    try:
+        row = conn.execute(
+            "select * from runs where id = ? and user_id = ?",
+            (run_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("run not found")
+        return row
+    finally:
+        conn.close()
+
+
+def start_run_background(db_path: Path, data_root: Path, run_id: int) -> threading.Thread:
+    thread = threading.Thread(
+        target=execute_run_once,
+        args=(db_path, data_root, run_id),
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
+    run: sqlite3.Row | None = None
+    try:
+        run = _load_run(db_path, run_id)
+        project = _load_project(db_path, run["project_id"], run["user_id"])
+        paths = project_paths(data_root, run["user_id"], project["id"])
+        _mark_running(db_path, run_id)
+
+        result = _run_mock_agent(paths)
+        queue = ApprovalQueue.read(approval_queue_path(paths.workspace))
+        index_path: Path | None = None
+        zip_path: Path | None = None
+        if (paths.workspace / "index.html").is_file():
+            index_path, zip_path = _publish_artifacts(paths)
+
+        status = _status_for_result(result, queue)
+        error_message = None if status in {"completed", "needs_approval"} else "Gate did not pass"
+        if status == "failed" and index_path is None:
+            error_message = "Gate did not pass: index.html was not produced"
+        trust_level = _trust_level(result, status)
+        _finish_run(
+            db_path,
+            run_id,
+            status=status,
+            trust_level=trust_level,
+            error_message=error_message,
+            index_artifact_path=index_path,
+            zip_artifact_path=zip_path,
+            queue=queue,
+        )
+    except Exception as exc:
+        if run is not None:
+            _mark_failed(db_path, run_id, _safe_error(exc))
+            return
+        raise
+
+
+def _run_mock_agent(paths: ProjectPaths) -> RunResult:
+    governance = GovernanceConfig(profile="review")
+    policy = WorkspacePolicy(
+        root=paths.workspace,
+        allowed_actions={"read_file", "list_files", "write_file", "replace_file", "finish"},
+        allowed_read_paths={"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+        allowed_write_paths={"index.html"},
+    )
+    workspace_config = WorkspaceConfig(
+        policy=policy,
+        governance=governance,
+        context=ContextConfig(strategy="injection-safe"),
+    )
+    llm = MockLLM(
+        [
+            {
+                "schema_version": "1",
+                "action": "write_file",
+                "args": {
+                    "path": "index.html",
+                    "content": _default_result_html(),
+                },
+            },
+            {
+                "schema_version": "1",
+                "action": "finish",
+                "args": {"summary": "SpecGate Result generated"},
+            },
+        ]
+    )
+    runner = AgentRunner(
+        paths.workspace,
+        llm,
+        workspace_config.policy,
+        max_steps=5,
+        context_strategy=workspace_config.context.strategy,
+        governance_config=workspace_config.governance,
+    )
+    return runner.run()
+
+
+def _default_result_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SpecGate Result</title>
+</head>
+<body>
+  <main>
+    <h1>SpecGate Result</h1>
+    <input type="search" aria-label="Filter results" placeholder="Filter">
+    <p>This offline HTML page was generated by the SpecGate mock execution pipeline.</p>
+  </main>
+</body>
+</html>
+"""
+
+
+def _load_run(db_path: Path, run_id: int) -> sqlite3.Row:
+    conn = connect_db(db_path)
+    try:
+        row = conn.execute("select * from runs where id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise ValueError("run not found")
+        return row
+    finally:
+        conn.close()
+
+
+def _load_project(db_path: Path, project_id: int, user_id: int) -> sqlite3.Row:
+    conn = connect_db(db_path)
+    try:
+        row = conn.execute(
+            "select * from projects where id = ? and user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("project not found")
+        return row
+    finally:
+        conn.close()
+
+
+def _mark_running(db_path: Path, run_id: int) -> None:
+    now = utc_now().isoformat()
+    conn = connect_db(db_path)
+    try:
+        conn.execute(
+            """
+            update runs
+            set status = ?, started_at = ?, finished_at = null, error_message = null
+            where id = ?
+            """,
+            ("running", now, run_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _finish_run(
+    db_path: Path,
+    run_id: int,
+    *,
+    status: str,
+    trust_level: str,
+    error_message: str | None,
+    index_artifact_path: Path | None,
+    zip_artifact_path: Path | None,
+    queue: ApprovalQueue,
+) -> None:
+    now = utc_now().isoformat()
+    conn = connect_db(db_path)
+    try:
+        conn.execute(
+            """
+            update runs
+            set status = ?,
+                trust_level = ?,
+                index_artifact_path = ?,
+                zip_artifact_path = ?,
+                error_message = ?,
+                finished_at = ?
+            where id = ?
+            """,
+            (
+                status,
+                trust_level,
+                str(index_artifact_path) if index_artifact_path is not None else None,
+                str(zip_artifact_path) if zip_artifact_path is not None else None,
+                error_message,
+                now,
+                run_id,
+            ),
+        )
+        _record_artifacts(conn, run_id, index_artifact_path, zip_artifact_path)
+        _sync_approvals(conn, run_id, queue)
+        conn.execute(
+            """
+            update projects
+            set last_run_status = ?, updated_at = ?
+            where id = (select project_id from runs where id = ?)
+            """,
+            (status, now, run_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _mark_failed(db_path: Path, run_id: int, error_message: str) -> None:
+    now = utc_now().isoformat()
+    conn = connect_db(db_path)
+    try:
+        conn.execute(
+            """
+            update runs
+            set status = ?,
+                trust_level = ?,
+                error_message = ?,
+                finished_at = ?
+            where id = ?
+            """,
+            ("failed", "failed", error_message, now, run_id),
+        )
+        conn.execute(
+            """
+            update projects
+            set last_run_status = ?, updated_at = ?
+            where id = (select project_id from runs where id = ?)
+            """,
+            ("failed", now, run_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _publish_artifacts(paths: ProjectPaths) -> tuple[Path, Path]:
+    source = paths.workspace / "index.html"
+    if not source.is_file():
+        raise ValueError("index.html was not produced")
+    paths.artifacts.mkdir(parents=True, exist_ok=True)
+    index_path = paths.artifacts / "latest-index.html"
+    shutil.copy2(source, index_path)
+    zip_path = package_result_zip(paths.artifacts)
+    return index_path, zip_path
+
+
+def _record_artifacts(
+    conn: sqlite3.Connection,
+    run_id: int,
+    index_artifact_path: Path | None,
+    zip_artifact_path: Path | None,
+) -> None:
+    conn.execute("delete from artifacts where run_id = ?", (run_id,))
+    for kind, path in (("index", index_artifact_path), ("zip", zip_artifact_path)):
+        if path is None:
+            continue
+        conn.execute(
+            "insert into artifacts (run_id, kind, path) values (?, ?, ?)",
+            (run_id, kind, str(path)),
+        )
+
+
+def _sync_approvals(conn: sqlite3.Connection, run_id: int, queue: ApprovalQueue) -> None:
+    run = conn.execute("select project_id from runs where id = ?", (run_id,)).fetchone()
+    if run is None:
+        raise ValueError("run not found")
+
+    conn.execute("delete from approvals where run_id = ?", (run_id,))
+    for approval in queue.approvals:
+        conn.execute(
+            """
+            insert into approvals (
+                run_id,
+                project_id,
+                approval_id,
+                status,
+                action_name,
+                target_path,
+                reason,
+                preview_json,
+                created_at,
+                decided_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                run["project_id"],
+                approval.id,
+                approval.status,
+                approval.action,
+                approval.path,
+                approval.reason,
+                json.dumps(approval.arguments_preview, ensure_ascii=False),
+                approval.created_at or utc_now().isoformat(),
+                approval.decided_at,
+            ),
+        )
+
+
+def _status_for_result(result: RunResult, queue: ApprovalQueue) -> str:
+    has_pending_approval = any(approval.status == "pending" for approval in queue.approvals)
+    if queue.next_resume_candidate() is not None or has_pending_approval:
+        return "needs_approval"
+    if result.passed:
+        return "completed"
+    return "failed"
+
+
+def _trust_level(result: RunResult, status: str) -> str:
+    if result.trust is not None:
+        return result.trust.status
+    if status == "completed":
+        return "trusted"
+    if status == "needs_approval":
+        return "warning"
+    return "failed"
+
+
+def _safe_error(exc: Exception) -> str:
+    text = str(redact(str(exc))) or exc.__class__.__name__
+    return text[:300]
+
+
+def _require_text(value: str, field_name: str) -> str:
+    if value is None or not value.strip():
+        raise ValueError(f"{field_name} is required")
+    return value.strip()
