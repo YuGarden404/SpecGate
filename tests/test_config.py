@@ -107,13 +107,34 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "specgate.toml").write_text(
-                '[context]\nstrategy = "multi-agent-isolated"\n',
+                "\n".join(
+                    [
+                        "[policy]",
+                        'allowed_actions = ["read_file", "finish"]',
+                        'allowed_read_paths = ["TASK_SPEC.md"]',
+                        "allowed_write_paths = []",
+                        "",
+                        "[context]",
+                        'strategy = "multi-agent-isolated"',
+                    ]
+                ),
                 encoding="utf-8",
             )
 
             config = load_workspace_config(root)
 
             self.assertEqual(config.context.strategy, "multi-agent-isolated")
+
+    def test_load_workspace_config_requires_policy_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "specgate.toml").write_text(
+                '[context]\nstrategy = "baseline"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(KeyError):
+                load_workspace_config(root)
 
     def test_load_workspace_config_rejects_non_positive_retrieval_top_k(self):
         path = self.write_config(
