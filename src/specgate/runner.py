@@ -77,18 +77,259 @@ class AgentRunner:
         self.dispatcher = ToolDispatcher(policy, snapshot)
         self.run_dir = root / "runs" / "latest"
         self.trace = TraceStore(self.run_dir / "trace.jsonl", reset=True)
-        retrieval_path = self.run_dir / "retrieval.json"
-        if retrieval_path.exists():
-            retrieval_path.unlink()
-        compression_path = self.run_dir / "compression.json"
-        if compression_path.exists():
-            compression_path.unlink()
-        isolation_path = self.run_dir / "isolation.json"
-        if isolation_path.exists():
-            isolation_path.unlink()
+        self._reset_run_artifacts()
 
     def run(self) -> RunResult:
         return self._run_loop(reset_queue=True)
+
+    def _reset_run_artifacts(self) -> None:
+        for name in ("retrieval.json", "compression.json", "isolation.json"):
+            path = self.run_dir / name
+            if path.exists():
+                path.unlink()
+
+    def _reset_approval_queue(self) -> None:
+        queue_path = approval_queue_path(self.root)
+        if queue_path.exists():
+            queue_path.unlink()
+
+    def _run_gate_with_feedback(
+        self,
+        step: int,
+        metrics: RunMetrics,
+        runtime_feedback: list[dict],
+    ) -> tuple[GateResult, RunMetrics]:
+        if "index.html" not in self.policy.allowed_read_paths:
+            gate = GateResult(
+                False,
+                [],
+                [],
+                "Gate skipped: artifact inspection is not allowed by WorkspacePolicy",
+            )
+            metrics = replace(
+                metrics,
+                gate_runs=metrics.gate_runs + 1,
+                gate_failures=metrics.gate_failures + 1,
+            )
+            event = {
+                "step": step,
+                "type": "gate_result",
+                "passed": gate.passed,
+                "summary": gate.summary,
+            }
+            runtime_feedback.append(redact(event))
+            self.trace.append(
+                "gate_result",
+                {"step": step, "passed": gate.passed, "summary": gate.summary},
+            )
+            return gate, metrics
+
+        checklist_path = (
+            self.root / "CHECKLIST.md"
+            if "CHECKLIST.md" in self.policy.allowed_read_paths
+            else None
+        )
+        gate = run_html_gate(self.root / "index.html", checklist_path)
+        metrics = replace(
+            metrics,
+            gate_runs=metrics.gate_runs + 1,
+            gate_failures=metrics.gate_failures + (0 if gate.passed else 1),
+        )
+        runtime_feedback.append(
+            redact(
+                {
+                    "step": step,
+                    "type": "gate_result",
+                    "passed": gate.passed,
+                    "summary": gate.summary,
+                }
+            )
+        )
+        self.trace.append(
+            "gate_result",
+            {"step": step, "passed": gate.passed, "summary": gate.summary},
+        )
+        return gate, metrics
+
+    def _finish_result(
+        self,
+        step: int,
+        final_gate: GateResult,
+        metrics: RunMetrics,
+        permission_decisions: list[PermissionDecision],
+    ) -> RunResult:
+        trust = build_trust_summary(final_gate.passed, metrics)
+        self.trace.append(
+            "run_summary",
+            {
+                "profile": self.governance_profile,
+                "metrics": metrics.to_dict(),
+                "trust": trust.to_dict(),
+            },
+        )
+        result = RunResult(
+            final_gate.passed,
+            step,
+            final_gate,
+            metrics.context_chars_max,
+            metrics,
+            permission_decisions,
+            trust,
+            self.governance_profile,
+        )
+        append_memory(self.root, result.passed, result.steps, final_gate.summary)
+        return result
+
+    def _record_tool_feedback(
+        self,
+        runtime_feedback: list[dict],
+        step: int,
+        action_name: str,
+        ok: bool,
+        blocked: bool,
+        message: str,
+        data: dict,
+    ) -> None:
+        runtime_feedback.append(
+            redact(
+                {
+                    "step": step,
+                    "type": "tool_result",
+                    "action": action_name,
+                    "ok": ok,
+                    "blocked": blocked,
+                    "message": message,
+                    "data": data,
+                }
+            )
+        )
+        self.trace.append(
+            "tool_result",
+            {
+                "step": step,
+                "result": {
+                    "ok": ok,
+                    "action": action_name,
+                    "message": message,
+                    "data": data,
+                    "blocked": blocked,
+                },
+            },
+        )
+
+    def _record_permission_decision(
+        self,
+        permission_decisions: list[PermissionDecision],
+        step: int,
+        action_name: str,
+        action_path: str | None,
+        ok: bool,
+        blocked: bool,
+        message: str,
+    ) -> None:
+        decision = PermissionDecision(
+            step=step,
+            action=action_name,
+            path=action_path,
+            allowed=ok and not blocked,
+            blocked=blocked,
+            reason=message,
+            profile=self.governance_profile,
+            rule_family=classify_rule_family(message),
+        )
+        permission_decisions.append(decision)
+        self.trace.append("permission_decision", decision.to_dict())
+
+    def _record_retrieval(self, metrics: RunMetrics, metadata: dict | None) -> RunMetrics:
+        if not metadata:
+            return metrics
+        retrieval = metadata.get("retrieval")
+        if not isinstance(retrieval, dict):
+            return metrics
+        selected_chunks = retrieval.get("selected_chunks", [])
+        selected_count = len(selected_chunks) if isinstance(selected_chunks, list) else 0
+        candidate_count = retrieval.get("candidate_count", 0)
+        used_chars = retrieval.get("used_chars", 0)
+        metrics = replace(
+            metrics,
+            retrieval_queries=metrics.retrieval_queries + 1,
+            retrieved_chunks=metrics.retrieved_chunks + selected_count,
+            retrieval_candidate_chunks=metrics.retrieval_candidate_chunks
+            + (candidate_count if isinstance(candidate_count, int) else 0),
+            retrieval_context_chars=metrics.retrieval_context_chars
+            + (used_chars if isinstance(used_chars, int) else 0),
+        )
+        (self.run_dir / "retrieval.json").write_text(
+            json.dumps(retrieval, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.trace.append(
+            "retrieval_result",
+            {
+                "selected_count": selected_count,
+                "candidate_count": candidate_count,
+                "used_chars": used_chars,
+            },
+        )
+        return metrics
+
+    def _record_compression(self, metrics: RunMetrics, metadata: dict | None) -> RunMetrics:
+        if not metadata:
+            return metrics
+        compression = metadata.get("compression")
+        if not isinstance(compression, dict):
+            return metrics
+        original_chars = compression.get("original_chars", 0)
+        compressed_chars = compression.get("compressed_chars", 0)
+        cleared_tool_results = compression.get("cleared_tool_results", 0)
+        metrics = replace(
+            metrics,
+            compression_original_chars=metrics.compression_original_chars
+            + (original_chars if isinstance(original_chars, int) else 0),
+            compression_compressed_chars=metrics.compression_compressed_chars
+            + (compressed_chars if isinstance(compressed_chars, int) else 0),
+            cleared_tool_results=metrics.cleared_tool_results
+            + (cleared_tool_results if isinstance(cleared_tool_results, int) else 0),
+        )
+        (self.run_dir / "compression.json").write_text(
+            json.dumps(compression, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.trace.append(
+            "compression_result",
+            {
+                "original_chars": original_chars,
+                "compressed_chars": compressed_chars,
+                "cleared_tool_results": cleared_tool_results,
+            },
+        )
+        return metrics
+
+    def _record_isolation(self, metrics: RunMetrics, metadata: dict | None) -> RunMetrics:
+        if not metadata:
+            return metrics
+        isolation = metadata.get("isolation")
+        if not isinstance(isolation, dict):
+            return metrics
+        role_contexts = isolation.get("role_contexts", 0)
+        isolated_state_keys = isolation.get("isolated_state_keys", 0)
+        metrics = replace(
+            metrics,
+            role_contexts=role_contexts if isinstance(role_contexts, int) else 0,
+            isolated_state_keys=isolated_state_keys if isinstance(isolated_state_keys, int) else 0,
+        )
+        (self.run_dir / "isolation.json").write_text(
+            json.dumps(isolation, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.trace.append(
+            "isolation_result",
+            {
+                "role_contexts": role_contexts,
+                "isolated_state_keys": isolated_state_keys,
+            },
+        )
+        return metrics
 
     def _run_loop(
         self,
@@ -99,236 +340,13 @@ class AgentRunner:
         latest_gate: GateResult | None = None,
     ) -> RunResult:
         queue_path = approval_queue_path(self.root)
-        if reset_queue and queue_path.exists():
-            queue_path.unlink()
+        if reset_queue:
+            self._reset_approval_queue()
 
         runtime_feedback: list[dict] = list(initial_runtime_feedback or [])
         metrics = initial_metrics or RunMetrics()
         context_chars_max = metrics.context_chars_max
         permission_decisions: list[PermissionDecision] = list(initial_permission_decisions or [])
-
-        def run_gate(step: int) -> GateResult:
-            nonlocal metrics
-            if "index.html" not in self.policy.allowed_read_paths:
-                gate = GateResult(
-                    False,
-                    [],
-                    [],
-                    "Gate skipped: artifact inspection is not allowed by WorkspacePolicy",
-                )
-                metrics = replace(
-                    metrics,
-                    gate_runs=metrics.gate_runs + 1,
-                    gate_failures=metrics.gate_failures + 1,
-                )
-                event = {
-                    "step": step,
-                    "type": "gate_result",
-                    "passed": gate.passed,
-                    "summary": gate.summary,
-                }
-                runtime_feedback.append(redact(event))
-                self.trace.append(
-                    "gate_result",
-                    {"step": step, "passed": gate.passed, "summary": gate.summary},
-                )
-                return gate
-            checklist_path = (
-                self.root / "CHECKLIST.md"
-                if "CHECKLIST.md" in self.policy.allowed_read_paths
-                else None
-            )
-            gate = run_html_gate(self.root / "index.html", checklist_path)
-            metrics = replace(
-                metrics,
-                gate_runs=metrics.gate_runs + 1,
-                gate_failures=metrics.gate_failures + (0 if gate.passed else 1),
-            )
-            runtime_feedback.append(
-                redact(
-                    {
-                        "step": step,
-                        "type": "gate_result",
-                        "passed": gate.passed,
-                        "summary": gate.summary,
-                    }
-                )
-            )
-            self.trace.append(
-                "gate_result",
-                {"step": step, "passed": gate.passed, "summary": gate.summary},
-            )
-            return gate
-
-        def finish_result(step: int, final_gate: GateResult, current_metrics: RunMetrics) -> RunResult:
-            trust = build_trust_summary(final_gate.passed, current_metrics)
-            self.trace.append(
-                "run_summary",
-                {
-                    "profile": self.governance_profile,
-                    "metrics": current_metrics.to_dict(),
-                    "trust": trust.to_dict(),
-                },
-            )
-            result = RunResult(
-                final_gate.passed,
-                step,
-                final_gate,
-                current_metrics.context_chars_max,
-                current_metrics,
-                permission_decisions,
-                trust,
-                self.governance_profile,
-            )
-            append_memory(self.root, result.passed, result.steps, final_gate.summary)
-            return result
-
-        def record_tool_feedback(
-            step: int,
-            action_name: str,
-            ok: bool,
-            blocked: bool,
-            message: str,
-            data: dict,
-        ) -> None:
-            runtime_feedback.append(
-                redact(
-                    {
-                        "step": step,
-                        "type": "tool_result",
-                        "action": action_name,
-                        "ok": ok,
-                        "blocked": blocked,
-                        "message": message,
-                        "data": data,
-                    }
-                )
-            )
-            self.trace.append(
-                "tool_result",
-                {
-                    "step": step,
-                    "result": {
-                        "ok": ok,
-                        "action": action_name,
-                        "message": message,
-                        "data": data,
-                        "blocked": blocked,
-                    },
-                },
-            )
-
-        def record_permission_decision(
-            step: int,
-            action_name: str,
-            action_path: str | None,
-            ok: bool,
-            blocked: bool,
-            message: str,
-        ) -> None:
-            decision = PermissionDecision(
-                step=step,
-                action=action_name,
-                path=action_path,
-                allowed=ok and not blocked,
-                blocked=blocked,
-                reason=message,
-                profile=self.governance_profile,
-                rule_family=classify_rule_family(message),
-            )
-            permission_decisions.append(decision)
-            self.trace.append("permission_decision", decision.to_dict())
-
-        def record_retrieval(metadata: dict | None) -> None:
-            nonlocal metrics
-            if not metadata:
-                return
-            retrieval = metadata.get("retrieval")
-            if not isinstance(retrieval, dict):
-                return
-            selected_chunks = retrieval.get("selected_chunks", [])
-            selected_count = len(selected_chunks) if isinstance(selected_chunks, list) else 0
-            candidate_count = retrieval.get("candidate_count", 0)
-            used_chars = retrieval.get("used_chars", 0)
-            metrics = replace(
-                metrics,
-                retrieval_queries=metrics.retrieval_queries + 1,
-                retrieved_chunks=metrics.retrieved_chunks + selected_count,
-                retrieval_candidate_chunks=metrics.retrieval_candidate_chunks
-                + (candidate_count if isinstance(candidate_count, int) else 0),
-                retrieval_context_chars=metrics.retrieval_context_chars
-                + (used_chars if isinstance(used_chars, int) else 0),
-            )
-            (self.run_dir / "retrieval.json").write_text(
-                json.dumps(retrieval, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            self.trace.append(
-                "retrieval_result",
-                {
-                    "selected_count": selected_count,
-                    "candidate_count": candidate_count,
-                    "used_chars": used_chars,
-                },
-            )
-
-        def record_compression(metadata: dict | None) -> None:
-            nonlocal metrics
-            if not metadata:
-                return
-            compression = metadata.get("compression")
-            if not isinstance(compression, dict):
-                return
-            original_chars = compression.get("original_chars", 0)
-            compressed_chars = compression.get("compressed_chars", 0)
-            cleared_tool_results = compression.get("cleared_tool_results", 0)
-            metrics = replace(
-                metrics,
-                compression_original_chars=metrics.compression_original_chars
-                + (original_chars if isinstance(original_chars, int) else 0),
-                compression_compressed_chars=metrics.compression_compressed_chars
-                + (compressed_chars if isinstance(compressed_chars, int) else 0),
-                cleared_tool_results=metrics.cleared_tool_results
-                + (cleared_tool_results if isinstance(cleared_tool_results, int) else 0),
-            )
-            (self.run_dir / "compression.json").write_text(
-                json.dumps(compression, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            self.trace.append(
-                "compression_result",
-                {
-                    "original_chars": original_chars,
-                    "compressed_chars": compressed_chars,
-                    "cleared_tool_results": cleared_tool_results,
-                },
-            )
-
-        def record_isolation(metadata: dict | None) -> None:
-            nonlocal metrics
-            if not metadata:
-                return
-            isolation = metadata.get("isolation")
-            if not isinstance(isolation, dict):
-                return
-            role_contexts = isolation.get("role_contexts", 0)
-            isolated_state_keys = isolation.get("isolated_state_keys", 0)
-            metrics = replace(
-                metrics,
-                role_contexts=role_contexts if isinstance(role_contexts, int) else 0,
-                isolated_state_keys=isolated_state_keys if isinstance(isolated_state_keys, int) else 0,
-            )
-            (self.run_dir / "isolation.json").write_text(
-                json.dumps(isolation, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            self.trace.append(
-                "isolation_result",
-                {
-                    "role_contexts": role_contexts,
-                    "isolated_state_keys": isolated_state_keys,
-                },
-            )
 
         for step in range(1, self.max_steps + 1):
             context, context_metadata = build_context_pack_with_metadata(
@@ -338,9 +356,9 @@ class AgentRunner:
                 strategy=self.context_strategy,
                 policy=self.policy,
             )
-            record_retrieval(context_metadata)
-            record_compression(context_metadata)
-            record_isolation(context_metadata)
+            metrics = self._record_retrieval(metrics, context_metadata)
+            metrics = self._record_compression(metrics, context_metadata)
+            metrics = self._record_isolation(metrics, context_metadata)
             context_chars = len(context)
             context_chars_max = max(context_chars_max, context_chars)
             metrics = replace(metrics, steps=step, context_chars_max=context_chars_max)
@@ -383,7 +401,8 @@ class AgentRunner:
                     target_state=capture_target_state(self.root, action_path),
                 )
                 queue.append(approval).write(queue_path)
-                record_permission_decision(
+                self._record_permission_decision(
+                    permission_decisions,
                     step,
                     action.action,
                     action_path,
@@ -407,7 +426,8 @@ class AgentRunner:
 
             if risk.level in {"review", "blocked"}:
                 metrics = replace(metrics, blocked_actions=metrics.blocked_actions + 1)
-                record_permission_decision(
+                self._record_permission_decision(
+                    permission_decisions,
                     step,
                     action.action,
                     action_path,
@@ -415,7 +435,8 @@ class AgentRunner:
                     blocked=True,
                     message=risk.reason,
                 )
-                record_tool_feedback(
+                self._record_tool_feedback(
+                    runtime_feedback,
                     step,
                     action.action,
                     ok=False,
@@ -435,7 +456,8 @@ class AgentRunner:
             )
             action_path_value = action.args.get("path")
             action_path = action_path_value if isinstance(action_path_value, str) else None
-            record_permission_decision(
+            self._record_permission_decision(
+                permission_decisions,
                 step=step,
                 action_name=action.action,
                 action_path=action_path,
@@ -459,17 +481,17 @@ class AgentRunner:
             self.trace.append("tool_result", {"step": step, "result": tool_result.__dict__})
 
             if action.action in {"write_file", "replace_file"} and not tool_result.blocked:
-                latest_gate = run_gate(step)
+                latest_gate, metrics = self._run_gate_with_feedback(step, metrics, runtime_feedback)
 
             if action.action == "finish":
                 if latest_gate is None:
-                    latest_gate = run_gate(step)
-                return finish_result(step, latest_gate, metrics)
+                    latest_gate, metrics = self._run_gate_with_feedback(step, metrics, runtime_feedback)
+                return self._finish_result(step, latest_gate, metrics, permission_decisions)
 
         if latest_gate is None:
-            latest_gate = run_gate(self.max_steps)
+            latest_gate, metrics = self._run_gate_with_feedback(self.max_steps, metrics, runtime_feedback)
         metrics = replace(metrics, max_steps_reached=True)
-        return finish_result(self.max_steps, latest_gate, metrics)
+        return self._finish_result(self.max_steps, latest_gate, metrics, permission_decisions)
 
     def resume_from_approval(self) -> RunResult:
         queue_path = approval_queue_path(self.root)
