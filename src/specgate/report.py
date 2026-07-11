@@ -203,8 +203,34 @@ def _render_role_isolation_evidence(root: Path) -> str:
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
         return (
             "<h2>Role Isolation Evidence</h2>"
-            f"<p>could not read role isolation evidence: {escape(str(exc))}</p>"
+            f"<p>could not read role isolation evidence: {escape(_safe_text(exc))}</p>"
         )
+
+    executions = data.get("executions", [])
+    if isinstance(executions, list) and executions:
+        rows: list[str] = []
+        for execution in executions:
+            if not isinstance(execution, dict):
+                continue
+            rows.append(
+                "<tr>"
+                f"<td>{escape(_safe_text(execution.get('role', '')))}</td>"
+                f"<td>{escape(_safe_text(execution.get('phase', '')))}</td>"
+                f"<td>{escape(_safe_text(execution.get('context_chars', '')))}</td>"
+                f"<td>{escape(_safe_text(execution.get('attempted_action', '')))}</td>"
+                f"<td>{escape(_safe_text(execution.get('action_allowed_by_role', '')))}</td>"
+                f"<td>{escape(_safe_text(execution.get('blocked_reason', '')))}</td>"
+                f"<td>{escape(_safe_text(execution.get('summary', '')))}</td>"
+                "</tr>"
+            )
+        if rows:
+            return (
+                "<h2>Role Execution Evidence</h2>"
+                "<table>"
+                "<thead><tr><th>Role</th><th>Phase</th><th>Context Chars</th><th>Action</th><th>Allowed By Role</th><th>Blocked Reason</th><th>Summary</th></tr></thead>"
+                f"<tbody>{''.join(rows)}</tbody>"
+                "</table>"
+            )
 
     rows: list[str] = []
     for role in roles:
@@ -212,11 +238,11 @@ def _render_role_isolation_evidence(root: Path) -> str:
             continue
         rows.append(
             "<tr>"
-            f"<td>{escape(str(role.get('role', '')))}</td>"
-            f"<td>{escape(_render_jsonish(role.get('visible_sections', [])))}</td>"
-            f"<td>{escape(_render_jsonish(role.get('hidden_sections', [])))}</td>"
-            f"<td>{escape(_render_jsonish(role.get('allowed_actions', [])))}</td>"
-            f"<td>{escape(_render_jsonish(role.get('state_keys', [])))}</td>"
+            f"<td>{escape(_safe_text(role.get('role', '')))}</td>"
+            f"<td>{escape(_safe_text(_render_jsonish(role.get('visible_sections', []))))}</td>"
+            f"<td>{escape(_safe_text(_render_jsonish(role.get('hidden_sections', []))))}</td>"
+            f"<td>{escape(_safe_text(_render_jsonish(role.get('allowed_actions', []))))}</td>"
+            f"<td>{escape(_safe_text(_render_jsonish(role.get('state_keys', []))))}</td>"
             "</tr>"
         )
     if not rows:

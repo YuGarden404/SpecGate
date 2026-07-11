@@ -334,6 +334,47 @@ class ReportTests(unittest.TestCase):
             self.assertIn("draft_patch", html)
             self.assertNotIn("reviewer<script>", html)
 
+    def test_generate_report_includes_role_execution_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(False, [GateCheck("doctype", False, "failed")], [], "Gate failed")
+            run_dir = root / "runs" / "latest"
+            run_dir.mkdir(parents=True)
+            (run_dir / "isolation.json").write_text(
+                json.dumps(
+                    {
+                        "strategy": "multi-agent-isolated",
+                        "role_runs": 1,
+                        "role_blocked_actions": 1,
+                        "review_repairs": 0,
+                        "executions": [
+                            {
+                                "role": "planner",
+                                "phase": "plan",
+                                "context_chars": 100,
+                                "visible_sections": ["Task"],
+                                "allowed_actions": ["finish"],
+                                "attempted_action": "write_file",
+                                "action_allowed_by_role": False,
+                                "blocked_reason": "role planner cannot perform write_file",
+                                "summary": "<script>alert(1)</script>",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            output = generate_report(root, gate, steps=1)
+
+            html = output.read_text(encoding="utf-8")
+            self.assertIn("Role Execution Evidence", html)
+            self.assertIn("planner", html)
+            self.assertIn("write_file", html)
+            self.assertIn("role planner cannot perform write_file", html)
+            self.assertNotIn("<script>alert(1)</script>", html)
+            self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+
     def test_generate_report_includes_prompt_injection_safety(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
