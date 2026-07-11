@@ -8,6 +8,10 @@ from specgate.web_db import connect_db, init_db
 
 
 class WebDbTests(unittest.TestCase):
+    def table_columns(self, conn, table_name):
+        rows = conn.execute(f"pragma table_info({table_name})").fetchall()
+        return {row[1]: row for row in rows}
+
     def test_init_db_creates_runtime_tables(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "web.sqlite3"
@@ -18,6 +22,7 @@ class WebDbTests(unittest.TestCase):
                 rows = conn.execute(
                     "select name from sqlite_master where type = 'table'"
                 ).fetchall()
+                user_version = conn.execute("pragma user_version").fetchone()[0]
 
             tables = {row[0] for row in rows}
             self.assertGreaterEqual(
@@ -33,6 +38,46 @@ class WebDbTests(unittest.TestCase):
                     "artifacts",
                 },
             )
+            self.assertEqual(user_version, 1)
+
+    def test_init_db_creates_product_model_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "web.sqlite3"
+
+            init_db(db_path)
+
+            with closing(sqlite3.connect(db_path)) as conn:
+                sessions = self.table_columns(conn, "sessions")
+                user_settings = self.table_columns(conn, "user_settings")
+                runs = self.table_columns(conn, "runs")
+                approvals = self.table_columns(conn, "approvals")
+
+            self.assertIn("token", sessions)
+
+            for column_name in (
+                "governance_profile",
+                "context_strategy",
+                "api_key_configured",
+                "api_key_ciphertext",
+            ):
+                self.assertIn(column_name, user_settings)
+            self.assertEqual(user_settings["governance_profile"][4], "'review'")
+            self.assertEqual(user_settings["context_strategy"][4], "'injection-safe'")
+            self.assertEqual(user_settings["api_key_configured"][4], "0")
+
+            for column_name in (
+                "prompt",
+                "index_artifact_path",
+                "zip_artifact_path",
+            ):
+                self.assertIn(column_name, runs)
+
+            for column_name in (
+                "approval_id",
+                "action_name",
+                "preview_json",
+            ):
+                self.assertIn(column_name, approvals)
 
     def test_connect_db_returns_rows_addressable_by_column_name(self):
         with tempfile.TemporaryDirectory() as tmp:
