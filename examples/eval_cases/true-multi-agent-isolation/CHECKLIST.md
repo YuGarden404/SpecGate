@@ -1,0 +1,2 @@
+- 必须包含 Search
+- 必须包含 Details

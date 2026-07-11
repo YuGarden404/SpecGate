@@ -60,6 +60,9 @@ class EvalCaseResult:
     retrieved_chunks: int = 0
     retrieval_candidate_chunks: int = 0
     retrieval_context_chars: int = 0
+    role_runs: int = 0
+    role_blocked_actions: int = 0
+    review_repairs: int = 0
     suite: str = "default"
     tags: list[str] = field(default_factory=list)
     security: dict | None = None
@@ -307,6 +310,9 @@ def run_eval_suite(
                 retrieved_chunks = 0
                 retrieval_candidate_chunks = 0
                 retrieval_context_chars = 0
+                role_runs = 0
+                role_blocked_actions = 0
+                review_repairs = 0
                 if metrics is not None:
                     parse_errors = metrics.parse_errors
                     blocked_actions = metrics.blocked_actions
@@ -319,6 +325,9 @@ def run_eval_suite(
                     retrieved_chunks = metrics.retrieved_chunks
                     retrieval_candidate_chunks = metrics.retrieval_candidate_chunks
                     retrieval_context_chars = metrics.retrieval_context_chars
+                    role_runs = metrics.role_runs
+                    role_blocked_actions = metrics.role_blocked_actions
+                    review_repairs = metrics.review_repairs
                 elif run_result.final_gate and not run_result.final_gate.passed and gate_failures == 0:
                     gate_failures = 1
                     gate_runs = max(gate_runs, 1)
@@ -385,6 +394,9 @@ def run_eval_suite(
                         retrieved_chunks=retrieved_chunks,
                         retrieval_candidate_chunks=retrieval_candidate_chunks,
                         retrieval_context_chars=retrieval_context_chars,
+                        role_runs=role_runs,
+                        role_blocked_actions=role_blocked_actions,
+                        review_repairs=review_repairs,
                         suite=case.suite,
                         tags=list(case.tags),
                         security=security_payload,

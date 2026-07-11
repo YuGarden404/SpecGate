@@ -18,6 +18,9 @@ class BenchmarkStrategyResult:
     parse_errors: int
     gate_runs: int
     security: dict
+    role_runs: int = 0
+    role_blocked_actions: int = 0
+    review_repairs: int = 0
 
 
 @dataclass(frozen=True)
@@ -86,6 +89,9 @@ def summarize_benchmark(suites: list[EvalSuiteResult]) -> BenchmarkResult:
                 approval_requests=sum(item.approval_requests for item in suite.results),
                 parse_errors=sum(item.parse_errors for item in suite.results),
                 gate_runs=sum(item.gate_runs for item in suite.results),
+                role_runs=sum(item.role_runs for item in suite.results),
+                role_blocked_actions=sum(item.role_blocked_actions for item in suite.results),
+                review_repairs=sum(item.review_repairs for item in suite.results),
                 security=_summarize_security(suite.results),
             )
         )

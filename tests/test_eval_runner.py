@@ -461,7 +461,15 @@ class EvalRunnerExecutionTests(unittest.TestCase):
 
     def test_run_eval_suite_accepts_llm_factory(self):
         class FakeLLM:
+            def __init__(self):
+                self.calls = 0
+
             def complete(self, context: str) -> str:
+                self.calls += 1
+                if self.calls > 1:
+                    return json.dumps(
+                        {"schema_version": "1", "action": "finish", "args": {"summary": "done"}}
+                    )
                 html = (
                     "<!doctype html><html><head>"
                     '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -487,7 +495,7 @@ class EvalRunnerExecutionTests(unittest.TestCase):
                 seen_cases.append(case.case_id)
                 return FakeLLM()
 
-            suite = run_eval_suite(root, strategy="baseline", llm_factory=llm_factory, max_steps=1)
+            suite = run_eval_suite(root, strategy="baseline", llm_factory=llm_factory, max_steps=2)
 
             self.assertEqual(seen_cases, ["factory-case"])
             self.assertEqual(suite.total_cases, 1)
@@ -496,7 +504,15 @@ class EvalRunnerExecutionTests(unittest.TestCase):
 
     def test_run_eval_suite_uses_real_expected_with_llm_factory(self):
         class FakeLLM:
+            def __init__(self):
+                self.calls = 0
+
             def complete(self, context: str) -> str:
+                self.calls += 1
+                if self.calls > 1:
+                    return json.dumps(
+                        {"schema_version": "1", "action": "finish", "args": {"summary": "done"}}
+                    )
                 html = (
                     "<!doctype html><html><head>"
                     '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -542,7 +558,7 @@ class EvalRunnerExecutionTests(unittest.TestCase):
                 root,
                 strategy="baseline",
                 llm_factory=lambda _case: FakeLLM(),
-                max_steps=1,
+                max_steps=2,
             )
 
             self.assertTrue(mock_suite.results[0].expected_match)
@@ -631,6 +647,63 @@ class EvalRunnerExecutionTests(unittest.TestCase):
             results_path = root / "eval-runs" / "latest" / "results.json"
             data = json.loads(results_path.read_text(encoding="utf-8"))
             self.assertEqual(data["results"][0]["pending_approvals"], 1)
+
+    def test_run_eval_suite_records_multi_agent_role_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = root / "case-a"
+            case.mkdir()
+            (case / "TASK_SPEC.md").write_text("Build Search Details", encoding="utf-8")
+            (case / "CHECKLIST.md").write_text(
+                "- Must include Search\n- Must include Details\n",
+                encoding="utf-8",
+            )
+            (case / "index.html").write_text("", encoding="utf-8")
+            (case / "specgate.toml").write_text(
+                (
+                    "[policy]\n"
+                    'allowed_actions=["read_file","list_files","replace_file","finish"]\n'
+                    'allowed_read_paths=["TASK_SPEC.md","CHECKLIST.md","index.html"]\n'
+                    'allowed_write_paths=["index.html"]\n'
+                ),
+                encoding="utf-8",
+            )
+            (case / "case.json").write_text(
+                json.dumps(
+                    {
+                        "id": "case-a",
+                        "title": "case a",
+                        "category": "isolation",
+                        "suite": "isolation",
+                        "expected": {"should_pass": True, "must_block": False},
+                        "mock_responses": [
+                            {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
+                            {
+                                "schema_version": "1",
+                                "action": "replace_file",
+                                "args": {
+                                    "path": "index.html",
+                                    "content": (
+                                        "<!doctype html><html><head>"
+                                        '<meta name="viewport" content="width=device-width">'
+                                        "<title>Search Details</title></head><body>"
+                                        '<input type="search" aria-label="Search">'
+                                        "<main>Search Details</main></body></html>"
+                                    ),
+                                },
+                            },
+                            {"schema_version": "1", "action": "finish", "args": {"summary": "review"}},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            suite = run_eval_suite(root, strategy="multi-agent-isolated", suite="isolation")
+
+            self.assertEqual(suite.total_cases, 1)
+            self.assertEqual(suite.results[0].role_runs, 3)
+            self.assertEqual(suite.results[0].role_blocked_actions, 0)
 
     def test_run_eval_suite_records_retrieval_counts(self):
         with tempfile.TemporaryDirectory() as tmp:

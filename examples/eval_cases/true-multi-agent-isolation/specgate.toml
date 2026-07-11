@@ -1,0 +1,7 @@
+[policy]
+allowed_actions = ["read_file", "list_files", "replace_file", "finish"]
+allowed_read_paths = ["TASK_SPEC.md", "CHECKLIST.md", "index.html"]
+allowed_write_paths = ["index.html"]
+
+[context]
+strategy = "multi-agent-isolated"
