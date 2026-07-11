@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -463,15 +464,23 @@ class CliTests(unittest.TestCase):
         self.assertEqual([call[1]["suite"] for call in calls], ["security", "security"])
 
     def test_repository_security_benchmark_smoke(self):
-        with redirect_stdout(io.StringIO()) as output:
-            code = main(["benchmark", "examples/eval_cases", "--suite", "security", "--strategies", "baseline"])
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_cases = Path(tmp) / "eval_cases"
+            shutil.copytree(
+                Path("examples/eval_cases"),
+                temp_cases,
+                ignore=shutil.ignore_patterns("eval-runs"),
+            )
 
-        self.assertEqual(code, 0)
-        self.assertIn("SpecGate benchmark finished", output.getvalue())
-        benchmark_path = Path("examples/eval_cases/eval-runs/latest/benchmark.json")
-        self.assertTrue(benchmark_path.exists())
-        data = json.loads(benchmark_path.read_text(encoding="utf-8"))
-        self.assertGreaterEqual(data["results"][0]["security"]["cases"], 6)
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["benchmark", str(temp_cases), "--suite", "security", "--strategies", "baseline"])
+
+            self.assertEqual(code, 0)
+            self.assertIn("SpecGate benchmark finished", output.getvalue())
+            benchmark_path = temp_cases / "eval-runs" / "latest" / "benchmark.json"
+            self.assertTrue(benchmark_path.exists())
+            data = json.loads(benchmark_path.read_text(encoding="utf-8"))
+            self.assertGreaterEqual(data["results"][0]["security"]["cases"], 6)
 
     def test_benchmark_cli_returns_failure_when_any_strategy_misses_expected_result(self):
         with tempfile.TemporaryDirectory() as tmp:

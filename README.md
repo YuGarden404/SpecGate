@@ -227,6 +227,7 @@ examples/eval_cases/eval-runs/latest/results-<strategy>.json
 Prompt Injection Benchmark 使用 MockLLM / StubLLM，不需要真实 API key。它评测的是 harness 的确定性安全边界，不比较真实 LLM 性能。
 
 ```powershell
+$env:PYTHONPATH="src"
 python -m specgate.cli benchmark examples/eval_cases --suite security --strategies baseline injection-safe rag-select compressed-rag isolated-harness
 ```
 
