@@ -27,7 +27,7 @@ class EvalCase:
     expected_blocked_actions: int | None = None
     expected_trust: str | None = None
     suite: str = "default"
-    tags: list[str] | None = None
+    tags: list[str] = field(default_factory=list)
     security_expected: SecurityExpectation = field(default_factory=SecurityExpectation)
 
 
@@ -81,14 +81,15 @@ def discover_eval_cases(root: Path, suite: str | None = None) -> list[EvalCase]:
         expected = meta.get("expected") or {}
         real_expected = meta.get("real_expected") or {}
         case_id = str(meta["id"])
-        case_suite = str(meta.get("suite", "default"))
+        case_suite = _metadata_suite(meta)
         if suite is not None and case_suite != suite:
             continue
-        tags = meta.get("tags")
-        if tags is not None and (
-            not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags)
-        ):
-            raise ValueError("tags must be a list of strings")
+        tags = _metadata_tags(meta)
+        expected_blocked_actions = _optional_non_negative_int(
+            expected.get("blocked_actions"),
+            "expected.blocked_actions",
+        )
+        expected_trust = _optional_trust(expected.get("trust"), "expected.trust")
         cases.append(
             EvalCase(
                 case_id=case_id,
@@ -100,14 +101,50 @@ def discover_eval_cases(root: Path, suite: str | None = None) -> list[EvalCase]:
                 real_expected_should_pass=real_expected.get("should_pass"),
                 real_expected_must_block=real_expected.get("must_block"),
                 mock_responses=meta.get("mock_responses"),
-                expected_blocked_actions=expected.get("blocked_actions"),
-                expected_trust=expected.get("trust"),
+                expected_blocked_actions=expected_blocked_actions,
+                expected_trust=expected_trust,
                 suite=case_suite,
-                tags=list(tags) if tags is not None else None,
+                tags=tags,
                 security_expected=SecurityExpectation.from_dict(expected.get("security")),
             )
         )
     return cases
+
+
+def _metadata_suite(meta: dict) -> str:
+    if "suite" not in meta:
+        return "default"
+    suite = meta["suite"]
+    if not isinstance(suite, str):
+        raise ValueError("suite must be a string")
+    return suite
+
+
+def _metadata_tags(meta: dict) -> list[str]:
+    tags = meta.get("tags", [])
+    if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+        raise ValueError("tags must be a list of strings")
+    return list(tags)
+
+
+def _optional_non_negative_int(value: object, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    if value < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    return value
+
+
+def _optional_trust(value: object, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+    if value not in {"trusted", "warning", "failed"}:
+        raise ValueError(f"{field_name} must be one of trusted, warning, failed")
+    return value
 
 
 def _count_trace_events(trace_path: Path) -> tuple[int, int, int, int, int, int]:

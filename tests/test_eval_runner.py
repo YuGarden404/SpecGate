@@ -72,6 +72,7 @@ class EvalRunnerDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(cases), 1)
         self.assertIsNone(cases[0].expected_should_pass)
         self.assertIsNone(cases[0].expected_must_block)
+        self.assertEqual(cases[0].tags, [])
 
     def test_discovery_reads_suite_tags_and_security_expected_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -151,6 +152,111 @@ class EvalRunnerDiscoveryTests(unittest.TestCase):
             cases = discover_eval_cases(root, suite="prompt-injection")
 
         self.assertEqual([case.case_id for case in cases], ["security-case"])
+
+    def test_discovery_rejects_invalid_tags(self):
+        invalid_tags_values = [
+            "security",
+            ["security", 3],
+        ]
+        for tags in invalid_tags_values:
+            with self.subTest(tags=tags):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    case = root / "invalid-tags"
+                    case.mkdir()
+                    (case / "case.json").write_text(
+                        json.dumps(
+                            {
+                                "id": "invalid-tags",
+                                "title": "Invalid tags",
+                                "category": "metadata",
+                                "tags": tags,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    with self.assertRaises(ValueError):
+                        discover_eval_cases(root)
+
+    def test_discovery_rejects_invalid_suite(self):
+        invalid_suite_values = [
+            None,
+            3,
+        ]
+        for suite in invalid_suite_values:
+            with self.subTest(suite=suite):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    case = root / "invalid-suite"
+                    case.mkdir()
+                    (case / "case.json").write_text(
+                        json.dumps(
+                            {
+                                "id": "invalid-suite",
+                                "title": "Invalid suite",
+                                "category": "metadata",
+                                "suite": suite,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    with self.assertRaises(ValueError):
+                        discover_eval_cases(root)
+
+    def test_discovery_rejects_invalid_expected_blocked_actions(self):
+        invalid_blocked_actions_values = [
+            "1",
+            True,
+            -1,
+        ]
+        for blocked_actions in invalid_blocked_actions_values:
+            with self.subTest(blocked_actions=blocked_actions):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    case = root / "invalid-blocked-actions"
+                    case.mkdir()
+                    (case / "case.json").write_text(
+                        json.dumps(
+                            {
+                                "id": "invalid-blocked-actions",
+                                "title": "Invalid blocked actions",
+                                "category": "metadata",
+                                "expected": {"blocked_actions": blocked_actions},
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    with self.assertRaises(ValueError):
+                        discover_eval_cases(root)
+
+    def test_discovery_rejects_invalid_expected_trust(self):
+        invalid_trust_values = [
+            3,
+            "unknown",
+        ]
+        for trust in invalid_trust_values:
+            with self.subTest(trust=trust):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    case = root / "invalid-trust"
+                    case.mkdir()
+                    (case / "case.json").write_text(
+                        json.dumps(
+                            {
+                                "id": "invalid-trust",
+                                "title": "Invalid trust",
+                                "category": "metadata",
+                                "expected": {"trust": trust},
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    with self.assertRaises(ValueError):
+                        discover_eval_cases(root)
 
 
 class EvalRunnerExecutionTests(unittest.TestCase):
