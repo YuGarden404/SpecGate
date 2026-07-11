@@ -17,6 +17,10 @@ class RunMetrics:
     finish_actions: int = 0
     approval_requests: int = 0
     pending_approvals: int = 0
+    approved_approvals: int = 0
+    denied_approvals: int = 0
+    applied_approvals: int = 0
+    failed_approvals: int = 0
     retrieval_queries: int = 0
     retrieved_chunks: int = 0
     retrieval_candidate_chunks: int = 0
