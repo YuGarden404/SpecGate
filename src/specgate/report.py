@@ -301,6 +301,18 @@ def _render_jsonish(value: object) -> str:
     return str(value)
 
 
+def _strip_action_payload(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _strip_action_payload(item)
+            for key, item in value.items()
+            if key != "action_payload"
+        }
+    if isinstance(value, list):
+        return [_strip_action_payload(item) for item in value]
+    return value
+
+
 def _render_run_events(root: Path) -> str:
     trace_path = root / "runs" / "latest" / "trace.jsonl"
     if not trace_path.exists():
@@ -316,7 +328,7 @@ def _render_run_events(root: Path) -> str:
             items.append(f"<li><strong>invalid_trace_line</strong>: <code>{escape(line[:240])}</code></li>")
             continue
         event_type = str(event.get("event_type", "unknown"))
-        payload = json.dumps(event.get("payload", {}), ensure_ascii=False)
+        payload = json.dumps(redact(_strip_action_payload(event.get("payload", {}))), ensure_ascii=False)
         if len(payload) > 500:
             payload = payload[:500] + "...[truncated]"
         items.append(f"<li><strong>{escape(event_type)}</strong>: <code>{escape(payload)}</code></li>")
