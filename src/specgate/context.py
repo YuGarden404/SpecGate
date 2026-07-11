@@ -8,7 +8,7 @@ from pathlib import Path
 from specgate.context_lifecycle import CompressionConfig, compress_runtime_feedback, pin_critical_sections
 from specgate.context_selector import ContextSelection, select_context_files
 from specgate.gate import GateResult
-from specgate.isolation import build_role_contexts, isolation_metadata
+from specgate.isolation import build_isolation_evidence, build_role_contexts
 from specgate.memory import load_memory_summary
 from specgate.policy import WorkspacePolicy
 from specgate.retrieval import RetrievalConfig, build_query_terms, retrieve_chunks
@@ -345,7 +345,7 @@ def build_context_pack_with_metadata(
     compression_metadata = compression_summary.to_dict() if compression_summary is not None else None
     if compression_metadata is not None:
         compression_metadata["pinned_sections"] = ["Task Constraints", "Policy Boundary", "Latest Gate Feedback"]
-    isolation = isolation_metadata() if strategy in ISOLATED_HARNESS_STRATEGIES else None
+    isolation = build_isolation_evidence(strategy=strategy) if strategy in ISOLATED_HARNESS_STRATEGIES else None
     return context, {"retrieval": retrieval_metadata, "compression": compression_metadata, "isolation": isolation}
 
 

@@ -262,7 +262,7 @@ class ContextStrategyTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            context = build_context_pack(root, None, [], strategy="isolated-harness")
+            context, metadata = build_context_pack_with_metadata(root, None, [], strategy="isolated-harness")
 
         self.assertIn("## Role Isolation", context)
         self.assertIn("role: planner", context)
@@ -272,6 +272,7 @@ class ContextStrategyTests(unittest.TestCase):
         self.assertIn("allowed_actions:", context)
         self.assertIn("## Retrieved Context", context)
         self.assertIn("## Compression Evidence", context)
+        self.assertEqual(metadata["isolation"]["strategy"], "isolated-harness")
 
     def test_multi_agent_isolated_strategy_builds_context(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -290,6 +291,7 @@ class ContextStrategyTests(unittest.TestCase):
             self.assertIn("multi-agent-isolated", context)
             self.assertIn("Role Isolation", context)
             self.assertIn("isolation", metadata)
+            self.assertEqual(metadata["isolation"]["strategy"], "multi-agent-isolated")
 
     def test_compressed_strategy_keeps_earlier_blocked_tool_result(self):
         feedback = [
