@@ -104,6 +104,8 @@ def build_trust_summary(final_gate_passed: bool, metrics: RunMetrics) -> TrustSu
 
     if metrics.blocked_actions:
         reasons.append("blocked_actions_present")
+    if metrics.role_blocked_actions:
+        reasons.append("role_blocked_actions_present")
     if metrics.parse_errors:
         reasons.append("parse_errors_present")
     if metrics.pending_approvals:

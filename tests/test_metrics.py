@@ -262,6 +262,15 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(trust.status, "warning")
         self.assertIn("blocked_actions_present", trust.reasons)
 
+    def test_warning_summary_when_role_blocked_actions_present(self):
+        trust = build_trust_summary(
+            True,
+            RunMetrics(finish_actions=1, role_blocked_actions=1),
+        )
+
+        self.assertEqual(trust.status, "warning")
+        self.assertIn("role_blocked_actions_present", trust.reasons)
+
     def test_warning_summary_when_gate_passes_with_parse_errors(self):
         metrics = RunMetrics(
             steps=3,

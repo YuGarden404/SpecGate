@@ -135,6 +135,40 @@ class RunnerTests(unittest.TestCase):
             self.assertLess(trace_text.index('"role": "planner"'), trace_text.index('"role": "implementer"'))
             self.assertLess(trace_text.index('"role": "implementer"'), trace_text.index('"role": "reviewer"'))
 
+    def test_multi_agent_role_block_prevents_trusted_clean_finish(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Keep the passing page.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                "<title>Search Details</title></head><body>"
+                '<input type="search"><main>Search Details</main></body></html>',
+                encoding="utf-8",
+            )
+            llm = ContextRecordingMockLLM(
+                [
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "Plan: no changes"}},
+                    {"schema_version": "1", "action": "delete_file", "args": {"path": "index.html"}},
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "review complete"}},
+                ]
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"read_file", "list_files", "write_file", "replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=5, context_strategy="multi-agent-isolated").run()
+
+            self.assertTrue(result.passed)
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.role_blocked_actions, 1)
+            self.assertIsNotNone(result.trust)
+            self.assertEqual(result.trust.status, "warning")
+            self.assertIn("role_blocked_actions_present", result.trust.reasons)
+
     def test_rag_select_run_records_retrieval_evidence_and_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
