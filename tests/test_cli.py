@@ -793,6 +793,41 @@ review_actions = ["replace_file"]
             data = json.loads(benchmark_text)
             self.assertGreaterEqual(data["results"][0]["security"]["cases"], 6)
 
+    def test_repository_multi_strategy_benchmark_smoke(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_cases = Path(tmp) / "eval_cases"
+            shutil.copytree(
+                Path("examples/eval_cases"),
+                temp_cases,
+                ignore=shutil.ignore_patterns("eval-runs"),
+            )
+
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(
+                    [
+                        "benchmark",
+                        str(temp_cases),
+                        "--strategies",
+                        "baseline",
+                        "rag-select",
+                        "compressed-rag",
+                        "isolated-harness",
+                        "multi-agent-isolated",
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            self.assertIn("SpecGate benchmark finished", output.getvalue())
+            benchmark_path = temp_cases / "eval-runs" / "latest" / "benchmark.json"
+            data = json.loads(benchmark_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [result["strategy"] for result in data["results"]],
+                ["baseline", "rag-select", "compressed-rag", "isolated-harness", "multi-agent-isolated"],
+            )
+            self.assertTrue(
+                all(result["expected_matches"] == result["total_cases"] for result in data["results"])
+            )
+
     def test_benchmark_cli_returns_failure_when_any_strategy_misses_expected_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1117,6 +1152,8 @@ review_actions = ["replace_file"]
                         '{"schema_version":"1","action":"write_file",'
                         '"args":{"path":"index.html","content":"<!doctype html><html><body>draft</body></html>"}}'
                     )
+                if self.calls == 3:
+                    return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
                 return (
                     '{"schema_version":"1","action":"replace_file",'
                     '"args":{"path":"index.html","content":"'

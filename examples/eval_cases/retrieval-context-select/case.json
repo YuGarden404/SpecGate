@@ -22,5 +22,31 @@
         "summary": "retrieval context used"
       }
     }
-  ]
+  ],
+  "mock_responses_by_strategy": {
+    "multi-agent-isolated": [
+      {
+        "schema_version": "1",
+        "action": "finish",
+        "args": {
+          "summary": "Plan: write the study dashboard using retrieved implementation notes."
+        }
+      },
+      {
+        "schema_version": "1",
+        "action": "write_file",
+        "args": {
+          "path": "index.html",
+          "content": "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Study Dashboard</title></head><body><main><h1>AI Study Plan</h1><input type=\"search\" aria-label=\"Search\"><section>Python LLM Gate search details learning plan</section><script>document.body.dataset.ready='true';</script></main></body></html>"
+        }
+      },
+      {
+        "schema_version": "1",
+        "action": "finish",
+        "args": {
+          "summary": "Review: retrieval context was used and page passes."
+        }
+      }
+    ]
+  }
 }

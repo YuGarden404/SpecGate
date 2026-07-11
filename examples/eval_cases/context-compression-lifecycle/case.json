@@ -21,5 +21,30 @@
         "summary": "large reference was compressed"
       }
     }
-  ]
+  ],
+  "mock_responses_by_strategy": {
+    "multi-agent-isolated": [
+      {
+        "schema_version": "1",
+        "action": "finish",
+        "args": {
+          "summary": "Plan: keep the valid compression lifecycle page."
+        }
+      },
+      {
+        "schema_version": "1",
+        "action": "finish",
+        "args": {
+          "summary": "Existing page already satisfies compression lifecycle constraints."
+        }
+      },
+      {
+        "schema_version": "1",
+        "action": "finish",
+        "args": {
+          "summary": "Review: compression lifecycle page passes."
+        }
+      }
+    ]
+  }
 }

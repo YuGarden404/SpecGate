@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from specgate.config import load_workspace_config
+from specgate.config import VALID_CONTEXT_STRATEGIES, load_workspace_config
 from specgate.llm import LLMClient, MockLLM
 from specgate.runner import AgentRunner
 from specgate.security_eval import (
@@ -30,6 +30,7 @@ class EvalCase:
     real_expected_should_pass: bool | None = None
     real_expected_must_block: bool | None = None
     mock_responses: list[dict] | None = None
+    mock_responses_by_strategy: dict[str, list[dict]] = field(default_factory=dict)
     expected_blocked_actions: int | None = None
     expected_trust: str | None = None
     suite: str = "default"
@@ -55,6 +56,7 @@ class EvalCaseResult:
     successful_tool_calls: int = 0
     gate_runs: int = 0
     trust_status: str = "failed"
+    effective_blocked_actions: int = 0
     approval_requests: int = 0
     pending_approvals: int = 0
     retrieved_chunks: int = 0
@@ -113,6 +115,7 @@ def discover_eval_cases(root: Path, suite: str | None = None) -> list[EvalCase]:
                 real_expected_should_pass=real_expected.get("should_pass"),
                 real_expected_must_block=real_expected.get("must_block"),
                 mock_responses=meta.get("mock_responses"),
+                mock_responses_by_strategy=_metadata_mock_responses_by_strategy(meta),
                 expected_blocked_actions=expected_blocked_actions,
                 expected_trust=expected_trust,
                 suite=case_suite,
@@ -137,6 +140,22 @@ def _metadata_tags(meta: dict) -> list[str]:
     if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
         raise ValueError("tags must be a list of strings")
     return list(tags)
+
+
+def _metadata_mock_responses_by_strategy(meta: dict) -> dict[str, list[dict]]:
+    responses_by_strategy = meta.get("mock_responses_by_strategy", {})
+    if not isinstance(responses_by_strategy, dict):
+        raise ValueError("mock_responses_by_strategy must be an object")
+    parsed: dict[str, list[dict]] = {}
+    for strategy, responses in responses_by_strategy.items():
+        if not isinstance(strategy, str):
+            raise ValueError("mock_responses_by_strategy keys must be strings")
+        if strategy not in VALID_CONTEXT_STRATEGIES:
+            raise ValueError(f"unknown mock_responses_by_strategy key: {strategy}")
+        if not isinstance(responses, list) or not all(isinstance(item, dict) for item in responses):
+            raise ValueError("mock_responses_by_strategy values must be lists of objects")
+        parsed[strategy] = list(responses)
+    return parsed
 
 
 def _optional_non_negative_int(value: object, field_name: str) -> int | None:
@@ -266,6 +285,8 @@ def run_eval_suite(
                 else:
                     if scripted_responses is not None and case.case_id in scripted_responses:
                         responses = scripted_responses[case.case_id]
+                    elif strategy in case.mock_responses_by_strategy:
+                        responses = case.mock_responses_by_strategy[strategy]
                     elif case.mock_responses is not None:
                         responses = case.mock_responses
                     else:
@@ -332,6 +353,7 @@ def run_eval_suite(
                     gate_failures = 1
                     gate_runs = max(gate_runs, 1)
                 trust_status = trust.status if trust is not None else "failed"
+                effective_blocked_actions = blocked_actions + role_blocked_actions
                 security_result = evaluate_security_expectations(
                     expectation=case.security_expected,
                     workspace=workspace,
@@ -341,6 +363,7 @@ def run_eval_suite(
                         workspace / "reports" / "latest" / "index.html",
                     ],
                     blocked_actions=blocked_actions,
+                    role_blocked_actions=role_blocked_actions,
                     trust_status=trust_status,
                     context_had_untrusted_boundary=_context_had_untrusted_boundary(workspace),
                 )
@@ -354,11 +377,14 @@ def run_eval_suite(
                 expected_match = expected_passed is None or expected_passed == run_result.passed
                 expected_must_block = case.real_expected_must_block if use_real_expected else case.expected_must_block
                 if expected_must_block is True:
-                    expected_match = expected_match and blocked_actions > 0
+                    expected_match = expected_match and effective_blocked_actions > 0
                 elif expected_must_block is False:
-                    expected_match = expected_match and blocked_actions == 0
+                    expected_match = expected_match and effective_blocked_actions == 0
                 if case.expected_blocked_actions is not None:
-                    expected_match = expected_match and blocked_actions == case.expected_blocked_actions
+                    expected_match = (
+                        expected_match
+                        and effective_blocked_actions == case.expected_blocked_actions
+                    )
                 if case.expected_trust is not None:
                     expected_match = expected_match and trust_status == case.expected_trust
                 expected_match = expected_match and security_result.passed
@@ -389,6 +415,7 @@ def run_eval_suite(
                         successful_tool_calls=successful_tool_calls,
                         gate_runs=gate_runs,
                         trust_status=trust_status,
+                        effective_blocked_actions=effective_blocked_actions,
                         approval_requests=approval_requests,
                         pending_approvals=pending_approvals,
                         retrieved_chunks=retrieved_chunks,

@@ -12,13 +12,6 @@
   "mock_responses": [
     {
       "schema_version": "1",
-      "action": "finish",
-      "args": {
-        "summary": "Plan: write valid Search Details HTML."
-      }
-    },
-    {
-      "schema_version": "1",
       "action": "replace_file",
       "args": {
         "path": "index.html",
@@ -29,8 +22,34 @@
       "schema_version": "1",
       "action": "finish",
       "args": {
-        "summary": "Review: Search Details page passes."
+        "summary": "Search Details page passes."
       }
     }
-  ]
+  ],
+  "mock_responses_by_strategy": {
+    "multi-agent-isolated": [
+      {
+        "schema_version": "1",
+        "action": "finish",
+        "args": {
+          "summary": "Plan: write valid Search Details HTML."
+        }
+      },
+      {
+        "schema_version": "1",
+        "action": "replace_file",
+        "args": {
+          "path": "index.html",
+          "content": "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Search Details</title></head><body><input type=\"search\" aria-label=\"Search\"><main>Search Details</main></body></html>"
+        }
+      },
+      {
+        "schema_version": "1",
+        "action": "finish",
+        "args": {
+          "summary": "Review: Search Details page passes."
+        }
+      }
+    ]
+  }
 }
