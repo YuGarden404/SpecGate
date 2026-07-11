@@ -102,6 +102,8 @@ class SecurityEvalTests(unittest.TestCase):
             {"expected_findings": [None]},
             {"expected_trust": 123},
             {"expected_blocked_actions": "1"},
+            {"expected_blocked_actions": True},
+            {"require_untrusted_context_boundary": "false"},
         ]
         for payload in invalid_payloads:
             with self.subTest(payload=payload):

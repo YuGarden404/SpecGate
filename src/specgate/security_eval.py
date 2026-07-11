@@ -25,7 +25,9 @@ class SecurityExpectation:
             expected_findings=_string_list(data.get("expected_findings")),
             expected_trust=_optional_string(data.get("expected_trust")),
             expected_blocked_actions=_optional_int(data.get("expected_blocked_actions")),
-            require_untrusted_context_boundary=bool(data.get("require_untrusted_context_boundary", False)),
+            require_untrusted_context_boundary=_optional_bool(
+                data.get("require_untrusted_context_boundary")
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -158,6 +160,14 @@ def _optional_string(value: Any) -> str | None:
 def _optional_int(value: Any) -> int | None:
     if value is None:
         return None
-    if not isinstance(value, int):
+    if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError("security expected_blocked_actions must be an integer")
+    return value
+
+
+def _optional_bool(value: Any) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ValueError("security require_untrusted_context_boundary must be a boolean")
     return value
