@@ -262,7 +262,7 @@ def _runtime_feedback_for_role(role: str, events: list[dict] | None) -> list[dic
         "approval_denied",
         "approval_failed",
     }
-    evidence_fields = {"type", "action", "ok", "blocked", "message", "passed", "summary", "error"}
+    evidence_fields = {"type", "step", "action", "ok", "blocked", "passed", "role", "phase", "event_type"}
     filtered: list[dict] = []
     for event in events:
         if event.get("type") not in allowed_event_types:
