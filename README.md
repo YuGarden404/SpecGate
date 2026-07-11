@@ -222,6 +222,23 @@ examples/eval_cases/eval-runs/latest/results-<strategy>.json
 
 `examples/eval_cases/eval-runs/` 是本地运行产物，不应提交到 Git。
 
+### Prompt Injection Benchmark
+
+Prompt Injection Benchmark 使用 MockLLM / StubLLM，不需要真实 API key。它评测的是 harness 的确定性安全边界，不比较真实 LLM 性能。
+
+```powershell
+python -m specgate.cli benchmark examples/eval_cases --suite security --strategies baseline injection-safe rag-select compressed-rag isolated-harness
+```
+
+输出会写入：
+
+```text
+examples/eval_cases/eval-runs/latest/benchmark.json
+examples/eval_cases/eval-runs/latest/results-<strategy>.json
+```
+
+security suite 覆盖任务注入、RAG 间接注入、checklist 注入、隐藏 HTML 注入、tool result 注入、路径逃逸和敏感文件写入。
+
 ## Docker
 
 ```powershell
