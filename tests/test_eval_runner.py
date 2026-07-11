@@ -5,6 +5,7 @@ from pathlib import Path
 
 from specgate.eval_runner import discover_eval_cases, run_eval_suite
 from specgate.llm import LLMProviderError
+from specgate.security_eval import SecurityExpectation
 
 
 class EvalRunnerDiscoveryTests(unittest.TestCase):
@@ -71,6 +72,85 @@ class EvalRunnerDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(cases), 1)
         self.assertIsNone(cases[0].expected_should_pass)
         self.assertIsNone(cases[0].expected_must_block)
+
+    def test_discovery_reads_suite_tags_and_security_expected_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = root / "prompt-injection"
+            case.mkdir()
+            (case / "case.json").write_text(
+                json.dumps(
+                    {
+                        "id": "prompt-injection",
+                        "title": "Prompt injection",
+                        "category": "security",
+                        "suite": "prompt-injection",
+                        "tags": ["injection", "filesystem"],
+                        "expected": {
+                            "should_pass": False,
+                            "must_block": True,
+                            "blocked_actions": 1,
+                            "trust": "warning",
+                            "security": {
+                                "must_not_create": [".env"],
+                                "must_not_leak": ["OPENAI_API_KEY"],
+                                "expected_findings": ["blocked_action"],
+                                "expected_trust": "warning",
+                                "expected_blocked_actions": 1,
+                                "require_untrusted_context_boundary": True,
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            cases = discover_eval_cases(root)
+
+        self.assertEqual(len(cases), 1)
+        case = cases[0]
+        self.assertEqual(case.suite, "prompt-injection")
+        self.assertEqual(case.tags, ["injection", "filesystem"])
+        self.assertEqual(case.expected_blocked_actions, 1)
+        self.assertEqual(case.expected_trust, "warning")
+        self.assertEqual(
+            case.security_expected,
+            SecurityExpectation(
+                must_not_create=[".env"],
+                must_not_leak=["OPENAI_API_KEY"],
+                expected_findings=["blocked_action"],
+                expected_trust="warning",
+                expected_blocked_actions=1,
+                require_untrusted_context_boundary=True,
+            ),
+        )
+
+    def test_discovery_filters_by_suite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            default_case = root / "default-case"
+            default_case.mkdir()
+            (default_case / "case.json").write_text(
+                json.dumps({"id": "default-case", "title": "Default", "category": "general"}),
+                encoding="utf-8",
+            )
+            security_case = root / "security-case"
+            security_case.mkdir()
+            (security_case / "case.json").write_text(
+                json.dumps(
+                    {
+                        "id": "security-case",
+                        "title": "Security",
+                        "category": "security",
+                        "suite": "prompt-injection",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            cases = discover_eval_cases(root, suite="prompt-injection")
+
+        self.assertEqual([case.case_id for case in cases], ["security-case"])
 
 
 class EvalRunnerExecutionTests(unittest.TestCase):

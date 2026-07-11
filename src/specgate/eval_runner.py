@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
 from specgate.config import load_workspace_config
 from specgate.llm import LLMClient, MockLLM
 from specgate.runner import AgentRunner
+from specgate.security_eval import SecurityExpectation
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,11 @@ class EvalCase:
     real_expected_should_pass: bool | None = None
     real_expected_must_block: bool | None = None
     mock_responses: list[dict] | None = None
+    expected_blocked_actions: int | None = None
+    expected_trust: str | None = None
+    suite: str = "default"
+    tags: list[str] | None = None
+    security_expected: SecurityExpectation = field(default_factory=SecurityExpectation)
 
 
 @dataclass(frozen=True)
@@ -59,7 +65,7 @@ class EvalSuiteResult:
     results: list[EvalCaseResult]
 
 
-def discover_eval_cases(root: Path) -> list[EvalCase]:
+def discover_eval_cases(root: Path, suite: str | None = None) -> list[EvalCase]:
     if not root.exists():
         return []
 
@@ -75,6 +81,14 @@ def discover_eval_cases(root: Path) -> list[EvalCase]:
         expected = meta.get("expected") or {}
         real_expected = meta.get("real_expected") or {}
         case_id = str(meta["id"])
+        case_suite = str(meta.get("suite", "default"))
+        if suite is not None and case_suite != suite:
+            continue
+        tags = meta.get("tags")
+        if tags is not None and (
+            not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags)
+        ):
+            raise ValueError("tags must be a list of strings")
         cases.append(
             EvalCase(
                 case_id=case_id,
@@ -86,6 +100,11 @@ def discover_eval_cases(root: Path) -> list[EvalCase]:
                 real_expected_should_pass=real_expected.get("should_pass"),
                 real_expected_must_block=real_expected.get("must_block"),
                 mock_responses=meta.get("mock_responses"),
+                expected_blocked_actions=expected.get("blocked_actions"),
+                expected_trust=expected.get("trust"),
+                suite=case_suite,
+                tags=list(tags) if tags is not None else None,
+                security_expected=SecurityExpectation.from_dict(expected.get("security")),
             )
         )
     return cases
