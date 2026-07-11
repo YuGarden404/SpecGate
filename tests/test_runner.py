@@ -62,6 +62,16 @@ class RecordingLLM:
         return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
 
 
+class ContextRecordingMockLLM(MockLLM):
+    def __init__(self, responses: list[dict]):
+        super().__init__(responses)
+        self.contexts: list[str] = []
+
+    def complete(self, context: str) -> str:
+        self.contexts.append(context)
+        return super().complete(context)
+
+
 class ApprovalFeedbackLLM:
     def __init__(self):
         self.contexts: list[str] = []
@@ -77,6 +87,54 @@ class ApprovalFeedbackLLM:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_multi_agent_isolated_runs_planner_implementer_reviewer_in_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build a Search Details page.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            llm = ContextRecordingMockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "finish",
+                        "args": {"summary": "Plan: write valid Search Details HTML"},
+                    },
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {
+                            "path": "index.html",
+                            "content": (
+                                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                "<title>Search Details</title></head><body>"
+                                '<input type="search"><main>Search Details</main></body></html>'
+                            ),
+                        },
+                    },
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "review complete"}},
+                ]
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"read_file", "list_files", "write_file", "replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=5, context_strategy="multi-agent-isolated").run()
+
+            self.assertTrue(result.passed)
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.role_runs, 3)
+            self.assertEqual(result.metrics.planner_runs, 1)
+            self.assertEqual(result.metrics.implementer_runs, 1)
+            self.assertEqual(result.metrics.reviewer_runs, 1)
+            self.assertIn("Plan: write valid Search Details HTML", llm.contexts[1])
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertLess(trace_text.index('"role": "planner"'), trace_text.index('"role": "implementer"'))
+            self.assertLess(trace_text.index('"role": "implementer"'), trace_text.index('"role": "reviewer"'))
+
     def test_rag_select_run_records_retrieval_evidence_and_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

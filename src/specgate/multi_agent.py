@@ -23,3 +23,15 @@ class MultiAgentState:
             "repair_requested": self.repair_requested,
             "review_repairs": self.review_repairs,
         }
+
+
+def phase_for_role(role: str) -> str:
+    phases = {"planner": "plan", "implementer": "implement", "reviewer": "review"}
+    if role not in phases:
+        raise ValueError(f"unknown role: {role}")
+    return phases[role]
+
+
+def summary_requests_repair(summary: str) -> bool:
+    lowered = summary.lower()
+    return "request_repair" in lowered or "repair requested" in lowered
