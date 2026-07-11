@@ -10,7 +10,11 @@ from typing import Callable
 from specgate.config import load_workspace_config
 from specgate.llm import LLMClient, MockLLM
 from specgate.runner import AgentRunner
-from specgate.security_eval import SecurityExpectation
+from specgate.security_eval import (
+    SecurityExpectation,
+    evaluate_security_expectations,
+    write_security_result,
+)
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,9 @@ class EvalCaseResult:
     retrieved_chunks: int = 0
     retrieval_candidate_chunks: int = 0
     retrieval_context_chars: int = 0
+    suite: str = "default"
+    tags: list[str] = field(default_factory=list)
+    security: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -200,6 +207,22 @@ def _write_suite_result(root: Path, suite: EvalSuiteResult) -> None:
     )
 
 
+def _context_had_untrusted_boundary(workspace: Path) -> bool:
+    markers = ("untrusted", "UNTRUSTED", "不可信")
+    for relative_path in (
+        Path("runs") / "latest" / "retrieval.json",
+        Path("runs") / "latest" / "compression.json",
+        Path("runs") / "latest" / "trace.jsonl",
+    ):
+        path = workspace / relative_path
+        if not path.exists() or not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if any(marker in text for marker in markers):
+            return True
+    return False
+
+
 def run_eval_suite(
     root: Path,
     strategy: str = "baseline",
@@ -291,6 +314,20 @@ def run_eval_suite(
                     gate_failures = 1
                     gate_runs = max(gate_runs, 1)
                 trust_status = trust.status if trust is not None else "failed"
+                security_result = evaluate_security_expectations(
+                    expectation=case.security_expected,
+                    workspace=workspace,
+                    trace_path=workspace / "runs" / "latest" / "trace.jsonl",
+                    run_artifacts=[
+                        workspace / "index.html",
+                        workspace / "reports" / "latest" / "index.html",
+                    ],
+                    blocked_actions=blocked_actions,
+                    trust_status=trust_status,
+                    context_had_untrusted_boundary=_context_had_untrusted_boundary(workspace),
+                )
+                write_security_result(workspace, security_result)
+                security_payload = security_result.to_dict()
 
                 use_real_expected = llm_factory is not None and (
                     case.real_expected_should_pass is not None or case.real_expected_must_block is not None
@@ -302,6 +339,11 @@ def run_eval_suite(
                     expected_match = expected_match and blocked_actions > 0
                 elif expected_must_block is False:
                     expected_match = expected_match and blocked_actions == 0
+                if case.expected_blocked_actions is not None:
+                    expected_match = expected_match and blocked_actions == case.expected_blocked_actions
+                if case.expected_trust is not None:
+                    expected_match = expected_match and trust_status == case.expected_trust
+                expected_match = expected_match and security_result.passed
 
                 final_summary = run_result.final_gate.summary if run_result.final_gate else "no gate result"
                 workspace_path = None
@@ -334,6 +376,9 @@ def run_eval_suite(
                         retrieved_chunks=retrieved_chunks,
                         retrieval_candidate_chunks=retrieval_candidate_chunks,
                         retrieval_context_chars=retrieval_context_chars,
+                        suite=case.suite,
+                        tags=list(case.tags),
+                        security=security_payload,
                     )
                 )
     except Exception:
