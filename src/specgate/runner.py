@@ -29,6 +29,18 @@ def _utc_now_for_runner() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _unique_approval_id(queue: ApprovalQueue, step: int) -> str:
+    base = f"approval-step-{step}"
+    existing = {approval.id for approval in queue.approvals}
+    if base not in existing:
+        return base
+
+    suffix = 2
+    while f"{base}-{suffix}" in existing:
+        suffix += 1
+    return f"{base}-{suffix}"
+
+
 @dataclass(frozen=True)
 class RunResult:
     passed: bool
@@ -351,8 +363,9 @@ class AgentRunner:
             action_path = action_path_value if isinstance(action_path_value, str) else None
             risk = classify_action_risk(action, self.policy, self.governance_config)
             if risk.level == "review" and self.governance_profile == "review":
+                queue = ApprovalQueue.read(queue_path)
                 approval = PendingApproval(
-                    id=f"approval-step-{step}",
+                    id=_unique_approval_id(queue, step),
                     step=step,
                     action=action.action,
                     path=action_path,
@@ -366,8 +379,7 @@ class AgentRunner:
                         "args": action.args,
                     },
                 )
-                queue = ApprovalQueue.read(queue_path).append(approval)
-                queue.write(queue_path)
+                queue.append(approval).write(queue_path)
                 record_permission_decision(
                     step,
                     action.action,

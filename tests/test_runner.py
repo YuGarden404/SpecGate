@@ -929,6 +929,71 @@ class RunnerTests(unittest.TestCase):
             self.assertNotIn(secret, trace_text)
             self.assertEqual(llm.calls, 1)
 
+    def test_resume_generates_unique_pending_approval_id_after_applying_old_approval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("original", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Task Search Detail</body></html>',
+                encoding="utf-8",
+            )
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-step-1",
+                        step=1,
+                        action="replace_file",
+                        path="README.md",
+                        risk_level="review",
+                        reason="replace_file requires human review",
+                        profile="review",
+                        status="approved",
+                        action_payload={
+                            "schema_version": "1",
+                            "action": "replace_file",
+                            "args": {"path": "README.md", "content": "first approved content"},
+                        },
+                    )
+                ]
+            ).write(approval_queue_path(root))
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {"path": "README.md", "content": "second pending content"},
+                    }
+                ]
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"README.md"},
+            )
+
+            AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=1,
+                governance_config=GovernanceConfig(
+                    profile="review",
+                    review_actions={"replace_file"},
+                    review_paths={"README.md"},
+                ),
+            ).resume_from_approval()
+
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            pending = [approval for approval in queue.approvals if approval.status == "pending"]
+            self.assertEqual(len(pending), 1)
+            self.assertNotEqual(pending[0].id, "approval-step-1")
+            updated = queue.approve(pending[0].id, decided_at="2026-07-11T10:01:00Z")
+            self.assertEqual(updated.find(pending[0].id).status, "approved")
+
     def test_resume_from_denied_approval_rejects_without_executing_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
