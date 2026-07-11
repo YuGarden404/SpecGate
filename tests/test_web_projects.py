@@ -33,6 +33,15 @@ class WebProjectsTests(unittest.TestCase):
                 archive.writestr(name, content)
         return buffer.getvalue()
 
+    def zip_bytes_with_raw_name(self, stored_name, raw_name, content):
+        zip_content = self.zip_bytes(
+            {
+                stored_name: content,
+                "CHECKLIST.md": "Checklist",
+            }
+        )
+        return zip_content.replace(stored_name.encode("utf-8"), raw_name.encode("utf-8"))
+
     def test_create_manual_project_writes_input_snapshot_and_workspace(self):
         db_path, data_root, user = self.make_context()
 
@@ -113,6 +122,14 @@ class WebProjectsTests(unittest.TestCase):
 
                 with self.assertRaises(ValueError):
                     create_project_from_zip(db_path, data_root, user["id"], "Unsafe", zip_content)
+
+    def test_create_project_from_zip_rejects_backslash_paths(self):
+        db_path, data_root, user = self.make_context()
+        zip_content = self.zip_bytes_with_raw_name("docs/SPEC.md", r"docs\SPEC.md", "Spec")
+        self.assertIn(rb"docs\SPEC.md", zip_content)
+
+        with self.assertRaises(ValueError):
+            create_project_from_zip(db_path, data_root, user["id"], "Backslash", zip_content)
 
     def test_create_project_from_zip_requires_spec_and_checklist(self):
         db_path, data_root, user = self.make_context()

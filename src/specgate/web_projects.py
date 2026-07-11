@@ -82,6 +82,7 @@ def create_project_from_zip(
     zip_content: bytes,
 ) -> sqlite3.Row:
     project_name = _require_text(name, "name")
+    _reject_raw_backslash_paths(zip_content)
     try:
         archive = zipfile.ZipFile(BytesIO(zip_content))
     except zipfile.BadZipFile as exc:
@@ -206,8 +207,33 @@ def _guard_project_destination(destination: Path, root: Path) -> None:
         raise ValueError("zip archive contains an unsafe path") from exc
 
 
+def _reject_raw_backslash_paths(zip_content: bytes) -> None:
+    eocd = zip_content.rfind(b"PK\x05\x06", max(0, len(zip_content) - 65_557))
+    if eocd < 0 or eocd + 22 > len(zip_content):
+        return
+
+    central_size = int.from_bytes(zip_content[eocd + 12 : eocd + 16], "little")
+    central_offset = int.from_bytes(zip_content[eocd + 16 : eocd + 20], "little")
+    cursor = central_offset
+    end = central_offset + central_size
+
+    while cursor < end and cursor + 46 <= len(zip_content):
+        if zip_content[cursor : cursor + 4] != b"PK\x01\x02":
+            return
+        filename_length = int.from_bytes(zip_content[cursor + 28 : cursor + 30], "little")
+        extra_length = int.from_bytes(zip_content[cursor + 30 : cursor + 32], "little")
+        comment_length = int.from_bytes(zip_content[cursor + 32 : cursor + 34], "little")
+        filename_start = cursor + 46
+        filename_end = filename_start + filename_length
+        if b"\\" in zip_content[filename_start:filename_end]:
+            raise ValueError("zip archive contains an unsafe path")
+        cursor = filename_end + extra_length + comment_length
+
+
 def _safe_zip_name(name: str) -> str:
-    normalized = name.replace("\\", "/")
+    if "\\" in name:
+        raise ValueError("zip archive contains an unsafe path")
+    normalized = name
     posix_path = PurePosixPath(normalized)
     windows_path = PureWindowsPath(name)
     if (
