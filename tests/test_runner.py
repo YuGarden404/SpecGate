@@ -313,6 +313,15 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result.metrics.approval_requests, 1)
             self.assertEqual(result.metrics.pending_approvals, 1)
             self.assertTrue(approval_queue_path(root).exists())
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            self.assertEqual(len(queue.approvals), 1)
+            approval = queue.approvals[0]
+            self.assertEqual(approval.status, "pending")
+            self.assertEqual(approval.action, "replace_file")
+            self.assertEqual(approval.path, "index.html")
+            self.assertEqual(approval.action_payload["action"], "replace_file")
+            self.assertEqual(approval.action_payload["args"]["path"], "index.html")
+            self.assertEqual(approval.action_payload["args"]["content"], "needs approval")
 
     def test_rag_select_run_records_retrieval_evidence_and_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
