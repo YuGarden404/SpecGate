@@ -119,6 +119,49 @@ def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
         raise
 
 
+def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -> sqlite3.Row | None:
+    run: sqlite3.Row | None = None
+    try:
+        run = _mark_resume_running(db_path, user_id, run_id)
+        if run is None:
+            return None
+
+        project = _load_project(db_path, run["project_id"], user_id)
+        paths = project_paths(data_root, user_id, project["id"])
+
+        index_before = _index_signature(paths.workspace / "index.html")
+        result = _run_resume_agent(paths)
+        queue = ApprovalQueue.read(approval_queue_path(paths.workspace))
+        index_path: Path | None = None
+        zip_path: Path | None = None
+        index_after = _index_signature(paths.workspace / "index.html")
+        produced_index = index_after is not None and index_after != index_before
+        if produced_index:
+            index_path, zip_path = _publish_artifacts(paths)
+
+        status = _status_for_result(result, queue, produced_index=produced_index)
+        error_message = None if status in {"completed", "needs_approval"} else "Gate did not pass"
+        if status == "failed" and not produced_index:
+            error_message = "Run did not produce index.html"
+        trust_level = _trust_level(result, status)
+        _finish_run(
+            db_path,
+            run_id,
+            status=status,
+            trust_level=trust_level,
+            error_message=error_message,
+            index_artifact_path=index_path,
+            zip_artifact_path=zip_path,
+            queue=queue,
+        )
+        return get_run(db_path, user_id, run_id)
+    except Exception as exc:
+        if run is not None:
+            _mark_failed(db_path, run_id, _safe_error(exc))
+            return get_run(db_path, user_id, run_id)
+        raise
+
+
 def _run_mock_agent(paths: ProjectPaths) -> RunResult:
     governance = GovernanceConfig(profile="review")
     policy = WorkspacePolicy(
@@ -158,6 +201,39 @@ def _run_mock_agent(paths: ProjectPaths) -> RunResult:
         governance_config=workspace_config.governance,
     )
     return runner.run()
+
+
+def _run_resume_agent(paths: ProjectPaths) -> RunResult:
+    governance = GovernanceConfig(profile="review")
+    policy = WorkspacePolicy(
+        root=paths.workspace,
+        allowed_actions={"read_file", "list_files", "write_file", "replace_file", "finish"},
+        allowed_read_paths={"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+        allowed_write_paths={"index.html"},
+    )
+    workspace_config = WorkspaceConfig(
+        policy=policy,
+        governance=governance,
+        context=ContextConfig(strategy="injection-safe"),
+    )
+    llm = MockLLM(
+        [
+            {
+                "schema_version": "1",
+                "action": "finish",
+                "args": {"summary": "SpecGate approval resume completed"},
+            }
+        ]
+    )
+    runner = AgentRunner(
+        paths.workspace,
+        llm,
+        workspace_config.policy,
+        max_steps=5,
+        context_strategy=workspace_config.context.strategy,
+        governance_config=workspace_config.governance,
+    )
+    return runner.resume_from_approval()
 
 
 def _default_result_html() -> str:
@@ -218,6 +294,30 @@ def _mark_running(db_path: Path, run_id: int) -> bool:
         )
         conn.commit()
         return cursor.rowcount == 1
+    finally:
+        conn.close()
+
+
+def _mark_resume_running(db_path: Path, user_id: int, run_id: int) -> sqlite3.Row | None:
+    now = utc_now().isoformat()
+    conn = connect_db(db_path)
+    try:
+        cursor = conn.execute(
+            """
+            update runs
+            set status = ?, started_at = ?, finished_at = null, error_message = null
+            where id = ? and user_id = ? and status = ?
+            """,
+            ("running", now, run_id, user_id, "needs_approval"),
+        )
+        conn.commit()
+        if cursor.rowcount == 1:
+            return conn.execute("select * from runs where id = ?", (run_id,)).fetchone()
+
+        row = conn.execute("select * from runs where id = ?", (run_id,)).fetchone()
+        if row is None or row["user_id"] != user_id:
+            raise ValueError("run not found")
+        return None
     finally:
         conn.close()
 
