@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -66,6 +67,7 @@ class PendingApproval:
     decided_at: str | None = None
     decision_reason: str | None = None
     resolved_at: str | None = None
+    target_state: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.status not in VALID_APPROVAL_STATUSES:
@@ -87,6 +89,7 @@ class PendingApproval:
             "decided_at": self.decided_at,
             "decision_reason": self.decision_reason,
             "resolved_at": self.resolved_at,
+            "target_state": self.target_state,
         }
 
 
@@ -241,6 +244,9 @@ def _parse_pending_approval(approval: dict[str, Any]) -> PendingApproval:
     if "action_payload" in approval and not isinstance(approval["action_payload"], dict):
         raise ValueError("pending approval entry has invalid schema")
 
+    if "target_state" in approval and approval["target_state"] is not None:
+        _validate_target_state(approval["target_state"])
+
     for optional_field in ("created_at", "decided_at", "decision_reason", "resolved_at"):
         if (
             optional_field in approval
@@ -267,7 +273,48 @@ def _parse_pending_approval(approval: dict[str, Any]) -> PendingApproval:
         decided_at=approval.get("decided_at"),
         decision_reason=approval.get("decision_reason"),
         resolved_at=approval.get("resolved_at"),
+        target_state=approval.get("target_state"),
     )
+
+
+def capture_target_state(root: Path, relative_path: str | None) -> dict[str, Any] | None:
+    if relative_path is None:
+        return None
+
+    normalized_path = relative_path.replace("\\", "/")
+    path = root / normalized_path
+    if not path.exists():
+        return {"path": normalized_path, "exists": False, "sha256": None}
+    return {
+        "path": normalized_path,
+        "exists": True,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
+
+def target_state_matches(root: Path, target_state: dict[str, Any] | None) -> bool:
+    if target_state is None:
+        return True
+    _validate_target_state(target_state)
+    try:
+        current = capture_target_state(root, target_state["path"])
+    except OSError:
+        return False
+    return current == target_state
+
+
+def _validate_target_state(target_state: Any) -> None:
+    if not isinstance(target_state, dict):
+        raise ValueError("pending approval entry has invalid schema")
+    required = {"path", "exists", "sha256"}
+    if not required.issubset(target_state):
+        raise ValueError("pending approval entry has invalid schema")
+    if not isinstance(target_state["path"], str):
+        raise ValueError("pending approval entry has invalid schema")
+    if not isinstance(target_state["exists"], bool):
+        raise ValueError("pending approval entry has invalid schema")
+    if target_state["sha256"] is not None and not isinstance(target_state["sha256"], str):
+        raise ValueError("pending approval entry has invalid schema")
 
 
 def preview_args(args: dict[str, Any]) -> dict[str, Any]:

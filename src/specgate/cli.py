@@ -429,16 +429,21 @@ def list_approvals(root: Path) -> int:
                 raise ValueError("approval decision reason must be a string or null")
             if path is not None and not isinstance(path, str):
                 raise ValueError("approval path must be a string or null")
+            display_values = redact(
+                [
+                    approval_id,
+                    status,
+                    action,
+                    path or "",
+                    reason,
+                    decision_reason,
+                ]
+            )
+            if not all(isinstance(value, str) for value in display_values):
+                raise ValueError("approval display fields must be strings")
             rows.append(
                 "\t".join(
-                    [
-                        approval_id,
-                        status,
-                        action,
-                        path or "",
-                        reason,
-                        decision_reason,
-                    ]
+                    display_values
                 )
             )
 

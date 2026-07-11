@@ -836,6 +836,62 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("permission_decision", trace_events)
             self.assertIn("approval_requested", trace_events)
 
+    def test_approved_resume_fails_when_target_changed_after_approval_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            secret = "sk-test-secret-1234567890"
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("original", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Task Search Detail</body></html>',
+                encoding="utf-8",
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"README.md"},
+            )
+            governance = GovernanceConfig(
+                profile="review",
+                review_actions={"replace_file"},
+                review_paths={"README.md"},
+            )
+            pending_llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {"path": "README.md", "content": f"approved overwrite {secret}"},
+                    }
+                ]
+            )
+            AgentRunner(root, pending_llm, policy, max_steps=1, governance_config=governance).run()
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            approval_id = queue.approvals[0].id
+
+            (root / "README.md").write_text(f"external edit {secret}", encoding="utf-8")
+            queue.approve(approval_id, decided_at="2026-07-11T10:01:00Z").write(approval_queue_path(root))
+            resume_llm = MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}])
+
+            result = AgentRunner(root, resume_llm, policy, max_steps=1, governance_config=governance).resume_from_approval()
+
+            self.assertEqual((root / "README.md").read_text(encoding="utf-8"), f"external edit {secret}")
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            self.assertEqual(queue.approvals[0].status, "failed")
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.failed_approvals, 1)
+            self.assertEqual(result.metrics.blocked_actions, 1)
+            self.assertIsNotNone(result.trust)
+            self.assertEqual(result.trust.status, "failed")
+            self.assertIn("approval_failed", result.trust.reasons)
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("approval_failed", trace_text)
+            self.assertIn("changed since approval request", trace_text)
+            self.assertNotIn(secret, trace_text)
+
     def test_workspace_review_governance_config_sets_runner_profile_when_not_overridden(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

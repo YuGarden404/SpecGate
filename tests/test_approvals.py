@@ -125,6 +125,32 @@ class ApprovalTests(unittest.TestCase):
             self.assertIsNone(loaded_approval.decision_reason)
             self.assertIsNone(loaded_approval.resolved_at)
 
+    def test_queue_round_trip_preserves_target_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+            approval = PendingApproval(
+                id="approval-step-2",
+                step=2,
+                action="replace_file",
+                path="README.md",
+                risk_level="review",
+                reason="requires human review",
+                profile="review",
+                target_state={
+                    "path": "README.md",
+                    "exists": True,
+                    "sha256": "a" * 64,
+                },
+            )
+
+            ApprovalQueue([approval]).write(queue_path)
+            loaded = ApprovalQueue.read(queue_path)
+
+            self.assertEqual(
+                loaded.approvals[0].target_state,
+                {"path": "README.md", "exists": True, "sha256": "a" * 64},
+            )
+
     def test_approve_pending_approval_updates_status_and_timestamp(self):
         queue = ApprovalQueue(
             [

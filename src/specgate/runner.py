@@ -11,8 +11,10 @@ from specgate.approvals import (
     GovernanceConfig,
     PendingApproval,
     approval_queue_path,
+    capture_target_state,
     classify_action_risk,
     preview_args,
+    target_state_matches,
 )
 from specgate.context import build_context_pack_with_metadata
 from specgate.gate import GateResult, run_html_gate
@@ -378,6 +380,7 @@ class AgentRunner:
                         "action": action.action,
                         "args": action.args,
                     },
+                    target_state=capture_target_state(self.root, action_path),
                 )
                 queue.append(approval).write(queue_path)
                 record_permission_decision(
@@ -508,6 +511,53 @@ class AgentRunner:
             self.trace.append(
                 "resume_finished",
                 redact({"approval_id": approval.id, "status": "rejected"}),
+            )
+            return self._run_loop(
+                reset_queue=False,
+                initial_runtime_feedback=runtime_feedback,
+                initial_metrics=metrics,
+                initial_permission_decisions=permission_decisions,
+            )
+
+        if not target_state_matches(self.root, approval.target_state):
+            reason = f"target file changed since approval request: {approval.path}"
+            metrics = replace(
+                metrics,
+                approved_approvals=1,
+                failed_approvals=1,
+                blocked_actions=1,
+            )
+            decision = PermissionDecision(
+                step=approval.step,
+                action=approval.action,
+                path=approval.path,
+                allowed=False,
+                blocked=True,
+                reason=reason,
+                profile=self.governance_profile,
+                rule_family=classify_rule_family(reason),
+            )
+            permission_decisions.append(decision)
+            self.trace.append("permission_decision", decision.to_dict())
+            event = {
+                "type": "approval_failed",
+                "approval_id": approval.id,
+                "action": approval.action,
+                "path": approval.path,
+                "reason": reason,
+            }
+            redacted_event = redact(event)
+            runtime_feedback.append(redacted_event)
+            self.trace.append("approval_failed", redacted_event)
+            ApprovalQueue.read(queue_path).resolve(
+                approval.id,
+                "failed",
+                resolved_at=_utc_now_for_runner(),
+                reason=reason,
+            ).write(queue_path)
+            self.trace.append(
+                "resume_finished",
+                redact({"approval_id": approval.id, "status": "failed"}),
             )
             return self._run_loop(
                 reset_queue=False,

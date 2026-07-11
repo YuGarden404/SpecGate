@@ -10,9 +10,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from specgate import cli
-from specgate.approvals import ApprovalQueue, PendingApproval, approval_queue_path
+from specgate.approvals import ApprovalQueue, GovernanceConfig, PendingApproval, approval_queue_path
 from specgate.cli import main, run_mock_demo, run_real_llm
 from specgate.llm import LLMProviderError
+from specgate.llm import MockLLM
+from specgate.policy import WorkspacePolicy
+from specgate.runner import AgentRunner
 
 
 class CliTests(unittest.TestCase):
@@ -273,6 +276,38 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("content", stdout)
             self.assertNotIn("sk-test-secret", stdout)
 
+    def test_approvals_list_redacts_reason_and_decision_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            secret = "sk-test-secret-1234567890"
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-step-2",
+                        step=2,
+                        action="replace_file",
+                        path="README.md",
+                        risk_level="review",
+                        reason=f"review token {secret}",
+                        profile="review",
+                        status="denied",
+                        decision_reason=f"denied token {secret}",
+                    )
+                ]
+            ).write(approval_queue_path(root))
+
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["approvals", "list", tmp])
+
+            stdout = output.getvalue()
+            self.assertEqual(code, 0)
+            self.assertIn("approval-step-2", stdout)
+            self.assertIn("denied", stdout)
+            self.assertIn("replace_file", stdout)
+            self.assertIn("README.md", stdout)
+            self.assertIn("[REDACTED]", stdout)
+            self.assertNotIn(secret, stdout)
+
     def test_approvals_approve_marks_pending_item_without_printing_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -477,6 +512,68 @@ review_actions = ["replace_file"]
             self.assertEqual(code, 0)
             self.assertIn("SpecGate resume finished", output.getvalue())
             self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "approved content")
+            self.assertTrue((root / "reports" / "latest" / "index.html").exists())
+
+    def test_cli_pending_approve_resume_applies_queue_and_writes_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("original", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Task Search Detail</body></html>',
+                encoding="utf-8",
+            )
+            (root / "specgate.toml").write_text(
+                """
+[policy]
+allowed_actions = ["replace_file", "finish"]
+allowed_read_paths = ["TASK_SPEC.md", "CHECKLIST.md", "index.html"]
+allowed_write_paths = ["README.md"]
+
+[governance]
+profile = "review"
+review_actions = ["replace_file"]
+review_paths = ["README.md"]
+""".strip(),
+                encoding="utf-8",
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"README.md"},
+            )
+            governance = GovernanceConfig(
+                profile="review",
+                review_actions={"replace_file"},
+                review_paths={"README.md"},
+            )
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {"path": "README.md", "content": "approved through cli"},
+                    }
+                ]
+            )
+            AgentRunner(root, llm, policy, max_steps=1, governance_config=governance).run()
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            self.assertEqual(queue.approvals[0].status, "pending")
+
+            with redirect_stdout(io.StringIO()):
+                approve_code = main(["approvals", "approve", tmp, queue.approvals[0].id])
+            with redirect_stdout(io.StringIO()) as output:
+                resume_code = main(["resume", tmp, "--max-steps", "1"])
+
+            self.assertEqual(approve_code, 0)
+            self.assertEqual(resume_code, 0)
+            self.assertIn("SpecGate resume finished", output.getvalue())
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            self.assertEqual(queue.approvals[0].status, "applied")
+            self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "approved through cli")
             self.assertTrue((root / "reports" / "latest" / "index.html").exists())
 
     def test_resume_cli_reports_no_ready_approval_cleanly(self):
