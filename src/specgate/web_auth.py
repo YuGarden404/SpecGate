@@ -19,30 +19,32 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _pbkdf2_digest(password: str, salt: str, iterations: int) -> str:
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        iterations,
+    ).hex()
+
+
 def hash_password(password: str, *, salt: str | None = None) -> str:
     if len(password) < 8:
         raise ValueError("password must be at least 8 characters")
     password_salt = salt or secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac(
-        "sha256",
-        password.encode("utf-8"),
-        password_salt.encode("utf-8"),
-        PBKDF2_ITERATIONS,
-    ).hex()
-    return f"{HASH_ALGORITHM}${password_salt}${digest}"
+    digest = _pbkdf2_digest(password, password_salt, PBKDF2_ITERATIONS)
+    return f"{HASH_ALGORITHM}${PBKDF2_ITERATIONS}${password_salt}${digest}"
 
 
 def verify_password(password: str, password_hash: str) -> bool:
     try:
-        algorithm, salt, expected_digest = password_hash.split("$", 2)
-    except ValueError:
+        algorithm, iterations_text, salt, expected_digest = password_hash.split("$", 3)
+        iterations = int(iterations_text)
+    except (TypeError, ValueError):
         return False
-    if algorithm != HASH_ALGORITHM:
+    if algorithm != HASH_ALGORITHM or iterations <= 0:
         return False
-    try:
-        candidate = hash_password(password, salt=salt).split("$", 2)[2]
-    except ValueError:
-        return False
+    candidate = _pbkdf2_digest(password, salt, iterations)
     return hmac.compare_digest(candidate, expected_digest)
 
 
@@ -136,6 +138,8 @@ def get_user_by_session(db_path: Path, token: str | None) -> sqlite3.Row:
             raise ValueError("invalid session")
         expires_at = row["expires_at"]
         if expires_at is not None and datetime.fromisoformat(expires_at) <= utc_now():
+            conn.execute("delete from sessions where token = ?", (token,))
+            conn.commit()
             raise ValueError("invalid session")
         return row
     finally:

@@ -1,3 +1,4 @@
+import hashlib
 import sqlite3
 import tempfile
 import unittest
@@ -31,11 +32,26 @@ class WebAuthTests(unittest.TestCase):
             hash_password("short")
 
         password_hash = hash_password("long-enough", salt="fixed-salt")
+        parts = password_hash.split("$")
 
-        self.assertTrue(password_hash.startswith("pbkdf2_sha256$fixed-salt$"))
+        self.assertEqual(parts[0], "pbkdf2_sha256")
+        self.assertEqual(parts[1], "260000")
+        self.assertEqual(parts[2], "fixed-salt")
         self.assertTrue(verify_password("long-enough", password_hash))
         self.assertFalse(verify_password("wrong-password", password_hash))
         self.assertFalse(verify_password("long-enough", "not-a-valid-hash"))
+
+    def test_verify_password_uses_iterations_stored_in_hash(self):
+        iterations = 1_000
+        digest = hashlib.pbkdf2_hmac(
+            "sha256",
+            b"long-enough",
+            b"legacy-salt",
+            iterations,
+        ).hex()
+        password_hash = f"pbkdf2_sha256${iterations}$legacy-salt${digest}"
+
+        self.assertTrue(verify_password("long-enough", password_hash))
 
     def test_create_user_does_not_store_plaintext_and_authenticates(self):
         db_path = self.make_db()
@@ -97,6 +113,12 @@ class WebAuthTests(unittest.TestCase):
             conn.commit()
         with self.assertRaises(ValueError):
             get_user_by_session(db_path, expired_token)
+        with closing(connect_db(db_path)) as conn:
+            session_count = conn.execute(
+                "select count(*) from sessions where token = ?",
+                (expired_token,),
+            ).fetchone()[0]
+        self.assertEqual(session_count, 0)
 
     def test_get_user_by_session_rejects_missing_token(self):
         db_path = self.make_db()

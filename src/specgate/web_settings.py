@@ -25,7 +25,7 @@ def _settings_dict(row) -> dict:
         "context_strategy": row["context_strategy"],
         "api_key_configured": api_key_configured,
         "api_key_storage": "protected" if api_key_ciphertext else "not_stored",
-        "llm_mode": "openai" if api_key_configured else "mock",
+        "llm_mode": "mock",
     }
 
 

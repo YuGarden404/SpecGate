@@ -74,6 +74,8 @@ class WebSettingsTests(unittest.TestCase):
 
         self.assertTrue(settings["api_key_configured"])
         self.assertEqual(settings["api_key_storage"], "not_stored")
+        self.assertEqual(settings["llm_mode"], "mock")
+        self.assertEqual(get_settings(db_path, user_id)["llm_mode"], "mock")
         self.assertNotIn(secret, repr(settings))
         with closing(connect_db(db_path)) as conn:
             row = conn.execute(
@@ -96,6 +98,8 @@ class WebSettingsTests(unittest.TestCase):
 
         self.assertTrue(settings["api_key_configured"])
         self.assertEqual(settings["api_key_storage"], "protected")
+        self.assertEqual(settings["llm_mode"], "mock")
+        self.assertEqual(get_settings(db_path, user_id)["llm_mode"], "mock")
         self.assertNotIn(api_key, repr(settings))
         with closing(connect_db(db_path)) as conn:
             row = conn.execute(
