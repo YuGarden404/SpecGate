@@ -221,6 +221,28 @@ def _render_role_isolation_evidence(root: Path) -> str:
     )
 
 
+def _render_prompt_injection_safety(root: Path) -> str:
+    security_path = root / "runs" / "latest" / "security.json"
+    if not security_path.exists():
+        return "<h2>Prompt Injection Safety</h2><p>No prompt injection safety evidence recorded.</p>"
+
+    try:
+        data = json.loads(security_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("prompt injection safety evidence must be an object")
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        return (
+            "<h2>Prompt Injection Safety</h2>"
+            f"<p>could not read prompt injection safety evidence: {escape(str(exc))}</p>"
+        )
+
+    rows = "\n".join(
+        f"<tr><th>{escape(str(key))}</th><td>{escape(_render_jsonish(value))}</td></tr>"
+        for key, value in data.items()
+    )
+    return f"<h2>Prompt Injection Safety</h2><table><tbody>{rows}</tbody></table>"
+
+
 def _render_benchmark_summary(root: Path) -> str:
     benchmark_path = root / "eval-runs" / "latest" / "benchmark.json"
     if not benchmark_path.exists():
@@ -326,6 +348,7 @@ def generate_report(
     retrieval_evidence = _render_retrieval_evidence(root)
     compression_evidence = _render_compression_evidence(root)
     role_isolation_evidence = _render_role_isolation_evidence(root)
+    prompt_injection_safety = _render_prompt_injection_safety(root)
     benchmark_summary = _render_benchmark_summary(root)
     events = _render_run_events(root)
     memory = escape(load_memory_summary(root))
@@ -348,6 +371,7 @@ def generate_report(
   {retrieval_evidence}
   {compression_evidence}
   {role_isolation_evidence}
+  {prompt_injection_safety}
   {benchmark_summary}
   <h2>Checks</h2>
   <ul>{checks}</ul>

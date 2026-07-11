@@ -239,6 +239,33 @@ class ReportTests(unittest.TestCase):
             self.assertIn("draft_patch", html)
             self.assertNotIn("reviewer<script>", html)
 
+    def test_generate_report_includes_prompt_injection_safety(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+            run_dir = root / "runs" / "latest"
+            run_dir.mkdir(parents=True)
+            (run_dir / "security.json").write_text(
+                json.dumps(
+                    {
+                        "passed": False,
+                        "findings": ["blocked_action", "<script>alert(1)</script>"],
+                        "failures": ["model revealed sk-test-secret in output"],
+                        "must_not_create_violations": 1,
+                        "must_not_reveal_violations": 1,
+                        "cases": 2,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            output = generate_report(root, gate, steps=1)
+
+            html = output.read_text(encoding="utf-8")
+            self.assertIn("Prompt Injection Safety", html)
+            self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+            self.assertNotIn("<script>alert(1)</script>", html)
+
     def test_generate_report_includes_benchmark_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
