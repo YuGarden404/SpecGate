@@ -56,7 +56,7 @@ class WebProjectsTests(unittest.TestCase):
             self.assertTrue(directory.is_dir())
 
         for directory in (paths.original, paths.workspace):
-            self.assertEqual((directory / "SPEC.md").read_text(encoding="utf-8"), "# Spec\nBuild it")
+            self.assertEqual((directory / "TASK_SPEC.md").read_text(encoding="utf-8"), "# Spec\nBuild it")
             self.assertEqual((directory / "CHECKLIST.md").read_text(encoding="utf-8"), "- [ ] Ship")
             self.assertEqual((directory / "index.html").read_text(encoding="utf-8"), "<h1>Hello</h1>")
 
@@ -64,8 +64,8 @@ class WebProjectsTests(unittest.TestCase):
         db_path, data_root, user = self.make_context()
         zip_content = self.zip_bytes(
             {
-                "TASK_SPEC.md": "Spec",
-                "CHECKLIST": "Checklist",
+                "docs/SPEC": "Spec",
+                "docs/CHECKLIST.md": "Checklist",
                 "site/index.html": "<h1>Zip</h1>",
             }
         )
@@ -83,14 +83,25 @@ class WebProjectsTests(unittest.TestCase):
         paths = project_paths(data_root, user["id"], project["id"])
         self.assertEqual(project["root_path"], str(paths.root))
         for directory in (paths.original, paths.workspace):
-            self.assertEqual((directory / "TASK_SPEC.md").read_text(encoding="utf-8"), "Spec")
-            self.assertEqual((directory / "CHECKLIST").read_text(encoding="utf-8"), "Checklist")
+            self.assertEqual((directory / "docs" / "SPEC").read_text(encoding="utf-8"), "Spec")
+            self.assertEqual((directory / "docs" / "CHECKLIST.md").read_text(encoding="utf-8"), "Checklist")
             self.assertEqual((directory / "site" / "index.html").read_text(encoding="utf-8"), "<h1>Zip</h1>")
+        self.assertFalse((paths.original / "TASK_SPEC.md").exists())
+        self.assertFalse((paths.original / "CHECKLIST.md").exists())
+        self.assertEqual((paths.workspace / "TASK_SPEC.md").read_text(encoding="utf-8"), "Spec")
+        self.assertEqual((paths.workspace / "CHECKLIST.md").read_text(encoding="utf-8"), "Checklist")
 
     def test_create_project_from_zip_rejects_path_escape(self):
         db_path, data_root, user = self.make_context()
 
-        for unsafe_name in ("../escape.txt", "nested/../../escape.txt", r"..\escape.txt", "/absolute.txt"):
+        for unsafe_name in (
+            "../escape.txt",
+            "nested/../../escape.txt",
+            r"..\evil.txt",
+            "/absolute.txt",
+            "C:escape.txt",
+            ".",
+        ):
             with self.subTest(unsafe_name=unsafe_name):
                 zip_content = self.zip_bytes(
                     {

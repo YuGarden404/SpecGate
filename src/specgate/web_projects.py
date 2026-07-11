@@ -57,7 +57,7 @@ def create_manual_project(
         _make_project_dirs(paths)
 
         for directory in (paths.original, paths.workspace):
-            (directory / "SPEC.md").write_text(spec, encoding="utf-8")
+            (directory / "TASK_SPEC.md").write_text(spec, encoding="utf-8")
             (directory / "CHECKLIST.md").write_text(checklist, encoding="utf-8")
             if index_html is not None:
                 (directory / "index.html").write_text(index_html, encoding="utf-8")
@@ -90,14 +90,10 @@ def create_project_from_zip(
     with archive:
         members = archive.infolist()
         safe_names = [_safe_zip_name(member.filename) for member in members]
-        file_names = {
-            Path(safe_name).name
-            for safe_name, member in zip(safe_names, members)
-            if not member.is_dir()
-        }
-        if SPEC_FILENAMES.isdisjoint(file_names):
+        spec_path, checklist_path = _find_required_project_files(safe_names, members)
+        if spec_path is None:
             raise ValueError("zip project requires SPEC or TASK_SPEC")
-        if CHECKLIST_FILENAMES.isdisjoint(file_names):
+        if checklist_path is None:
             raise ValueError("zip project requires CHECKLIST")
 
         conn = connect_db(db_path)
@@ -109,6 +105,7 @@ def create_project_from_zip(
 
             for safe_name, member in zip(safe_names, members):
                 target = paths.original / safe_name
+                _guard_project_destination(target, paths.original)
                 if member.is_dir():
                     target.mkdir(parents=True, exist_ok=True)
                     continue
@@ -117,6 +114,7 @@ def create_project_from_zip(
                     shutil.copyfileobj(source, destination)
 
             shutil.copytree(paths.original, paths.workspace)
+            _normalize_workspace_inputs(paths.original, paths.workspace, spec_path, checklist_path)
             row = _finalize_project(conn, project_id, paths.root)
             conn.commit()
             return row
@@ -174,15 +172,50 @@ def _require_text(value: str, field_name: str) -> str:
     return value
 
 
+def _find_required_project_files(
+    safe_names: list[str],
+    members: list[zipfile.ZipInfo],
+) -> tuple[str | None, str | None]:
+    spec_path = None
+    checklist_path = None
+    for safe_name, member in zip(safe_names, members):
+        if member.is_dir():
+            continue
+        file_name = PurePosixPath(safe_name).name
+        if spec_path is None and file_name in SPEC_FILENAMES:
+            spec_path = safe_name
+        if checklist_path is None and file_name in CHECKLIST_FILENAMES:
+            checklist_path = safe_name
+    return spec_path, checklist_path
+
+
+def _normalize_workspace_inputs(
+    original: Path,
+    workspace: Path,
+    spec_path: str,
+    checklist_path: str,
+) -> None:
+    (workspace / "TASK_SPEC.md").write_bytes((original / spec_path).read_bytes())
+    (workspace / "CHECKLIST.md").write_bytes((original / checklist_path).read_bytes())
+
+
+def _guard_project_destination(destination: Path, root: Path) -> None:
+    try:
+        destination.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise ValueError("zip archive contains an unsafe path") from exc
+
+
 def _safe_zip_name(name: str) -> str:
     normalized = name.replace("\\", "/")
     posix_path = PurePosixPath(normalized)
     windows_path = PureWindowsPath(name)
     if (
-        not normalized
+        normalized in ("", ".")
         or posix_path.is_absolute()
         or windows_path.is_absolute()
-        or any(part in ("", "..") for part in posix_path.parts)
+        or windows_path.drive
+        or any(part in ("", ".", "..") for part in posix_path.parts)
     ):
         raise ValueError("zip archive contains an unsafe path")
     return normalized
