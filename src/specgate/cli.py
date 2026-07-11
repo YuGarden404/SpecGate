@@ -513,6 +513,43 @@ def run_mock_demo(root: Path, governance_profile: str | None = None) -> int:
     return 0 if result.passed else 1
 
 
+def run_resume(root: Path, max_steps: int, governance_profile: str | None = None) -> int:
+    settings = _load_workspace_settings(root)
+    llm = MockLLM(
+        [
+            {
+                "schema_version": "1",
+                "action": "finish",
+                "args": {"summary": "resume complete"},
+            }
+        ]
+    )
+    try:
+        result = AgentRunner(
+            root,
+            llm,
+            settings.policy,
+            max_steps=max_steps,
+            governance_profile=governance_profile,
+            governance_config=settings.governance,
+        ).resume_from_approval()
+    except (json.JSONDecodeError, TypeError, ValueError, AttributeError) as exc:
+        print(f"could not resume: {exc}")
+        return 1
+    gate = result.final_gate or run_html_gate(root / "index.html", root / "CHECKLIST.md")
+    generate_report(
+        root,
+        gate,
+        result.steps,
+        metrics=result.metrics,
+        permission_decisions=result.permission_decisions,
+        trust=result.trust,
+        profile=result.profile,
+    )
+    print(f"SpecGate resume finished: passed={result.passed}, steps={result.steps}")
+    return 0 if result.passed else 1
+
+
 def run_real_llm(
     root: Path,
     provider: str,
@@ -690,6 +727,10 @@ def main(argv: list[str] | None = None) -> int:
     real_run.add_argument("--user-agent", default="SpecGate/0.1 OpenAI-Compatible")
     real_run.add_argument("--timeout", type=float, default=60)
     real_run.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
+    resume = sub.add_parser("resume")
+    resume.add_argument("workspace")
+    resume.add_argument("--max-steps", type=int, default=5)
+    resume.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
     eval_parser = sub.add_parser("eval")
     eval_parser.add_argument("cases_root")
     eval_parser.add_argument(
@@ -751,6 +792,12 @@ def main(argv: list[str] | None = None) -> int:
             max_steps=args.max_steps,
             user_agent=args.user_agent,
             timeout=args.timeout,
+            governance_profile=args.governance_profile,
+        )
+    if args.command == "resume":
+        return run_resume(
+            Path(args.workspace),
+            max_steps=args.max_steps,
             governance_profile=args.governance_profile,
         )
     if args.command == "eval":

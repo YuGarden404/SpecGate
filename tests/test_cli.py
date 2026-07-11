@@ -427,6 +427,67 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("sk-test-secret", text)
             self.assertNotIn("Traceback", text)
 
+    def test_resume_cli_processes_approved_approval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("original", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Task Search Detail</body></html>',
+                encoding="utf-8",
+            )
+            (root / "specgate.toml").write_text(
+                """
+[policy]
+allowed_actions = ["replace_file", "finish"]
+allowed_read_paths = ["TASK_SPEC.md", "CHECKLIST.md", "index.html"]
+allowed_write_paths = ["README.md"]
+
+[governance]
+profile = "review"
+review_actions = ["replace_file"]
+""".strip(),
+                encoding="utf-8",
+            )
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-step-1",
+                        step=1,
+                        action="replace_file",
+                        path="README.md",
+                        risk_level="review",
+                        reason="requires human review",
+                        profile="review",
+                        status="approved",
+                        action_payload={
+                            "schema_version": "1",
+                            "action": "replace_file",
+                            "args": {"path": "README.md", "content": "approved content"},
+                        },
+                    )
+                ]
+            ).write(approval_queue_path(root))
+
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["resume", tmp, "--max-steps", "1"])
+
+            self.assertEqual(code, 0)
+            self.assertIn("SpecGate resume finished", output.getvalue())
+            self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "approved content")
+            self.assertTrue((root / "reports" / "latest" / "index.html").exists())
+
+    def test_resume_cli_reports_no_ready_approval_cleanly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["resume", tmp])
+
+            self.assertNotEqual(code, 0)
+            self.assertIn("could not resume", output.getvalue())
+            self.assertNotIn("Traceback", output.getvalue())
+
     def test_credentials_cli_status_set_and_clear(self):
         with tempfile.TemporaryDirectory() as tmp:
             env_file = Path(tmp) / ".env"

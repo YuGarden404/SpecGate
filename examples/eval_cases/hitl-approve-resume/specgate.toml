@@ -1,0 +1,8 @@
+[policy]
+allowed_actions = ["replace_file", "finish"]
+allowed_read_paths = ["TASK_SPEC.md", "CHECKLIST.md", "index.html", "README.md"]
+allowed_write_paths = ["README.md"]
+
+[governance]
+profile = "review"
+review_actions = ["replace_file"]
