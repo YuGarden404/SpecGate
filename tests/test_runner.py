@@ -430,6 +430,96 @@ class RunnerTests(unittest.TestCase):
             self.assertIsNotNone(result.trust)
             self.assertIn("role_cycle_limit_reached", result.trust.reasons)
 
+    def test_multi_agent_respects_max_steps_before_reviewer_default_finish(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build a page with Search and Details.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("Must include Search and Details.", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"read_file", "list_files", "write_file", "replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            llm = MockLLM(
+                [
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "Plan Search Details"}},
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {
+                            "path": "index.html",
+                            "content": (
+                                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                "<title>Search Details</title></head><body>"
+                                '<input type="search"><main>Search Details</main></body></html>'
+                            ),
+                        },
+                    },
+                ]
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=2, context_strategy="multi-agent-isolated").run()
+
+            self.assertFalse(result.passed)
+            self.assertIsNotNone(result.metrics)
+            self.assertTrue(result.metrics.max_steps_reached)
+            self.assertEqual(result.metrics.reviewer_runs, 0)
+            self.assertEqual(llm.calls, 2)
+            self.assertIsNotNone(result.trust)
+            self.assertIn("max_steps_reached", result.trust.reasons)
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("role_step_limit_reached", trace_text)
+            self.assertNotIn('"role": "reviewer"', trace_text)
+
+    def test_multi_agent_reviewer_parse_error_fails_closed(self):
+        class ReviewerParseErrorLLM:
+            def __init__(self):
+                self.calls = 0
+
+            def complete(self, context: str) -> str:
+                self.calls += 1
+                if self.calls == 1:
+                    return '{"schema_version":"1","action":"finish","args":{"summary":"Plan Search Details"}}'
+                if self.calls == 2:
+                    return (
+                        '{"schema_version":"1","action":"replace_file","args":{"path":"index.html",'
+                        '"content":"<!doctype html><html><head><meta name=\\"viewport\\" '
+                        'content=\\"width=device-width\\"><title>Search Details</title></head><body>'
+                        '<input type=\\"search\\"><main>Search Details</main></body></html>"}}'
+                    )
+                return "not json"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build a page with Search and Details.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("Must include Search and Details.", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"read_file", "list_files", "write_file", "replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            result = AgentRunner(
+                root,
+                ReviewerParseErrorLLM(),
+                policy,
+                max_steps=5,
+                context_strategy="multi-agent-isolated",
+            ).run()
+
+            self.assertFalse(result.passed)
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.parse_errors, 1)
+            self.assertTrue(result.metrics.max_steps_reached or result.metrics.role_cycle_limit_reached)
+            self.assertIsNotNone(result.trust)
+            self.assertEqual(result.trust.status, "failed")
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("reviewer_failed", trace_text)
+
     def test_rag_select_run_records_retrieval_evidence_and_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

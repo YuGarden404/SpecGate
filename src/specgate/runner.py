@@ -171,7 +171,7 @@ class AgentRunner:
                 "trust": trust.to_dict(),
             },
         )
-        passed = final_gate.passed and not metrics.role_cycle_limit_reached
+        passed = final_gate.passed and not metrics.max_steps_reached and not metrics.role_cycle_limit_reached
         result = RunResult(
             passed,
             step,
@@ -458,7 +458,7 @@ class AgentRunner:
         metrics: RunMetrics,
         runtime_feedback: list[dict],
         permission_decisions: list[PermissionDecision],
-    ) -> tuple[GateResult | None, RunMetrics]:
+    ) -> tuple[GateResult | None, RunMetrics, bool]:
         phase = phase_for_role(role)
         role_context = role_context_for(role)
         self.trace.append("role_started", {"step": step, "role": role, "phase": phase})
@@ -498,7 +498,7 @@ class AgentRunner:
             event = {"step": step, "role": role, "phase": phase, "type": "parse_error", "error": str(exc)}
             runtime_feedback.append(redact(event))
             self.trace.append("parse_error", event)
-            return latest_gate, metrics
+            return latest_gate, metrics, False
 
         summary_value = action.args.get("summary", "")
         summary = summary_value if isinstance(summary_value, str) else ""
@@ -521,20 +521,20 @@ class AgentRunner:
             metrics = replace(metrics, role_blocked_actions=metrics.role_blocked_actions + 1)
             self.trace.append("role_action_blocked", execution.to_dict())
             runtime_feedback.append(redact({"step": step, "type": "role_action_blocked", **execution.to_dict()}))
-            return latest_gate, metrics
+            return latest_gate, metrics, False
 
         if role == "planner" and action.action == "finish":
             state.plan = summary
             metrics = replace(metrics, finish_actions=metrics.finish_actions + 1)
             self.trace.append("role_finished", execution.to_dict())
-            return latest_gate, metrics
+            return latest_gate, metrics, True
 
         if role == "reviewer" and action.action == "finish":
             state.review_notes = summary
             state.repair_requested = summary_requests_repair(summary)
             metrics = replace(metrics, finish_actions=metrics.finish_actions + 1)
             self.trace.append("role_finished", execution.to_dict())
-            return latest_gate, metrics
+            return latest_gate, metrics, True
 
         if role == "implementer":
             latest_gate, metrics = self._execute_agent_action(
@@ -546,8 +546,9 @@ class AgentRunner:
                 latest_gate,
             )
             self.trace.append("role_finished", execution.to_dict())
+            return latest_gate, metrics, True
 
-        return latest_gate, metrics
+        return latest_gate, metrics, False
 
     def _run_multi_agent_loop(self, reset_queue: bool) -> RunResult:
         if reset_queue:
@@ -573,40 +574,42 @@ class AgentRunner:
             final_metrics = self._record_isolation(final_metrics, {"isolation": redact(evidence)})
             return self._finish_result(final_step, latest_gate, final_metrics, permission_decisions)
 
-        step += 1
-        latest_gate, metrics = self._run_multi_agent_role_once(
-            step,
-            "planner",
-            state,
-            latest_gate,
-            metrics,
-            runtime_feedback,
-            permission_decisions,
-        )
+        def run_role_if_budget(role: str) -> bool:
+            nonlocal latest_gate, metrics, step
+            if step >= self.max_steps:
+                metrics = replace(metrics, max_steps_reached=True)
+                self.trace.append(
+                    "role_step_limit_reached",
+                    {"step": step, "max_steps": self.max_steps, "next_role": role},
+                )
+                return False
+            step += 1
+            latest_gate, metrics, role_completed = self._run_multi_agent_role_once(
+                step,
+                role,
+                state,
+                latest_gate,
+                metrics,
+                runtime_feedback,
+                permission_decisions,
+            )
+            return role_completed
+
+        run_role_if_budget("planner")
 
         while True:
-            step += 1
-            latest_gate, metrics = self._run_multi_agent_role_once(
-                step,
-                "implementer",
-                state,
-                latest_gate,
-                metrics,
-                runtime_feedback,
-                permission_decisions,
-            )
+            run_role_if_budget("implementer")
+            if metrics.max_steps_reached:
+                return finish_with_isolation(step, metrics)
 
-            step += 1
             state.repair_requested = False
-            latest_gate, metrics = self._run_multi_agent_role_once(
-                step,
-                "reviewer",
-                state,
-                latest_gate,
-                metrics,
-                runtime_feedback,
-                permission_decisions,
-            )
+            reviewer_completed = run_role_if_budget("reviewer")
+            if metrics.max_steps_reached:
+                return finish_with_isolation(step, metrics)
+            if not reviewer_completed:
+                metrics = replace(metrics, max_steps_reached=True)
+                self.trace.append("reviewer_failed", {"step": step})
+                return finish_with_isolation(step, metrics)
 
             if not state.repair_requested:
                 return finish_with_isolation(step, metrics)
