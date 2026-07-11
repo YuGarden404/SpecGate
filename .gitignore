@@ -9,6 +9,7 @@ htmlcov/
 .env.*
 !.env.example
 runs/
+var/specgate_web/
 memory.json
 reports/latest/
 examples/eval_cases/eval-runs/
