@@ -8,7 +8,7 @@ from pathlib import Path
 from specgate.context_lifecycle import CompressionConfig, compress_runtime_feedback, pin_critical_sections
 from specgate.context_selector import ContextSelection, select_context_files
 from specgate.gate import GateResult
-from specgate.isolation import build_isolation_evidence, build_role_contexts
+from specgate.isolation import build_isolation_evidence, build_role_contexts, role_context_for
 from specgate.memory import load_memory_summary
 from specgate.policy import WorkspacePolicy
 from specgate.retrieval import RetrievalConfig, build_query_terms, retrieve_chunks
@@ -237,6 +237,18 @@ def _render_runtime_feedback(events: list[dict] | None, strategy: str = "baselin
     return "\n".join(lines)
 
 
+def _render_trace_summary(events: list[dict] | None) -> str:
+    if not events:
+        return "No trace summary yet."
+    lines: list[str] = []
+    for event in redact(events[-5:]):
+        payload = json.dumps(_compress_payload(event), ensure_ascii=False, sort_keys=True)
+        if len(payload) > 700:
+            payload = payload[:700] + "...[truncated]"
+        lines.append(f"- {payload}")
+    return "\n".join(lines)
+
+
 def _split_rendered_section(section: str) -> tuple[str, str]:
     title, _separator, body = section.partition("\n")
     return title.removeprefix("## "), body
@@ -358,3 +370,45 @@ def build_context_pack(
 ) -> str:
     context, _metadata = build_context_pack_with_metadata(root, latest_gate, runtime_feedback, strategy, policy)
     return context
+
+
+def build_role_context_pack_with_metadata(
+    root: Path,
+    role: str,
+    shared_state: dict[str, object],
+    latest_gate: GateResult | None,
+    runtime_feedback: list[dict] | None = None,
+    strategy: str = "multi-agent-isolated",
+    policy: WorkspacePolicy | None = None,
+) -> tuple[str, dict]:
+    role_context = role_context_for(role)
+    context, metadata = build_context_pack_with_metadata(
+        root,
+        latest_gate,
+        runtime_feedback,
+        strategy,
+        policy,
+    )
+    role_sections = [
+        "## Current Role\n"
+        f"role: {role_context.role}\n"
+        "allowed_actions: " + ", ".join(role_context.allowed_actions) + "\n"
+        "visible_sections: " + ", ".join(role_context.visible_sections),
+    ]
+    if role_context.role == "implementer":
+        plan = str(redact(shared_state.get("plan", "")))
+        role_sections.append("## Plan\n" + (plan if plan else "No plan yet."))
+    if role_context.role == "reviewer":
+        review_notes = str(redact(shared_state.get("review_notes", "")))
+        role_sections.append("## Trace Summary\n" + _render_trace_summary(runtime_feedback))
+        role_sections.append("## Review Notes\n" + (review_notes if review_notes else "No review notes yet."))
+
+    role_metadata = dict(metadata)
+    role_metadata.update(
+        {
+            "role": role_context.role,
+            "role_allowed_actions": list(role_context.allowed_actions),
+            "role_visible_sections": list(role_context.visible_sections),
+        }
+    )
+    return context + "\n\n" + "\n\n".join(role_sections), role_metadata

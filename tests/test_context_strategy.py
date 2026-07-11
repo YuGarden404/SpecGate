@@ -2,7 +2,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from specgate.context import build_context_pack, build_context_pack_with_metadata
+from specgate.context import (
+    build_context_pack,
+    build_context_pack_with_metadata,
+    build_role_context_pack_with_metadata,
+)
 from specgate.gate import GateResult
 
 
@@ -292,6 +296,50 @@ class ContextStrategyTests(unittest.TestCase):
             self.assertIn("Role Isolation", context)
             self.assertIn("isolation", metadata)
             self.assertEqual(metadata["isolation"]["strategy"], "multi-agent-isolated")
+
+    def test_implementer_role_context_contains_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build Search Dashboard", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("- 必须包含 Search", encoding="utf-8")
+            (root / "index.html").write_text("", encoding="utf-8")
+
+            context, metadata = build_role_context_pack_with_metadata(
+                root,
+                role="implementer",
+                shared_state={"plan": "Write index.html with a search input"},
+                latest_gate=None,
+                runtime_feedback=[],
+                strategy="multi-agent-isolated",
+            )
+
+            self.assertIn("Current Role", context)
+            self.assertIn("implementer", context)
+            self.assertIn("Plan", context)
+            self.assertIn("Write index.html with a search input", context)
+            self.assertEqual(metadata["role"], "implementer")
+
+    def test_reviewer_role_context_hides_plan_raw_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build Search Dashboard", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("- 必须包含 Search", encoding="utf-8")
+            (root / "index.html").write_text("<html>Search</html>", encoding="utf-8")
+
+            context, metadata = build_role_context_pack_with_metadata(
+                root,
+                role="reviewer",
+                shared_state={"plan": "private implementer plan", "review_notes": "check search"},
+                latest_gate=None,
+                runtime_feedback=[{"type": "tool_result", "message": "wrote file"}],
+                strategy="multi-agent-isolated",
+            )
+
+            self.assertIn("Current Role", context)
+            self.assertIn("reviewer", context)
+            self.assertIn("Trace Summary", context)
+            self.assertNotIn("private implementer plan", context)
+            self.assertEqual(metadata["role"], "reviewer")
 
     def test_compressed_strategy_keeps_earlier_blocked_tool_result(self):
         feedback = [
