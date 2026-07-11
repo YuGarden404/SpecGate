@@ -1026,7 +1026,7 @@ class RunnerTests(unittest.TestCase):
                     )
                 ]
             ).write(approval_queue_path(root))
-            llm = MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}])
+            llm = RecordingLLM()
             policy = WorkspacePolicy(
                 root,
                 {"replace_file", "finish"},
@@ -1052,11 +1052,15 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(queue.approvals[0].status, "rejected")
             self.assertIsNotNone(result.metrics)
             self.assertEqual(result.metrics.denied_approvals, 1)
+            self.assertIsNotNone(result.trust)
+            self.assertEqual(result.trust.status, "warning")
+            self.assertIn("human_denial_present", result.trust.reasons)
+            self.assertEqual(len(llm.contexts), 1)
+            self.assertIn("approval_denied", llm.contexts[0])
             trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("approval_rejected", trace_text)
+            self.assertIn("approval_denied", trace_text)
             self.assertIn("resume_finished", trace_text)
             self.assertNotIn(secret, trace_text)
-            self.assertEqual(llm.calls, 1)
 
     def test_resume_from_approved_env_write_still_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:

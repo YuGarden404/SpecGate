@@ -490,7 +490,7 @@ class AgentRunner:
             metrics = replace(metrics, denied_approvals=1)
             reason = approval.decision_reason or "human denied"
             event = {
-                "type": "approval_rejected",
+                "type": "approval_denied",
                 "approval_id": approval.id,
                 "action": approval.action,
                 "path": approval.path,
@@ -498,7 +498,7 @@ class AgentRunner:
             }
             redacted_event = redact(event)
             runtime_feedback.append(redacted_event)
-            self.trace.append("approval_rejected", redacted_event)
+            self.trace.append("approval_denied", redacted_event)
             ApprovalQueue.read(queue_path).resolve(
                 approval.id,
                 "rejected",
