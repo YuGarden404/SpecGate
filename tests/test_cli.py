@@ -273,6 +273,103 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("content", stdout)
             self.assertNotIn("sk-test-secret", stdout)
 
+    def test_approvals_approve_marks_pending_item_without_printing_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-step-1",
+                        step=1,
+                        action="replace_file",
+                        path="README.md",
+                        risk_level="review",
+                        reason="requires human review",
+                        profile="review",
+                        status="pending",
+                        action_payload={
+                            "schema_version": "1",
+                            "action": "replace_file",
+                            "args": {"path": "README.md", "content": "secret sk-test-secret-1234567890"},
+                        },
+                    )
+                ]
+            ).write(approval_queue_path(root))
+
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["approvals", "approve", tmp, "approval-step-1"])
+
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            self.assertEqual(code, 0)
+            self.assertEqual(queue.approvals[0].status, "approved")
+            self.assertIsNotNone(queue.approvals[0].decided_at)
+            self.assertNotIn("sk-test-secret", output.getvalue())
+
+    def test_approvals_deny_marks_pending_item_with_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-step-1",
+                        step=1,
+                        action="replace_file",
+                        path="README.md",
+                        risk_level="review",
+                        reason="requires human review",
+                        profile="review",
+                        status="pending",
+                    )
+                ]
+            ).write(approval_queue_path(root))
+
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["approvals", "deny", tmp, "approval-step-1", "--reason", "too broad"])
+
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            self.assertEqual(code, 0)
+            self.assertEqual(queue.approvals[0].status, "denied")
+            self.assertEqual(queue.approvals[0].decision_reason, "too broad")
+            self.assertIn("denied approval-step-1", output.getvalue())
+
+    def test_approvals_approve_rejects_missing_item_cleanly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["approvals", "approve", tmp, "missing"])
+
+            self.assertNotEqual(code, 0)
+            self.assertIn("could not update approval", output.getvalue())
+            self.assertNotIn("Traceback", output.getvalue())
+
+    def test_approvals_list_prints_decision_reason_without_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-step-1",
+                        step=1,
+                        action="replace_file",
+                        path="README.md",
+                        risk_level="review",
+                        reason="requires human review",
+                        profile="review",
+                        status="denied",
+                        decision_reason="too broad",
+                        action_payload={"args": {"content": "secret sk-test-secret-1234567890"}},
+                    )
+                ]
+            ).write(approval_queue_path(root))
+
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["approvals", "list", tmp])
+
+            text = output.getvalue()
+            self.assertEqual(code, 0)
+            self.assertIn("decision_reason", text)
+            self.assertIn("too broad", text)
+            self.assertNotIn("sk-test-secret", text)
+
     def test_approvals_list_malformed_queue_reports_clean_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

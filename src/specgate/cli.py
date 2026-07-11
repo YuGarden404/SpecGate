@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from specgate.approvals import ApprovalQueue, GovernanceConfig, approval_queue_path
@@ -420,8 +421,11 @@ def list_approvals(root: Path) -> int:
             action = approval.action
             path = approval.path
             reason = approval.reason
+            decision_reason = approval.decision_reason or ""
             if not all(isinstance(value, str) for value in (approval_id, status, action, reason)):
                 raise ValueError("approval display fields must be strings")
+            if not isinstance(decision_reason, str):
+                raise ValueError("approval decision reason must be a string or null")
             if path is not None and not isinstance(path, str):
                 raise ValueError("approval path must be a string or null")
             rows.append(
@@ -432,17 +436,47 @@ def list_approvals(root: Path) -> int:
                         action,
                         path or "",
                         reason,
+                        decision_reason,
                     ]
                 )
             )
 
-        print("id\tstatus\taction\tpath\treason")
+        print("id\tstatus\taction\tpath\treason\tdecision_reason")
         for row in rows:
             print(row)
     except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
         print("could not read pending approvals: malformed queue")
         return 1
     return 0
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def update_approval(root: Path, approval_id: str, decision: str, reason: str | None = None) -> int:
+    try:
+        queue_path = approval_queue_path(root)
+        queue = ApprovalQueue.read(queue_path)
+        if decision == "approve":
+            updated = queue.approve(approval_id, decided_at=_utc_now())
+            message = f"approved {approval_id}"
+        elif decision == "deny":
+            updated = queue.deny(
+                approval_id,
+                reason=reason or "human denied",
+                decided_at=_utc_now(),
+            )
+            message = f"denied {approval_id}"
+        else:
+            print("could not update approval: invalid decision")
+            return 1
+        updated.write(queue_path)
+        print(message)
+        return 0
+    except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
+        print("could not update approval")
+        return 1
 
 
 def run_mock_demo(root: Path, governance_profile: str | None = None) -> int:
@@ -697,6 +731,13 @@ def main(argv: list[str] | None = None) -> int:
     approvals_sub = approvals.add_subparsers(dest="approvals_command", required=True)
     approvals_list = approvals_sub.add_parser("list")
     approvals_list.add_argument("workspace")
+    approvals_approve = approvals_sub.add_parser("approve")
+    approvals_approve.add_argument("workspace")
+    approvals_approve.add_argument("approval_id")
+    approvals_deny = approvals_sub.add_parser("deny")
+    approvals_deny.add_argument("workspace")
+    approvals_deny.add_argument("approval_id")
+    approvals_deny.add_argument("--reason")
     args = parser.parse_args(argv)
     if args.command == "run-mock-demo":
         return run_mock_demo(Path(args.workspace), governance_profile=args.governance_profile)
@@ -771,6 +812,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "approvals":
         if args.approvals_command == "list":
             return list_approvals(Path(args.workspace))
+        if args.approvals_command == "approve":
+            return update_approval(Path(args.workspace), args.approval_id, "approve")
+        if args.approvals_command == "deny":
+            return update_approval(Path(args.workspace), args.approval_id, "deny", reason=args.reason)
     return 2
 
 
