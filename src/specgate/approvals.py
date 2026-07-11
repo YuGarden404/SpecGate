@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase
 import json
 from pathlib import Path
@@ -14,6 +14,16 @@ from specgate.security import SECRET_PATTERNS
 
 VALID_GOVERNANCE_PROFILES = ("strict", "demo", "review")
 HARD_BLOCKED_PATHS = {".env", "**/.env"}
+VALID_APPROVAL_STATUSES = {
+    "pending",
+    "approved",
+    "denied",
+    "applied",
+    "rejected",
+    "failed",
+}
+RESUMABLE_APPROVAL_STATUSES = {"approved", "denied"}
+TERMINAL_APPROVAL_STATUSES = {"applied", "rejected", "failed"}
 
 
 @dataclass
@@ -50,8 +60,16 @@ class PendingApproval:
     reason: str
     profile: str
     arguments_preview: dict[str, Any] = field(default_factory=dict)
+    action_payload: dict[str, Any] = field(default_factory=dict)
     status: str = "pending"
     created_at: str | None = None
+    decided_at: str | None = None
+    decision_reason: str | None = None
+    resolved_at: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status not in VALID_APPROVAL_STATUSES:
+            raise ValueError(f"invalid approval status: {self.status}")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -63,8 +81,12 @@ class PendingApproval:
             "reason": self.reason,
             "profile": self.profile,
             "arguments_preview": self.arguments_preview,
+            "action_payload": self.action_payload,
             "status": self.status,
             "created_at": self.created_at,
+            "decided_at": self.decided_at,
+            "decision_reason": self.decision_reason,
+            "resolved_at": self.resolved_at,
         }
 
 
@@ -104,6 +126,78 @@ class ApprovalQueue:
     def append(self, approval: PendingApproval) -> "ApprovalQueue":
         return ApprovalQueue([*self.approvals, approval])
 
+    def find(self, approval_id: str) -> PendingApproval:
+        for approval in self.approvals:
+            if approval.id == approval_id:
+                return approval
+        raise ValueError(f"approval not found: {approval_id}")
+
+    def approve(self, approval_id: str, decided_at: str) -> "ApprovalQueue":
+        approval = self.find(approval_id)
+        if approval.status != "pending":
+            raise ValueError("approval is not pending")
+        replacement = replace(
+            approval,
+            status="approved",
+            decided_at=decided_at,
+            decision_reason=None,
+        )
+        return ApprovalQueue(_replace_approval(self.approvals, approval_id, replacement))
+
+    def deny(self, approval_id: str, reason: str, decided_at: str) -> "ApprovalQueue":
+        approval = self.find(approval_id)
+        if approval.status != "pending":
+            raise ValueError("approval is not pending")
+        replacement = replace(
+            approval,
+            status="denied",
+            decided_at=decided_at,
+            decision_reason=reason,
+        )
+        return ApprovalQueue(_replace_approval(self.approvals, approval_id, replacement))
+
+    def resolve(
+        self,
+        approval_id: str,
+        status: str,
+        resolved_at: str,
+        reason: str | None = None,
+    ) -> "ApprovalQueue":
+        if status not in TERMINAL_APPROVAL_STATUSES:
+            raise ValueError("resolved approval status must be applied, rejected, or failed")
+        approval = self.find(approval_id)
+        replacement = replace(
+            approval,
+            status=status,
+            resolved_at=resolved_at,
+            decision_reason=reason if reason is not None else approval.decision_reason,
+        )
+        return ApprovalQueue(_replace_approval(self.approvals, approval_id, replacement))
+
+    def next_resume_candidate(self) -> PendingApproval | None:
+        for approval in self.approvals:
+            if approval.status in RESUMABLE_APPROVAL_STATUSES:
+                return approval
+        return None
+
+
+def _replace_approval(
+    approvals: list[PendingApproval],
+    approval_id: str,
+    replacement: PendingApproval,
+) -> list[PendingApproval]:
+    found = False
+    updated: list[PendingApproval] = []
+    for approval in approvals:
+        if approval.id == approval_id:
+            found = True
+            updated.append(replacement)
+        else:
+            updated.append(approval)
+    if not found:
+        raise ValueError(f"approval not found: {approval_id}")
+    return updated
+
 
 def approval_queue_path(root: Path) -> Path:
     return root / "runs" / "latest" / "pending_approvals.json"
@@ -136,7 +230,18 @@ def _parse_pending_approval(approval: dict[str, Any]) -> PendingApproval:
     if "arguments_preview" in approval and not isinstance(approval["arguments_preview"], dict):
         raise ValueError("pending approval entry has invalid schema")
 
-    if "created_at" in approval and approval["created_at"] is not None and not isinstance(approval["created_at"], str):
+    if "action_payload" in approval and not isinstance(approval["action_payload"], dict):
+        raise ValueError("pending approval entry has invalid schema")
+
+    for optional_field in ("created_at", "decided_at", "decision_reason", "resolved_at"):
+        if (
+            optional_field in approval
+            and approval[optional_field] is not None
+            and not isinstance(approval[optional_field], str)
+        ):
+            raise ValueError("pending approval entry has invalid schema")
+
+    if approval["status"] not in VALID_APPROVAL_STATUSES:
         raise ValueError("pending approval entry has invalid schema")
 
     return PendingApproval(
@@ -148,8 +253,12 @@ def _parse_pending_approval(approval: dict[str, Any]) -> PendingApproval:
         reason=approval["reason"],
         profile=approval["profile"],
         arguments_preview=approval.get("arguments_preview", {}),
+        action_payload=approval.get("action_payload", {}),
         status=approval["status"],
         created_at=approval.get("created_at"),
+        decided_at=approval.get("decided_at"),
+        decision_reason=approval.get("decision_reason"),
+        resolved_at=approval.get("resolved_at"),
     )
 
 
