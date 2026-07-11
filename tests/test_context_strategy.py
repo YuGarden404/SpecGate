@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from specgate.context import build_context_pack
+from specgate.context import build_context_pack, build_context_pack_with_metadata
 from specgate.gate import GateResult
 
 
@@ -272,6 +272,24 @@ class ContextStrategyTests(unittest.TestCase):
         self.assertIn("allowed_actions:", context)
         self.assertIn("## Retrieved Context", context)
         self.assertIn("## Compression Evidence", context)
+
+    def test_multi_agent_isolated_strategy_builds_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build Search Dashboard", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("- 必须包含 Search", encoding="utf-8")
+            (root / "index.html").write_text("", encoding="utf-8")
+
+            context, metadata = build_context_pack_with_metadata(
+                root,
+                latest_gate=None,
+                runtime_feedback=[],
+                strategy="multi-agent-isolated",
+            )
+
+            self.assertIn("multi-agent-isolated", context)
+            self.assertIn("Role Isolation", context)
+            self.assertIn("isolation", metadata)
 
     def test_compressed_strategy_keeps_earlier_blocked_tool_result(self):
         feedback = [

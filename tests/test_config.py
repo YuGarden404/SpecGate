@@ -103,6 +103,18 @@ class ConfigTests(unittest.TestCase):
             self.assertTrue(config.isolation.enabled)
             self.assertEqual(config.isolation.roles, ["planner", "implementer", "reviewer"])
 
+    def test_load_workspace_config_accepts_multi_agent_isolated_strategy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "specgate.toml").write_text(
+                '[context]\nstrategy = "multi-agent-isolated"\n',
+                encoding="utf-8",
+            )
+
+            config = load_workspace_config(root)
+
+            self.assertEqual(config.context.strategy, "multi-agent-isolated")
+
     def test_load_workspace_config_rejects_non_positive_retrieval_top_k(self):
         path = self.write_config(
             [

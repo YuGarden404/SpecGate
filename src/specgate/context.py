@@ -23,7 +23,10 @@ VALID_CONTEXT_STRATEGIES = {
     "rag-select",
     "compressed-rag",
     "isolated-harness",
+    "multi-agent-isolated",
 }
+
+ISOLATED_HARNESS_STRATEGIES = {"isolated-harness", "multi-agent-isolated"}
 
 
 def _read_allowed(path: Path, policy: WorkspacePolicy | None) -> bool:
@@ -81,7 +84,7 @@ def _render_selected_files(selection: ContextSelection, strategy: str = "baselin
         else:
             content = (
                 _compress_selected_content(rendered_content)
-                if strategy in {"compressed", "compressed-rag", "isolated-harness"}
+                if strategy in {"compressed", "compressed-rag", *ISOLATED_HARNESS_STRATEGIES}
                 else rendered_content
             )
             blocks.append(f"### {rendered_path}\n```text\n{content}\n```")
@@ -285,8 +288,8 @@ def build_context_pack_with_metadata(
     )
     retrieved_sections: list[str] = []
     retrieval_metadata = None
-    compression_like = strategy in {"compressed-rag", "isolated-harness"}
-    if strategy in {"rag-select", "compressed-rag", "isolated-harness"}:
+    compression_like = strategy in {"compressed-rag", *ISOLATED_HARNESS_STRATEGIES}
+    if strategy in {"rag-select", "compressed-rag", *ISOLATED_HARNESS_STRATEGIES}:
         rendered_retrieval, retrieval_metadata = _render_retrieved_context(root, latest_gate, policy)
         retrieved_sections.append("## Retrieved Context\n" + rendered_retrieval)
     compression_summary = None
@@ -319,7 +322,7 @@ def build_context_pack_with_metadata(
         (_artifact_summary(root / "index.html", policy), ""),
         ("Latest Gate Feedback", gate_summary),
     ]
-    if strategy == "isolated-harness":
+    if strategy in ISOLATED_HARNESS_STRATEGIES:
         body_sections.append(("Role Isolation", _render_role_isolation()))
         body_sections.append(("Compression Evidence", _render_compression_evidence(compression_summary)))
 
@@ -342,7 +345,7 @@ def build_context_pack_with_metadata(
     compression_metadata = compression_summary.to_dict() if compression_summary is not None else None
     if compression_metadata is not None:
         compression_metadata["pinned_sections"] = ["Task Constraints", "Policy Boundary", "Latest Gate Feedback"]
-    isolation = isolation_metadata() if strategy == "isolated-harness" else None
+    isolation = isolation_metadata() if strategy in ISOLATED_HARNESS_STRATEGIES else None
     return context, {"retrieval": retrieval_metadata, "compression": compression_metadata, "isolation": isolation}
 
 

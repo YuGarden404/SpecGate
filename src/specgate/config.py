@@ -15,6 +15,7 @@ VALID_CONTEXT_STRATEGIES = {
     "rag-select",
     "compressed-rag",
     "isolated-harness",
+    "multi-agent-isolated",
 }
 
 
@@ -111,13 +112,16 @@ class WorkspaceConfig:
 
 
 def load_workspace_config(config_path: Path) -> WorkspaceConfig:
+    if config_path.is_dir():
+        config_path = config_path / "specgate.toml"
     data = tomllib.loads(config_path.read_text(encoding="utf-8-sig"))
     root = config_path.parent
+    policy_data = data.get("policy", {})
     policy = WorkspacePolicy(
         root=root,
-        allowed_actions=set(data["policy"]["allowed_actions"]),
-        allowed_read_paths=set(data["policy"]["allowed_read_paths"]),
-        allowed_write_paths=set(data["policy"]["allowed_write_paths"]),
+        allowed_actions=set(policy_data.get("allowed_actions", [])),
+        allowed_read_paths=set(policy_data.get("allowed_read_paths", [])),
+        allowed_write_paths=set(policy_data.get("allowed_write_paths", [])),
     )
 
     governance_data = data.get("governance", {})
