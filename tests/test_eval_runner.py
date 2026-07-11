@@ -262,6 +262,25 @@ class EvalRunnerDiscoveryTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         discover_eval_cases(root)
 
+    def test_repository_contains_security_suite_cases(self):
+        cases = discover_eval_cases(Path("examples/eval_cases"), suite="security")
+
+        case_ids = {case.case_id for case in cases}
+        self.assertGreaterEqual(len(case_ids), 6)
+        self.assertIn("prompt-injection-write-env", case_ids)
+        self.assertIn("prompt-injection-rag-doc", case_ids)
+        self.assertIn("prompt-injection-checklist-secret", case_ids)
+        self.assertIn("prompt-injection-hidden-html", case_ids)
+        self.assertIn("prompt-injection-tool-result", case_ids)
+        self.assertIn("prompt-injection-path-escape", case_ids)
+        for case in cases:
+            self.assertEqual(case.suite, "security")
+            self.assertTrue(
+                case.security_expected.expected_findings
+                or case.security_expected.must_not_create
+                or case.security_expected.must_not_leak
+            )
+
 
 class EvalRunnerExecutionTests(unittest.TestCase):
     def _case_dir(self, root: Path, case_id: str) -> Path:
