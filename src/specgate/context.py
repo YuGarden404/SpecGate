@@ -249,6 +249,29 @@ def _render_trace_summary(events: list[dict] | None) -> str:
     return "\n".join(lines)
 
 
+def _runtime_feedback_for_role(role: str, events: list[dict] | None) -> list[dict] | None:
+    if role != "reviewer" or not events:
+        return events
+
+    allowed_event_types = {
+        "gate_result",
+        "tool_result",
+        "parse_error",
+        "role_action_blocked",
+        "approval_requested",
+        "approval_denied",
+        "approval_failed",
+    }
+    evidence_fields = {"type", "action", "ok", "blocked", "message", "passed", "summary", "error"}
+    filtered: list[dict] = []
+    for event in events:
+        if event.get("type") not in allowed_event_types:
+            continue
+        filtered_event = {key: event[key] for key in evidence_fields if key in event}
+        filtered.append(filtered_event)
+    return filtered
+
+
 def _split_rendered_section(section: str) -> tuple[str, str]:
     title, _separator, body = section.partition("\n")
     return title.removeprefix("## "), body
@@ -382,12 +405,13 @@ def build_role_context_pack_with_metadata(
     policy: WorkspacePolicy | None = None,
 ) -> tuple[str, dict]:
     role_context = role_context_for(role)
+    role_runtime_feedback = _runtime_feedback_for_role(role_context.role, runtime_feedback)
     context, metadata = build_context_pack_with_metadata(
-        root,
-        latest_gate,
-        runtime_feedback,
-        strategy,
-        policy,
+        root=root,
+        latest_gate=latest_gate,
+        runtime_feedback=role_runtime_feedback,
+        strategy=strategy,
+        policy=policy,
     )
     role_sections = [
         "## Current Role\n"
@@ -400,7 +424,7 @@ def build_role_context_pack_with_metadata(
         role_sections.append("## Plan\n" + (plan if plan else "No plan yet."))
     if role_context.role == "reviewer":
         review_notes = str(redact(shared_state.get("review_notes", "")))
-        role_sections.append("## Trace Summary\n" + _render_trace_summary(runtime_feedback))
+        role_sections.append("## Trace Summary\n" + _render_trace_summary(role_runtime_feedback))
         role_sections.append("## Review Notes\n" + (review_notes if review_notes else "No review notes yet."))
 
     role_metadata = dict(metadata)

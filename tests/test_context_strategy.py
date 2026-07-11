@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -340,6 +341,35 @@ class ContextStrategyTests(unittest.TestCase):
             self.assertIn("Trace Summary", context)
             self.assertNotIn("private implementer plan", context)
             self.assertEqual(metadata["role"], "reviewer")
+
+    def test_reviewer_role_context_filters_private_plan_from_feedback_and_metadata(self):
+        private_plan = "PRIVATE_PLAN_DO_NOT_SHOW"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build Search Dashboard", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("- 必须包含 Search", encoding="utf-8")
+            (root / "index.html").write_text("<html>Search</html>", encoding="utf-8")
+
+            context, metadata = build_role_context_pack_with_metadata(
+                root,
+                role="reviewer",
+                shared_state={"plan": private_plan, "review_notes": "check search"},
+                latest_gate=None,
+                runtime_feedback=[
+                    {"type": "plan", "plan": private_plan},
+                    {
+                        "type": "tool_result",
+                        "action": "write_file",
+                        "ok": True,
+                        "message": "wrote file",
+                        "args": {"content": private_plan},
+                    },
+                ],
+                strategy="multi-agent-isolated",
+            )
+
+            self.assertNotIn(private_plan, context)
+            self.assertNotIn(private_plan, json.dumps(metadata, ensure_ascii=False))
 
     def test_compressed_strategy_keeps_earlier_blocked_tool_result(self):
         feedback = [
