@@ -88,6 +88,8 @@ def build_trust_summary(final_gate_passed: bool, metrics: RunMetrics) -> TrustSu
         reasons.append("max_steps_reached")
     if metrics.finish_actions == 0:
         reasons.append("missing_finish")
+    if metrics.failed_approvals:
+        reasons.append("approval_failed")
     if reasons:
         return TrustSummary("failed", reasons)
 
