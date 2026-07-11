@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from specgate.approvals import ApprovalQueue, GovernanceConfig, approval_queue_path
@@ -16,6 +17,7 @@ from specgate.llm import LLMProviderError, MockLLM, OpenAICompatibleLLM
 from specgate.policy import WorkspacePolicy
 from specgate.report import generate_report
 from specgate.runner import AgentRunner
+from specgate.trace import redact
 
 
 GOVERNANCE_PROFILES = ("strict", "demo", "review")
@@ -420,29 +422,67 @@ def list_approvals(root: Path) -> int:
             action = approval.action
             path = approval.path
             reason = approval.reason
+            decision_reason = approval.decision_reason or ""
             if not all(isinstance(value, str) for value in (approval_id, status, action, reason)):
                 raise ValueError("approval display fields must be strings")
+            if not isinstance(decision_reason, str):
+                raise ValueError("approval decision reason must be a string or null")
             if path is not None and not isinstance(path, str):
                 raise ValueError("approval path must be a string or null")
+            display_values = redact(
+                [
+                    approval_id,
+                    status,
+                    action,
+                    path or "",
+                    reason,
+                    decision_reason,
+                ]
+            )
+            if not all(isinstance(value, str) for value in display_values):
+                raise ValueError("approval display fields must be strings")
             rows.append(
                 "\t".join(
-                    [
-                        approval_id,
-                        status,
-                        action,
-                        path or "",
-                        reason,
-                    ]
+                    display_values
                 )
             )
 
-        print("id\tstatus\taction\tpath\treason")
+        print("id\tstatus\taction\tpath\treason\tdecision_reason")
         for row in rows:
             print(row)
     except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
         print("could not read pending approvals: malformed queue")
         return 1
     return 0
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def update_approval(root: Path, approval_id: str, decision: str, reason: str | None = None) -> int:
+    try:
+        queue_path = approval_queue_path(root)
+        queue = ApprovalQueue.read(queue_path)
+        if decision == "approve":
+            updated = queue.approve(approval_id, decided_at=_utc_now())
+            message = f"approved {approval_id}"
+        elif decision == "deny":
+            updated = queue.deny(
+                approval_id,
+                reason=reason or "human denied",
+                decided_at=_utc_now(),
+            )
+            message = f"denied {approval_id}"
+        else:
+            print("could not update approval: invalid decision")
+            return 1
+        updated.write(queue_path)
+        print(message)
+        return 0
+    except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
+        print("could not update approval")
+        return 1
 
 
 def run_mock_demo(root: Path, governance_profile: str | None = None) -> int:
@@ -476,6 +516,43 @@ def run_mock_demo(root: Path, governance_profile: str | None = None) -> int:
         trust=result.trust,
         profile=result.profile,
     )
+    return 0 if result.passed else 1
+
+
+def run_resume(root: Path, max_steps: int, governance_profile: str | None = None) -> int:
+    settings = _load_workspace_settings(root)
+    llm = MockLLM(
+        [
+            {
+                "schema_version": "1",
+                "action": "finish",
+                "args": {"summary": "resume complete"},
+            }
+        ]
+    )
+    try:
+        result = AgentRunner(
+            root,
+            llm,
+            settings.policy,
+            max_steps=max_steps,
+            governance_profile=governance_profile,
+            governance_config=settings.governance,
+        ).resume_from_approval()
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        print(f"could not resume: {redact(str(exc))}")
+        return 1
+    gate = result.final_gate or run_html_gate(root / "index.html", root / "CHECKLIST.md")
+    generate_report(
+        root,
+        gate,
+        result.steps,
+        metrics=result.metrics,
+        permission_decisions=result.permission_decisions,
+        trust=result.trust,
+        profile=result.profile,
+    )
+    print(f"SpecGate resume finished: passed={result.passed}, steps={result.steps}")
     return 0 if result.passed else 1
 
 
@@ -656,6 +733,10 @@ def main(argv: list[str] | None = None) -> int:
     real_run.add_argument("--user-agent", default="SpecGate/0.1 OpenAI-Compatible")
     real_run.add_argument("--timeout", type=float, default=60)
     real_run.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
+    resume = sub.add_parser("resume")
+    resume.add_argument("workspace")
+    resume.add_argument("--max-steps", type=int, default=5)
+    resume.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
     eval_parser = sub.add_parser("eval")
     eval_parser.add_argument("cases_root")
     eval_parser.add_argument(
@@ -697,6 +778,13 @@ def main(argv: list[str] | None = None) -> int:
     approvals_sub = approvals.add_subparsers(dest="approvals_command", required=True)
     approvals_list = approvals_sub.add_parser("list")
     approvals_list.add_argument("workspace")
+    approvals_approve = approvals_sub.add_parser("approve")
+    approvals_approve.add_argument("workspace")
+    approvals_approve.add_argument("approval_id")
+    approvals_deny = approvals_sub.add_parser("deny")
+    approvals_deny.add_argument("workspace")
+    approvals_deny.add_argument("approval_id")
+    approvals_deny.add_argument("--reason")
     args = parser.parse_args(argv)
     if args.command == "run-mock-demo":
         return run_mock_demo(Path(args.workspace), governance_profile=args.governance_profile)
@@ -710,6 +798,12 @@ def main(argv: list[str] | None = None) -> int:
             max_steps=args.max_steps,
             user_agent=args.user_agent,
             timeout=args.timeout,
+            governance_profile=args.governance_profile,
+        )
+    if args.command == "resume":
+        return run_resume(
+            Path(args.workspace),
+            max_steps=args.max_steps,
             governance_profile=args.governance_profile,
         )
     if args.command == "eval":
@@ -771,6 +865,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "approvals":
         if args.approvals_command == "list":
             return list_approvals(Path(args.workspace))
+        if args.approvals_command == "approve":
+            return update_approval(Path(args.workspace), args.approval_id, "approve")
+        if args.approvals_command == "deny":
+            return update_approval(Path(args.workspace), args.approval_id, "deny", reason=args.reason)
     return 2
 
 

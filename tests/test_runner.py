@@ -6,7 +6,7 @@ from pathlib import Path
 from specgate.llm import MockLLM
 from specgate.policy import WorkspacePolicy
 from specgate.runner import AgentRunner
-from specgate.approvals import GovernanceConfig, approval_queue_path
+from specgate.approvals import ApprovalQueue, GovernanceConfig, PendingApproval, approval_queue_path
 
 
 BROKEN_HTML = "<html><head><title>x</title></head><body></body></html>"
@@ -813,6 +813,9 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "original")
             self.assertTrue(approval_queue_path(root).exists())
             self.assertIn("approval-step-1", approval_queue_path(root).read_text(encoding="utf-8"))
+            approval = ApprovalQueue.read(approval_queue_path(root)).approvals[0]
+            self.assertEqual(approval.action_payload["action"], "replace_file")
+            self.assertEqual(approval.action_payload["args"]["content"], "changed")
             self.assertEqual(result.metrics.approval_requests, 1)
             self.assertEqual(result.metrics.pending_approvals, 1)
             self.assertIsNotNone(result.permission_decisions)
@@ -832,6 +835,62 @@ class RunnerTests(unittest.TestCase):
             ]
             self.assertIn("permission_decision", trace_events)
             self.assertIn("approval_requested", trace_events)
+
+    def test_approved_resume_fails_when_target_changed_after_approval_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            secret = "sk-test-secret-1234567890"
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("original", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Task Search Detail</body></html>',
+                encoding="utf-8",
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"README.md"},
+            )
+            governance = GovernanceConfig(
+                profile="review",
+                review_actions={"replace_file"},
+                review_paths={"README.md"},
+            )
+            pending_llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {"path": "README.md", "content": f"approved overwrite {secret}"},
+                    }
+                ]
+            )
+            AgentRunner(root, pending_llm, policy, max_steps=1, governance_config=governance).run()
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            approval_id = queue.approvals[0].id
+
+            (root / "README.md").write_text(f"external edit {secret}", encoding="utf-8")
+            queue.approve(approval_id, decided_at="2026-07-11T10:01:00Z").write(approval_queue_path(root))
+            resume_llm = MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}])
+
+            result = AgentRunner(root, resume_llm, policy, max_steps=1, governance_config=governance).resume_from_approval()
+
+            self.assertEqual((root / "README.md").read_text(encoding="utf-8"), f"external edit {secret}")
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            self.assertEqual(queue.approvals[0].status, "failed")
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.failed_approvals, 1)
+            self.assertEqual(result.metrics.blocked_actions, 1)
+            self.assertIsNotNone(result.trust)
+            self.assertEqual(result.trust.status, "failed")
+            self.assertIn("approval_failed", result.trust.reasons)
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("approval_failed", trace_text)
+            self.assertIn("changed since approval request", trace_text)
+            self.assertNotIn(secret, trace_text)
 
     def test_workspace_review_governance_config_sets_runner_profile_when_not_overridden(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -860,6 +919,269 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result.metrics.approval_requests, 1)
             self.assertEqual(result.metrics.pending_approvals, 1)
             self.assertEqual(result.permission_decisions[0].profile, "review")
+
+    def test_resume_from_approved_approval_applies_payload_once_and_continues(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            secret = "sk-test-secret-1234567890"
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("original", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Task Search Detail</body></html>',
+                encoding="utf-8",
+            )
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-step-1",
+                        step=1,
+                        action="replace_file",
+                        path="README.md",
+                        risk_level="review",
+                        reason="replace_file requires human review",
+                        profile="review",
+                        status="approved",
+                        action_payload={
+                            "schema_version": "1",
+                            "action": "replace_file",
+                            "args": {"path": "README.md", "content": f"approved content {secret}"},
+                        },
+                    )
+                ]
+            ).write(approval_queue_path(root))
+            llm = MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}])
+            policy = WorkspacePolicy(
+                root,
+                {"replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"README.md"},
+            )
+
+            result = AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=1,
+                governance_config=GovernanceConfig(
+                    profile="review",
+                    review_actions={"replace_file"},
+                    review_paths={"README.md"},
+                ),
+            ).resume_from_approval()
+
+            self.assertTrue(result.passed)
+            self.assertEqual((root / "README.md").read_text(encoding="utf-8"), f"approved content {secret}")
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            self.assertEqual(queue.approvals[0].status, "applied")
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.approved_approvals, 1)
+            self.assertEqual(result.metrics.applied_approvals, 1)
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("resume_started", trace_text)
+            self.assertIn("approval_applied", trace_text)
+            self.assertIn("resume_finished", trace_text)
+            self.assertNotIn(secret, trace_text)
+            self.assertEqual(llm.calls, 1)
+
+    def test_resume_generates_unique_pending_approval_id_after_applying_old_approval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("original", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Task Search Detail</body></html>',
+                encoding="utf-8",
+            )
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-step-1",
+                        step=1,
+                        action="replace_file",
+                        path="README.md",
+                        risk_level="review",
+                        reason="replace_file requires human review",
+                        profile="review",
+                        status="approved",
+                        action_payload={
+                            "schema_version": "1",
+                            "action": "replace_file",
+                            "args": {"path": "README.md", "content": "first approved content"},
+                        },
+                    )
+                ]
+            ).write(approval_queue_path(root))
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "replace_file",
+                        "args": {"path": "README.md", "content": "second pending content"},
+                    }
+                ]
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"README.md"},
+            )
+
+            AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=1,
+                governance_config=GovernanceConfig(
+                    profile="review",
+                    review_actions={"replace_file"},
+                    review_paths={"README.md"},
+                ),
+            ).resume_from_approval()
+
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            pending = [approval for approval in queue.approvals if approval.status == "pending"]
+            self.assertEqual(len(pending), 1)
+            self.assertNotEqual(pending[0].id, "approval-step-1")
+            updated = queue.approve(pending[0].id, decided_at="2026-07-11T10:01:00Z")
+            self.assertEqual(updated.find(pending[0].id).status, "approved")
+
+    def test_resume_from_denied_approval_rejects_without_executing_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            secret = "sk-test-secret-1234567890"
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("original", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Task Search Detail</body></html>',
+                encoding="utf-8",
+            )
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-step-1",
+                        step=1,
+                        action="replace_file",
+                        path="README.md",
+                        risk_level="review",
+                        reason="replace_file requires human review",
+                        profile="review",
+                        status="denied",
+                        decision_reason=f"too broad {secret}",
+                        action_payload={
+                            "schema_version": "1",
+                            "action": "replace_file",
+                            "args": {"path": "README.md", "content": "denied content"},
+                        },
+                    )
+                ]
+            ).write(approval_queue_path(root))
+            llm = RecordingLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"README.md"},
+            )
+
+            result = AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=1,
+                governance_config=GovernanceConfig(
+                    profile="review",
+                    review_actions={"replace_file"},
+                    review_paths={"README.md"},
+                ),
+            ).resume_from_approval()
+
+            self.assertTrue(result.passed)
+            self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "original")
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            self.assertEqual(queue.approvals[0].status, "rejected")
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.denied_approvals, 1)
+            self.assertIsNotNone(result.trust)
+            self.assertEqual(result.trust.status, "warning")
+            self.assertIn("human_denial_present", result.trust.reasons)
+            self.assertEqual(len(llm.contexts), 1)
+            self.assertIn("approval_denied", llm.contexts[0])
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("approval_denied", trace_text)
+            self.assertIn("resume_finished", trace_text)
+            self.assertNotIn(secret, trace_text)
+
+    def test_resume_from_approved_env_write_still_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            secret = "OPENAI_API_KEY=sk-test-secret-1234567890"
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<title>Task</title></head><body><input type="search">Task Search Detail</body></html>',
+                encoding="utf-8",
+            )
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-step-1",
+                        step=1,
+                        action="write_file",
+                        path=".env",
+                        risk_level="review",
+                        reason="write_file requires human review",
+                        profile="review",
+                        status="approved",
+                        action_payload={
+                            "schema_version": "1",
+                            "action": "write_file",
+                            "args": {"path": ".env", "content": secret},
+                        },
+                    )
+                ]
+            ).write(approval_queue_path(root))
+            llm = MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}])
+            policy = WorkspacePolicy(
+                root,
+                {"write_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {".env"},
+            )
+
+            result = AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=1,
+                governance_config=GovernanceConfig(
+                    profile="review",
+                    review_actions={"write_file"},
+                    review_paths={".env"},
+                ),
+            ).resume_from_approval()
+
+            self.assertFalse((root / ".env").exists())
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            self.assertEqual(queue.approvals[0].status, "failed")
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.approved_approvals, 1)
+            self.assertEqual(result.metrics.failed_approvals, 1)
+            self.assertEqual(result.metrics.blocked_actions, 1)
+            self.assertIsNotNone(result.trust)
+            self.assertEqual(result.trust.status, "failed")
+            self.assertIn("approval_failed", result.trust.reasons)
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("approval_failed", trace_text)
+            self.assertIn("blocked path: .env", trace_text)
+            self.assertNotIn("sk-test-secret", trace_text)
 
     def test_strict_profile_blocks_review_action_without_creating_approval(self):
         with tempfile.TemporaryDirectory() as tmp:

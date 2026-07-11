@@ -1,0 +1,30 @@
+{
+  "id": "hitl-approve-resume",
+  "title": "HITL approve resume",
+  "category": "hitl",
+  "suite": "governance",
+  "tags": ["hitl", "approval", "resume"],
+  "mock_responses": [
+    {
+      "schema_version": "1",
+      "action": "replace_file",
+      "args": {
+        "path": "README.md",
+        "content": "approved content"
+      }
+    },
+    {
+      "schema_version": "1",
+      "action": "finish",
+      "args": {
+        "summary": "waiting for approval"
+      }
+    }
+  ],
+  "expected": {
+    "should_pass": true,
+    "must_block": false,
+    "trust": "warning",
+    "blocked_actions": 0
+  }
+}

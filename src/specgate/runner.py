@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 
@@ -10,8 +11,10 @@ from specgate.approvals import (
     GovernanceConfig,
     PendingApproval,
     approval_queue_path,
+    capture_target_state,
     classify_action_risk,
     preview_args,
+    target_state_matches,
 )
 from specgate.context import build_context_pack_with_metadata
 from specgate.gate import GateResult, run_html_gate
@@ -22,6 +25,22 @@ from specgate.policy import WorkspacePolicy
 from specgate.snapshot import FileSnapshot
 from specgate.tools import ToolDispatcher
 from specgate.trace import TraceStore, redact
+
+
+def _utc_now_for_runner() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _unique_approval_id(queue: ApprovalQueue, step: int) -> str:
+    base = f"approval-step-{step}"
+    existing = {approval.id for approval in queue.approvals}
+    if base not in existing:
+        return base
+
+    suffix = 2
+    while f"{base}-{suffix}" in existing:
+        suffix += 1
+    return f"{base}-{suffix}"
 
 
 @dataclass(frozen=True)
@@ -69,15 +88,24 @@ class AgentRunner:
             isolation_path.unlink()
 
     def run(self) -> RunResult:
+        return self._run_loop(reset_queue=True)
+
+    def _run_loop(
+        self,
+        reset_queue: bool,
+        initial_runtime_feedback: list[dict] | None = None,
+        initial_metrics: RunMetrics | None = None,
+        initial_permission_decisions: list[PermissionDecision] | None = None,
+        latest_gate: GateResult | None = None,
+    ) -> RunResult:
         queue_path = approval_queue_path(self.root)
-        if queue_path.exists():
+        if reset_queue and queue_path.exists():
             queue_path.unlink()
 
-        latest_gate: GateResult | None = None
-        runtime_feedback: list[dict] = []
-        context_chars_max = 0
-        metrics = RunMetrics()
-        permission_decisions: list[PermissionDecision] = []
+        runtime_feedback: list[dict] = list(initial_runtime_feedback or [])
+        metrics = initial_metrics or RunMetrics()
+        context_chars_max = metrics.context_chars_max
+        permission_decisions: list[PermissionDecision] = list(initial_permission_decisions or [])
 
         def run_gate(step: int) -> GateResult:
             nonlocal metrics
@@ -337,8 +365,9 @@ class AgentRunner:
             action_path = action_path_value if isinstance(action_path_value, str) else None
             risk = classify_action_risk(action, self.policy, self.governance_config)
             if risk.level == "review" and self.governance_profile == "review":
+                queue = ApprovalQueue.read(queue_path)
                 approval = PendingApproval(
-                    id=f"approval-step-{step}",
+                    id=_unique_approval_id(queue, step),
                     step=step,
                     action=action.action,
                     path=action_path,
@@ -346,9 +375,14 @@ class AgentRunner:
                     reason=risk.reason,
                     profile=self.governance_profile,
                     arguments_preview=preview_args(action.args),
+                    action_payload={
+                        "schema_version": action.schema_version,
+                        "action": action.action,
+                        "args": action.args,
+                    },
+                    target_state=capture_target_state(self.root, action_path),
                 )
-                queue = ApprovalQueue.read(queue_path).append(approval)
-                queue.write(queue_path)
+                queue.append(approval).write(queue_path)
                 record_permission_decision(
                     step,
                     action.action,
@@ -368,7 +402,7 @@ class AgentRunner:
                     "approval": approval.to_dict(),
                 }
                 runtime_feedback.append(redact(event))
-                self.trace.append("approval_requested", event)
+                self.trace.append("approval_requested", redact(event))
                 continue
 
             if risk.level in {"review", "blocked"}:
@@ -436,3 +470,203 @@ class AgentRunner:
             latest_gate = run_gate(self.max_steps)
         metrics = replace(metrics, max_steps_reached=True)
         return finish_result(self.max_steps, latest_gate, metrics)
+
+    def resume_from_approval(self) -> RunResult:
+        queue_path = approval_queue_path(self.root)
+        queue = ApprovalQueue.read(queue_path)
+        approval = queue.next_resume_candidate()
+        if approval is None:
+            raise ValueError("no approved or denied approval to resume")
+
+        runtime_feedback: list[dict] = []
+        permission_decisions: list[PermissionDecision] = []
+        metrics = RunMetrics()
+        started = {
+            "approval_id": approval.id,
+            "status": approval.status,
+            "action": approval.action,
+            "path": approval.path,
+        }
+        self.trace.append("resume_started", redact(started))
+
+        if approval.status == "denied":
+            metrics = replace(metrics, denied_approvals=1)
+            reason = approval.decision_reason or "human denied"
+            event = {
+                "type": "approval_denied",
+                "approval_id": approval.id,
+                "action": approval.action,
+                "path": approval.path,
+                "reason": reason,
+            }
+            redacted_event = redact(event)
+            runtime_feedback.append(redacted_event)
+            self.trace.append("approval_denied", redacted_event)
+            ApprovalQueue.read(queue_path).resolve(
+                approval.id,
+                "rejected",
+                resolved_at=_utc_now_for_runner(),
+                reason=reason,
+            ).write(queue_path)
+            self.trace.append(
+                "resume_finished",
+                redact({"approval_id": approval.id, "status": "rejected"}),
+            )
+            return self._run_loop(
+                reset_queue=False,
+                initial_runtime_feedback=runtime_feedback,
+                initial_metrics=metrics,
+                initial_permission_decisions=permission_decisions,
+            )
+
+        if not target_state_matches(self.root, approval.target_state):
+            reason = f"target file changed since approval request: {approval.path}"
+            metrics = replace(
+                metrics,
+                approved_approvals=1,
+                failed_approvals=1,
+                blocked_actions=1,
+            )
+            decision = PermissionDecision(
+                step=approval.step,
+                action=approval.action,
+                path=approval.path,
+                allowed=False,
+                blocked=True,
+                reason=reason,
+                profile=self.governance_profile,
+                rule_family=classify_rule_family(reason),
+            )
+            permission_decisions.append(decision)
+            self.trace.append("permission_decision", decision.to_dict())
+            event = {
+                "type": "approval_failed",
+                "approval_id": approval.id,
+                "action": approval.action,
+                "path": approval.path,
+                "reason": reason,
+            }
+            redacted_event = redact(event)
+            runtime_feedback.append(redacted_event)
+            self.trace.append("approval_failed", redacted_event)
+            ApprovalQueue.read(queue_path).resolve(
+                approval.id,
+                "failed",
+                resolved_at=_utc_now_for_runner(),
+                reason=reason,
+            ).write(queue_path)
+            self.trace.append(
+                "resume_finished",
+                redact({"approval_id": approval.id, "status": "failed"}),
+            )
+            return self._run_loop(
+                reset_queue=False,
+                initial_runtime_feedback=runtime_feedback,
+                initial_metrics=metrics,
+                initial_permission_decisions=permission_decisions,
+            )
+
+        action = parse_action(json.dumps(approval.action_payload))
+        action_path_value = action.args.get("path")
+        action_path = action_path_value if isinstance(action_path_value, str) else None
+        risk = classify_action_risk(action, self.policy, self.governance_config)
+        if risk.level == "blocked":
+            metrics = replace(
+                metrics,
+                approved_approvals=1,
+                failed_approvals=1,
+                blocked_actions=1,
+            )
+            decision = PermissionDecision(
+                step=approval.step,
+                action=action.action,
+                path=action_path,
+                allowed=False,
+                blocked=True,
+                reason=risk.reason,
+                profile=self.governance_profile,
+                rule_family=classify_rule_family(risk.reason),
+            )
+            permission_decisions.append(decision)
+            self.trace.append("permission_decision", decision.to_dict())
+            event = {
+                "type": "approval_failed",
+                "approval_id": approval.id,
+                "action": action.action,
+                "path": action_path,
+                "reason": risk.reason,
+            }
+            redacted_event = redact(event)
+            runtime_feedback.append(redacted_event)
+            self.trace.append("approval_failed", redacted_event)
+            ApprovalQueue.read(queue_path).resolve(
+                approval.id,
+                "failed",
+                resolved_at=_utc_now_for_runner(),
+                reason=risk.reason,
+            ).write(queue_path)
+            self.trace.append(
+                "resume_finished",
+                redact({"approval_id": approval.id, "status": "failed"}),
+            )
+            return self._run_loop(
+                reset_queue=False,
+                initial_runtime_feedback=runtime_feedback,
+                initial_metrics=metrics,
+                initial_permission_decisions=permission_decisions,
+            )
+
+        tool_result = self.dispatcher.dispatch(action)
+        status = "applied" if tool_result.ok and not tool_result.blocked else "failed"
+        metrics = replace(
+            metrics,
+            approved_approvals=1,
+            applied_approvals=1 if status == "applied" else 0,
+            failed_approvals=1 if status == "failed" else 0,
+            tool_calls=1,
+            successful_tool_calls=1 if tool_result.ok else 0,
+            blocked_actions=1 if tool_result.blocked else 0,
+            finish_actions=1 if action.action == "finish" else 0,
+        )
+        decision = PermissionDecision(
+            step=approval.step,
+            action=action.action,
+            path=action_path,
+            allowed=tool_result.ok and not tool_result.blocked,
+            blocked=tool_result.blocked,
+            reason=tool_result.message,
+            profile=self.governance_profile,
+            rule_family=classify_rule_family(tool_result.message),
+        )
+        permission_decisions.append(decision)
+        self.trace.append("permission_decision", decision.to_dict())
+        event_type = "approval_applied" if status == "applied" else "approval_failed"
+        event = {
+            "type": event_type,
+            "approval_id": approval.id,
+            "action": action.action,
+            "path": action_path,
+            "ok": tool_result.ok,
+            "blocked": tool_result.blocked,
+            "message": tool_result.message,
+            "data": tool_result.data,
+        }
+        redacted_event = redact(event)
+        runtime_feedback.append(redacted_event)
+        self.trace.append(event_type, redacted_event)
+        ApprovalQueue.read(queue_path).resolve(
+            approval.id,
+            status,
+            resolved_at=_utc_now_for_runner(),
+            reason=None if status == "applied" else tool_result.message,
+        ).write(queue_path)
+        self.trace.append(
+            "resume_finished",
+            redact({"approval_id": approval.id, "status": status}),
+        )
+        return self._run_loop(
+            reset_queue=False,
+            initial_runtime_feedback=runtime_feedback,
+            initial_metrics=metrics,
+            initial_permission_decisions=permission_decisions,
+        )

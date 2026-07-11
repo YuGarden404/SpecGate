@@ -42,6 +42,10 @@ class MetricsTests(unittest.TestCase):
                 "finish_actions": 0,
                 "approval_requests": 0,
                 "pending_approvals": 0,
+                "approved_approvals": 0,
+                "denied_approvals": 0,
+                "applied_approvals": 0,
+                "failed_approvals": 0,
                 "retrieval_queries": 0,
                 "retrieved_chunks": 0,
                 "retrieval_candidate_chunks": 0,
@@ -69,6 +73,10 @@ class MetricsTests(unittest.TestCase):
             finish_actions=1,
             approval_requests=2,
             pending_approvals=1,
+            approved_approvals=1,
+            denied_approvals=1,
+            applied_approvals=1,
+            failed_approvals=1,
             retrieval_queries=1,
             retrieved_chunks=3,
             retrieval_candidate_chunks=8,
@@ -96,6 +104,10 @@ class MetricsTests(unittest.TestCase):
                 "finish_actions": 1,
                 "approval_requests": 2,
                 "pending_approvals": 1,
+                "approved_approvals": 1,
+                "denied_approvals": 1,
+                "applied_approvals": 1,
+                "failed_approvals": 1,
                 "retrieval_queries": 1,
                 "retrieved_chunks": 3,
                 "retrieval_candidate_chunks": 8,
@@ -229,6 +241,18 @@ class MetricsTests(unittest.TestCase):
 
         self.assertEqual(trust.status, "warning")
         self.assertIn("pending_approvals_present", trust.reasons)
+
+    def test_warning_summary_when_gate_passes_with_human_denial(self):
+        trust = build_trust_summary(True, RunMetrics(finish_actions=1, denied_approvals=1))
+
+        self.assertEqual(trust.status, "warning")
+        self.assertIn("human_denial_present", trust.reasons)
+
+    def test_failed_summary_when_gate_passes_with_failed_approval(self):
+        trust = build_trust_summary(True, RunMetrics(finish_actions=1, failed_approvals=1))
+
+        self.assertEqual(trust.status, "failed")
+        self.assertIn("approval_failed", trust.reasons)
 
     def test_failed_summary_when_finish_is_missing(self):
         trust = build_trust_summary(True, RunMetrics(steps=2, finish_actions=0))

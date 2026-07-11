@@ -71,32 +71,40 @@ def _render_permission_decisions(permission_decisions: list[PermissionDecision] 
     )
 
 
-def _render_pending_approvals(root: Path) -> str:
+def _safe_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(redact(str(value)))
+
+
+def _render_approval_history(root: Path) -> str:
     try:
         queue = ApprovalQueue.read(approval_queue_path(root))
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         return (
-            "<h2>Pending Approvals</h2>"
-            f"<p>could not read pending approvals: {escape(str(exc))}</p>"
+            "<h2>Approval History</h2>"
+            f"<p>could not read approval history: {escape(str(redact(str(exc))))}</p>"
         )
 
     if not queue.approvals:
-        return "<h2>Pending Approvals</h2><p>No pending approvals.</p>"
+        return "<h2>Approval History</h2><p>No approvals recorded.</p>"
 
     rows = "\n".join(
         "<tr>"
-        f"<td>{escape(approval.id)}</td>"
-        f"<td>{escape(approval.status)}</td>"
-        f"<td>{escape(approval.action)}</td>"
-        f"<td>{escape(approval.path or '')}</td>"
-        f"<td>{escape(approval.reason)}</td>"
+        f"<td>{escape(_safe_text(approval.id))}</td>"
+        f"<td>{escape(_safe_text(approval.status))}</td>"
+        f"<td>{escape(_safe_text(approval.action))}</td>"
+        f"<td>{escape(_safe_text(approval.path))}</td>"
+        f"<td>{escape(_safe_text(approval.reason))}</td>"
+        f"<td>{escape(_safe_text(approval.decision_reason))}</td>"
         "</tr>"
         for approval in queue.approvals
     )
     return (
-        "<h2>Pending Approvals</h2>"
+        "<h2>Approval History</h2>"
         "<table>"
-        "<thead><tr><th>ID</th><th>Status</th><th>Action</th><th>Path</th><th>Reason</th></tr></thead>"
+        "<thead><tr><th>ID</th><th>Status</th><th>Action</th><th>Path</th>"
+        "<th>Reason</th><th>Decision Reason</th></tr></thead>"
         f"<tbody>{rows}</tbody>"
         "</table>"
     )
@@ -299,6 +307,18 @@ def _render_jsonish(value: object) -> str:
     return str(value)
 
 
+def _strip_action_payload(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _strip_action_payload(item)
+            for key, item in value.items()
+            if key != "action_payload"
+        }
+    if isinstance(value, list):
+        return [_strip_action_payload(item) for item in value]
+    return value
+
+
 def _render_run_events(root: Path) -> str:
     trace_path = root / "runs" / "latest" / "trace.jsonl"
     if not trace_path.exists():
@@ -311,10 +331,10 @@ def _render_run_events(root: Path) -> str:
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
-            items.append(f"<li><strong>invalid_trace_line</strong>: <code>{escape(line[:240])}</code></li>")
+            items.append("<li><strong>malformed trace event</strong></li>")
             continue
         event_type = str(event.get("event_type", "unknown"))
-        payload = json.dumps(event.get("payload", {}), ensure_ascii=False)
+        payload = json.dumps(redact(_strip_action_payload(event.get("payload", {}))), ensure_ascii=False)
         if len(payload) > 500:
             payload = payload[:500] + "...[truncated]"
         items.append(f"<li><strong>{escape(event_type)}</strong>: <code>{escape(payload)}</code></li>")
@@ -345,7 +365,7 @@ def generate_report(
     trust_summary = _render_trust_summary(trust, profile)
     metrics_summary = _render_metrics(metrics)
     decisions_summary = _render_permission_decisions(permission_decisions)
-    pending_approvals = _render_pending_approvals(root)
+    approval_history = _render_approval_history(root)
     retrieval_evidence = _render_retrieval_evidence(root)
     compression_evidence = _render_compression_evidence(root)
     role_isolation_evidence = _render_role_isolation_evidence(root)
@@ -368,7 +388,7 @@ def generate_report(
   {trust_summary}
   {metrics_summary}
   {decisions_summary}
-  {pending_approvals}
+  {approval_history}
   {retrieval_evidence}
   {compression_evidence}
   {role_isolation_evidence}

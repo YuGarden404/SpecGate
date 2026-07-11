@@ -17,6 +17,10 @@ class RunMetrics:
     finish_actions: int = 0
     approval_requests: int = 0
     pending_approvals: int = 0
+    approved_approvals: int = 0
+    denied_approvals: int = 0
+    applied_approvals: int = 0
+    failed_approvals: int = 0
     retrieval_queries: int = 0
     retrieved_chunks: int = 0
     retrieval_candidate_chunks: int = 0
@@ -84,6 +88,8 @@ def build_trust_summary(final_gate_passed: bool, metrics: RunMetrics) -> TrustSu
         reasons.append("max_steps_reached")
     if metrics.finish_actions == 0:
         reasons.append("missing_finish")
+    if metrics.failed_approvals:
+        reasons.append("approval_failed")
     if reasons:
         return TrustSummary("failed", reasons)
 
@@ -93,6 +99,8 @@ def build_trust_summary(final_gate_passed: bool, metrics: RunMetrics) -> TrustSu
         reasons.append("parse_errors_present")
     if metrics.pending_approvals:
         reasons.append("pending_approvals_present")
+    if metrics.denied_approvals:
+        reasons.append("human_denial_present")
     if reasons:
         return TrustSummary("warning", reasons)
 
