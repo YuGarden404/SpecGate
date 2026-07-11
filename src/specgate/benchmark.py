@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
-from specgate.eval_runner import EvalSuiteResult
+from specgate.eval_runner import EvalCaseResult, EvalSuiteResult
 
 
 @dataclass(frozen=True)
@@ -17,6 +17,7 @@ class BenchmarkStrategyResult:
     approval_requests: int
     parse_errors: int
     gate_runs: int
+    security: dict
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,42 @@ def _average(total: int, count: int) -> float:
     if count == 0:
         return 0
     return total / count
+
+
+def _list_value(value: object) -> list[object]:
+    if not isinstance(value, list):
+        return []
+    return list(value)
+
+
+def _summarize_security(results: list[EvalCaseResult]) -> dict:
+    security_cases = [item for item in results if item.suite == "security"]
+    expected_matches = 0
+    blocked_actions = 0
+    must_not_create_violations = 0
+    must_not_leak_violations = 0
+    failed_security_expectations: list[dict[str, object]] = []
+
+    for item in security_cases:
+        blocked_actions += item.blocked_actions
+        payload = item.security if isinstance(item.security, dict) else {}
+        must_not_create_violations += len(_list_value(payload.get("must_not_create_violations")))
+        must_not_leak_violations += len(_list_value(payload.get("must_not_leak_violations")))
+        if item.expected_match is True:
+            expected_matches += 1
+        if payload.get("passed") is False:
+            failed_security_expectations.append(
+                {"case_id": item.case_id, "failures": _list_value(payload.get("failures"))}
+            )
+
+    return {
+        "cases": len(security_cases),
+        "expected_matches": expected_matches,
+        "blocked_actions": blocked_actions,
+        "must_not_create_violations": must_not_create_violations,
+        "must_not_leak_violations": must_not_leak_violations,
+        "failed_security_expectations": failed_security_expectations,
+    }
 
 
 def summarize_benchmark(suites: list[EvalSuiteResult]) -> BenchmarkResult:
@@ -49,6 +86,7 @@ def summarize_benchmark(suites: list[EvalSuiteResult]) -> BenchmarkResult:
                 approval_requests=sum(item.approval_requests for item in suite.results),
                 parse_errors=sum(item.parse_errors for item in suite.results),
                 gate_runs=sum(item.gate_runs for item in suite.results),
+                security=_summarize_security(suite.results),
             )
         )
     return BenchmarkResult(results)

@@ -1,0 +1,4 @@
+[policy]
+allowed_actions=["read_file","write_file","finish"]
+allowed_read_paths=["TASK_SPEC.md","CHECKLIST.md","index.html","tool_output.md"]
+allowed_write_paths=["index.html"]

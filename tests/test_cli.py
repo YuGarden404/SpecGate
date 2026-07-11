@@ -1,10 +1,12 @@
 import io
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from specgate import cli
@@ -373,6 +375,27 @@ class CliTests(unittest.TestCase):
             self.assertEqual(results["total_cases"], 1)
             self.assertEqual(results["expected_matches"], 1)
 
+    def test_eval_cli_filters_by_suite(self):
+        calls = []
+
+        def fake_run_eval_suite(*args, **kwargs):
+            calls.append((args, kwargs))
+            return SimpleNamespace(
+                strategy=kwargs["strategy"],
+                total_cases=1,
+                passed_cases=1,
+                expected_matches=1,
+                results=[],
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("specgate.cli.run_eval_suite", side_effect=fake_run_eval_suite), redirect_stdout(io.StringIO()):
+                code = main(["eval", tmp, "--suite", "security"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1]["suite"], "security")
+
     def test_benchmark_cli_runs_multiple_mock_strategies_and_writes_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -418,6 +441,50 @@ class CliTests(unittest.TestCase):
             data = json.loads(benchmark_path.read_text(encoding="utf-8"))
             self.assertEqual([item["strategy"] for item in data["results"]], ["baseline", "rag-select"])
             self.assertEqual(data["results"][0]["total_cases"], 1)
+
+    def test_benchmark_cli_filters_by_suite(self):
+        calls = []
+
+        def fake_run_eval_suite(*args, **kwargs):
+            calls.append((args, kwargs))
+            return SimpleNamespace(
+                strategy=kwargs["strategy"],
+                total_cases=1,
+                passed_cases=1,
+                expected_matches=1,
+                results=[],
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("specgate.cli.run_eval_suite", side_effect=fake_run_eval_suite), redirect_stdout(io.StringIO()):
+                code = main(["benchmark", tmp, "--suite", "security", "--strategies", "baseline", "rag-select"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual([call[1]["strategy"] for call in calls], ["baseline", "rag-select"])
+        self.assertEqual([call[1]["suite"] for call in calls], ["security", "security"])
+
+    def test_repository_security_benchmark_smoke(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_cases = Path(tmp) / "eval_cases"
+            shutil.copytree(
+                Path("examples/eval_cases"),
+                temp_cases,
+                ignore=shutil.ignore_patterns("eval-runs"),
+            )
+
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["benchmark", str(temp_cases), "--suite", "security", "--strategies", "baseline"])
+
+            self.assertEqual(code, 0)
+            self.assertIn("SpecGate benchmark finished", output.getvalue())
+            benchmark_path = temp_cases / "eval-runs" / "latest" / "benchmark.json"
+            self.assertTrue(benchmark_path.exists())
+            benchmark_text = benchmark_path.read_text(encoding="utf-8")
+            self.assertNotIn("sk-rag-injection", benchmark_text)
+            self.assertNotIn("sk-hidden-html", benchmark_text)
+            self.assertNotIn("sk-tool-result", benchmark_text)
+            data = json.loads(benchmark_text)
+            self.assertGreaterEqual(data["results"][0]["security"]["cases"], 6)
 
     def test_benchmark_cli_returns_failure_when_any_strategy_misses_expected_result(self):
         with tempfile.TemporaryDirectory() as tmp:

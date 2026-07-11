@@ -548,6 +548,7 @@ def run_real_eval(
     timeout: float,
     save_workspaces: bool = False,
     governance_profile: str | None = None,
+    suite: str | None = None,
 ) -> int:
     if not model:
         print("--model is required when --provider is used")
@@ -584,6 +585,7 @@ def run_real_eval(
             max_steps=max_steps,
             save_workspaces=save_workspaces,
             governance_profile=governance_profile,
+            suite=suite,
         )
     except LLMProviderError as exc:
         print(f"provider request failed: {exc}")
@@ -601,12 +603,22 @@ def run_real_eval(
     return 0 if suite.expected_matches == suite.total_cases and suite.total_cases > 0 else 1
 
 
-def run_benchmark(root: Path, strategies: list[str], governance_profile: str | None = None) -> int:
+def run_benchmark(
+    root: Path,
+    strategies: list[str],
+    governance_profile: str | None = None,
+    suite: str | None = None,
+) -> int:
     suites = []
     output_dir = root / "eval-runs" / "latest"
     for strategy in strategies:
-        suite = run_eval_suite(root, strategy=strategy, governance_profile=governance_profile)
-        suites.append(suite)
+        suite_result = run_eval_suite(
+            root,
+            strategy=strategy,
+            governance_profile=governance_profile,
+            suite=suite,
+        )
+        suites.append(suite_result)
         results_path = output_dir / "results.json"
         if results_path.exists():
             strategy_results_path = output_dir / f"results-{strategy}.json"
@@ -660,6 +672,7 @@ def main(argv: list[str] | None = None) -> int:
     eval_parser.add_argument("--timeout", type=float, default=60)
     eval_parser.add_argument("--save-workspaces", action="store_true")
     eval_parser.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
+    eval_parser.add_argument("--suite")
     benchmark = sub.add_parser("benchmark")
     benchmark.add_argument("cases_root")
     benchmark.add_argument(
@@ -669,6 +682,7 @@ def main(argv: list[str] | None = None) -> int:
         default=["baseline", "rag-select", "compressed-rag", "isolated-harness"],
     )
     benchmark.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
+    benchmark.add_argument("--suite")
     credentials = sub.add_parser("credentials")
     credentials_sub = credentials.add_subparsers(dest="credentials_command", required=True)
     for command in ("status", "clear"):
@@ -712,12 +726,14 @@ def main(argv: list[str] | None = None) -> int:
                 timeout=args.timeout,
                 save_workspaces=args.save_workspaces,
                 governance_profile=args.governance_profile,
+                suite=args.suite,
             )
         suite = run_eval_suite(
             Path(args.cases_root),
             strategy=args.context_strategy,
             save_workspaces=args.save_workspaces,
             governance_profile=args.governance_profile,
+            suite=args.suite,
         )
         if suite.total_cases == 0:
             print(f"SpecGate eval found no cases: {args.cases_root}")
@@ -735,6 +751,7 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.cases_root),
             strategies=args.strategies,
             governance_profile=args.governance_profile,
+            suite=args.suite,
         )
     if args.command == "credentials":
         env_file = Path(args.env_file)

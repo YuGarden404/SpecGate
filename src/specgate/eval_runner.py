@@ -3,13 +3,20 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
 from specgate.config import load_workspace_config
 from specgate.llm import LLMClient, MockLLM
 from specgate.runner import AgentRunner
+from specgate.security_eval import (
+    SecurityExpectation,
+    evaluate_security_expectations,
+    write_security_result,
+)
+
+MAX_UNTRUSTED_BOUNDARY_EVIDENCE_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -23,6 +30,11 @@ class EvalCase:
     real_expected_should_pass: bool | None = None
     real_expected_must_block: bool | None = None
     mock_responses: list[dict] | None = None
+    expected_blocked_actions: int | None = None
+    expected_trust: str | None = None
+    suite: str = "default"
+    tags: list[str] = field(default_factory=list)
+    security_expected: SecurityExpectation = field(default_factory=SecurityExpectation)
 
 
 @dataclass(frozen=True)
@@ -48,6 +60,9 @@ class EvalCaseResult:
     retrieved_chunks: int = 0
     retrieval_candidate_chunks: int = 0
     retrieval_context_chars: int = 0
+    suite: str = "default"
+    tags: list[str] = field(default_factory=list)
+    security: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -59,7 +74,7 @@ class EvalSuiteResult:
     results: list[EvalCaseResult]
 
 
-def discover_eval_cases(root: Path) -> list[EvalCase]:
+def discover_eval_cases(root: Path, suite: str | None = None) -> list[EvalCase]:
     if not root.exists():
         return []
 
@@ -75,6 +90,15 @@ def discover_eval_cases(root: Path) -> list[EvalCase]:
         expected = meta.get("expected") or {}
         real_expected = meta.get("real_expected") or {}
         case_id = str(meta["id"])
+        case_suite = _metadata_suite(meta)
+        if suite is not None and case_suite != suite:
+            continue
+        tags = _metadata_tags(meta)
+        expected_blocked_actions = _optional_non_negative_int(
+            expected.get("blocked_actions"),
+            "expected.blocked_actions",
+        )
+        expected_trust = _optional_trust(expected.get("trust"), "expected.trust")
         cases.append(
             EvalCase(
                 case_id=case_id,
@@ -86,9 +110,50 @@ def discover_eval_cases(root: Path) -> list[EvalCase]:
                 real_expected_should_pass=real_expected.get("should_pass"),
                 real_expected_must_block=real_expected.get("must_block"),
                 mock_responses=meta.get("mock_responses"),
+                expected_blocked_actions=expected_blocked_actions,
+                expected_trust=expected_trust,
+                suite=case_suite,
+                tags=tags,
+                security_expected=SecurityExpectation.from_dict(expected.get("security")),
             )
         )
     return cases
+
+
+def _metadata_suite(meta: dict) -> str:
+    if "suite" not in meta:
+        return "default"
+    suite = meta["suite"]
+    if not isinstance(suite, str):
+        raise ValueError("suite must be a string")
+    return suite
+
+
+def _metadata_tags(meta: dict) -> list[str]:
+    tags = meta.get("tags", [])
+    if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+        raise ValueError("tags must be a list of strings")
+    return list(tags)
+
+
+def _optional_non_negative_int(value: object, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    if value < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    return value
+
+
+def _optional_trust(value: object, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+    if value not in {"trusted", "warning", "failed"}:
+        raise ValueError(f"{field_name} must be one of trusted, warning, failed")
+    return value
 
 
 def _count_trace_events(trace_path: Path) -> tuple[int, int, int, int, int, int]:
@@ -144,6 +209,29 @@ def _write_suite_result(root: Path, suite: EvalSuiteResult) -> None:
     )
 
 
+def _context_had_untrusted_boundary(workspace: Path) -> bool:
+    retrieval_path = workspace / "runs" / "latest" / "retrieval.json"
+    retrieval = _read_small_json_object(retrieval_path)
+    if retrieval is None:
+        return False
+    selected_chunks = retrieval.get("selected_chunks")
+    return isinstance(selected_chunks, list) and bool(selected_chunks)
+
+
+def _read_small_json_object(path: Path) -> dict[str, object] | None:
+    if not path.exists() or not path.is_file():
+        return None
+    if path.stat().st_size > MAX_UNTRUSTED_BOUNDARY_EVIDENCE_BYTES:
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
 def run_eval_suite(
     root: Path,
     strategy: str = "baseline",
@@ -152,8 +240,9 @@ def run_eval_suite(
     max_steps: int | None = None,
     save_workspaces: bool = False,
     governance_profile: str | None = None,
+    suite: str | None = None,
 ) -> EvalSuiteResult:
-    cases = discover_eval_cases(root)
+    cases = discover_eval_cases(root, suite=suite)
     results: list[EvalCaseResult] = []
     output_dir = _output_dir(root)
     saved_workspaces_dir = output_dir / "workspaces"
@@ -234,6 +323,20 @@ def run_eval_suite(
                     gate_failures = 1
                     gate_runs = max(gate_runs, 1)
                 trust_status = trust.status if trust is not None else "failed"
+                security_result = evaluate_security_expectations(
+                    expectation=case.security_expected,
+                    workspace=workspace,
+                    trace_path=workspace / "runs" / "latest" / "trace.jsonl",
+                    run_artifacts=[
+                        workspace / "index.html",
+                        workspace / "reports" / "latest" / "index.html",
+                    ],
+                    blocked_actions=blocked_actions,
+                    trust_status=trust_status,
+                    context_had_untrusted_boundary=_context_had_untrusted_boundary(workspace),
+                )
+                write_security_result(workspace, security_result)
+                security_payload = security_result.to_dict()
 
                 use_real_expected = llm_factory is not None and (
                     case.real_expected_should_pass is not None or case.real_expected_must_block is not None
@@ -245,6 +348,11 @@ def run_eval_suite(
                     expected_match = expected_match and blocked_actions > 0
                 elif expected_must_block is False:
                     expected_match = expected_match and blocked_actions == 0
+                if case.expected_blocked_actions is not None:
+                    expected_match = expected_match and blocked_actions == case.expected_blocked_actions
+                if case.expected_trust is not None:
+                    expected_match = expected_match and trust_status == case.expected_trust
+                expected_match = expected_match and security_result.passed
 
                 final_summary = run_result.final_gate.summary if run_result.final_gate else "no gate result"
                 workspace_path = None
@@ -277,6 +385,9 @@ def run_eval_suite(
                         retrieved_chunks=retrieved_chunks,
                         retrieval_candidate_chunks=retrieval_candidate_chunks,
                         retrieval_context_chars=retrieval_context_chars,
+                        suite=case.suite,
+                        tags=list(case.tags),
+                        security=security_payload,
                     )
                 )
     except Exception:
