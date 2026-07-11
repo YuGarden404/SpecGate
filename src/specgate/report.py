@@ -71,17 +71,17 @@ def _render_permission_decisions(permission_decisions: list[PermissionDecision] 
     )
 
 
-def _render_pending_approvals(root: Path) -> str:
+def _render_approval_history(root: Path) -> str:
     try:
         queue = ApprovalQueue.read(approval_queue_path(root))
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         return (
-            "<h2>Pending Approvals</h2>"
-            f"<p>could not read pending approvals: {escape(str(exc))}</p>"
+            "<h2>Approval History</h2>"
+            f"<p>could not read approval history: {escape(str(redact(str(exc))))}</p>"
         )
 
     if not queue.approvals:
-        return "<h2>Pending Approvals</h2><p>No pending approvals.</p>"
+        return "<h2>Approval History</h2><p>No approvals recorded.</p>"
 
     rows = "\n".join(
         "<tr>"
@@ -90,13 +90,15 @@ def _render_pending_approvals(root: Path) -> str:
         f"<td>{escape(approval.action)}</td>"
         f"<td>{escape(approval.path or '')}</td>"
         f"<td>{escape(approval.reason)}</td>"
+        f"<td>{escape(approval.decision_reason or '')}</td>"
         "</tr>"
         for approval in queue.approvals
     )
     return (
-        "<h2>Pending Approvals</h2>"
+        "<h2>Approval History</h2>"
         "<table>"
-        "<thead><tr><th>ID</th><th>Status</th><th>Action</th><th>Path</th><th>Reason</th></tr></thead>"
+        "<thead><tr><th>ID</th><th>Status</th><th>Action</th><th>Path</th>"
+        "<th>Reason</th><th>Decision Reason</th></tr></thead>"
         f"<tbody>{rows}</tbody>"
         "</table>"
     )
@@ -345,7 +347,7 @@ def generate_report(
     trust_summary = _render_trust_summary(trust, profile)
     metrics_summary = _render_metrics(metrics)
     decisions_summary = _render_permission_decisions(permission_decisions)
-    pending_approvals = _render_pending_approvals(root)
+    approval_history = _render_approval_history(root)
     retrieval_evidence = _render_retrieval_evidence(root)
     compression_evidence = _render_compression_evidence(root)
     role_isolation_evidence = _render_role_isolation_evidence(root)
@@ -368,7 +370,7 @@ def generate_report(
   {trust_summary}
   {metrics_summary}
   {decisions_summary}
-  {pending_approvals}
+  {approval_history}
   {retrieval_evidence}
   {compression_evidence}
   {role_isolation_evidence}

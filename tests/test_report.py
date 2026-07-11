@@ -95,7 +95,7 @@ class ReportTests(unittest.TestCase):
             self.assertNotIn("<script>", html)
             self.assertNotIn("<img src=x onerror=alert(1)>", html)
 
-    def test_generate_report_includes_pending_approvals(self):
+    def test_generate_report_includes_approval_history(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
@@ -109,6 +109,9 @@ class ReportTests(unittest.TestCase):
                         risk_level="review",
                         reason="needs review <script>alert(1)</script>",
                         profile="review",
+                        status="denied",
+                        decision_reason="too broad <script>alert(2)</script>",
+                        action_payload={"args": {"content": "secret sk-test-secret-1234567890"}},
                     )
                 ]
             ).write(approval_queue_path(root))
@@ -116,11 +119,16 @@ class ReportTests(unittest.TestCase):
             output = generate_report(root, gate, 1, profile="review")
 
             html = output.read_text(encoding="utf-8")
-            self.assertIn("Pending Approvals", html)
+            self.assertIn("Approval History", html)
             self.assertIn("approval-123", html)
+            self.assertIn("denied", html)
             self.assertIn("replace_file", html)
             self.assertIn("README.md", html)
             self.assertIn("needs review &lt;script&gt;alert(1)&lt;/script&gt;", html)
+            self.assertIn("too broad &lt;script&gt;alert(2)&lt;/script&gt;", html)
+            self.assertIn("Decision Reason", html)
+            self.assertNotIn("action_payload", html)
+            self.assertNotIn("sk-test-secret", html)
             self.assertNotIn("<script>", html)
 
     def test_generate_report_includes_retrieval_evidence(self):
@@ -311,8 +319,8 @@ class ReportTests(unittest.TestCase):
             output = generate_report(root, gate, 1)
 
             html = output.read_text(encoding="utf-8")
-            self.assertIn("Pending Approvals", html)
-            self.assertIn("No pending approvals", html)
+            self.assertIn("Approval History", html)
+            self.assertIn("No approvals recorded", html)
 
     def test_generate_report_handles_empty_pending_approvals_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -323,8 +331,8 @@ class ReportTests(unittest.TestCase):
             output = generate_report(root, gate, 1)
 
             html = output.read_text(encoding="utf-8")
-            self.assertIn("Pending Approvals", html)
-            self.assertIn("No pending approvals", html)
+            self.assertIn("Approval History", html)
+            self.assertIn("No approvals recorded", html)
 
     def test_generate_report_handles_malformed_pending_approvals_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -337,8 +345,8 @@ class ReportTests(unittest.TestCase):
             output = generate_report(root, gate, 1)
 
             html = output.read_text(encoding="utf-8")
-            self.assertIn("Pending Approvals", html)
-            self.assertIn("could not read pending approvals", html)
+            self.assertIn("Approval History", html)
+            self.assertIn("could not read approval history", html)
             self.assertNotIn("<script>alert(1)</script>", html)
 
     def test_generate_report_handles_non_object_pending_approvals_queue(self):
@@ -352,8 +360,8 @@ class ReportTests(unittest.TestCase):
             output = generate_report(root, gate, 1)
 
             html = output.read_text(encoding="utf-8")
-            self.assertIn("Pending Approvals", html)
-            self.assertIn("could not read pending approvals", html)
+            self.assertIn("Approval History", html)
+            self.assertIn("could not read approval history", html)
             self.assertNotIn("[]", html)
 
     def test_generate_report_handles_non_list_pending_approvals_items(self):
@@ -367,8 +375,8 @@ class ReportTests(unittest.TestCase):
             output = generate_report(root, gate, 1)
 
             html = output.read_text(encoding="utf-8")
-            self.assertIn("Pending Approvals", html)
-            self.assertIn("could not read pending approvals", html)
+            self.assertIn("Approval History", html)
+            self.assertIn("could not read approval history", html)
             self.assertNotIn('{"approvals": {}}', html)
 
     def test_generate_report_handles_malformed_pending_approval_field_types(self):
@@ -400,8 +408,42 @@ class ReportTests(unittest.TestCase):
             output = generate_report(root, gate, 1)
 
             html = output.read_text(encoding="utf-8")
-            self.assertIn("Pending Approvals", html)
-            self.assertIn("could not read pending approvals", html)
+            self.assertIn("Approval History", html)
+            self.assertIn("could not read approval history", html)
+            self.assertNotIn("sk-test-secret", html)
+
+    def test_generate_report_redacts_malformed_approval_history_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+            queue_path = approval_queue_path(root)
+            queue_path.parent.mkdir(parents=True)
+            queue_path.write_text(
+                json.dumps(
+                    {
+                        "approvals": [
+                            {
+                                "id": "approval-123",
+                                "step": 1,
+                                "action": "replace_file",
+                                "path": "README.md",
+                                "risk_level": "review",
+                                "reason": "needs review",
+                                "profile": "review",
+                                "status": "pending",
+                                "decision_reason": {"secret": "sk-test-secret-1234567890"},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            output = generate_report(root, gate, 1)
+
+            html = output.read_text(encoding="utf-8")
+            self.assertIn("Approval History", html)
+            self.assertIn("could not read approval history", html)
             self.assertNotIn("sk-test-secret", html)
 
 
