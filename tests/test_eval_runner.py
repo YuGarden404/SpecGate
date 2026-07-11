@@ -383,6 +383,59 @@ class EvalRunnerExecutionTests(unittest.TestCase):
             self.assertTrue(result.expected_match)
             self.assertEqual(suite.expected_matches, 1)
 
+    def test_run_eval_suite_filters_cases_by_suite(self):
+        class FakeLLM:
+            def complete(self, context: str) -> str:
+                html = (
+                    "<!doctype html><html><head>"
+                    '<meta name="viewport" content="width=device-width, initial-scale=1">'
+                    "<title>Suite filtered page</title></head>"
+                    '<body><input type="search" aria-label="search">'
+                    "<main><h1>search</h1><section>detail checklist</section></main>"
+                    "</body></html>"
+                )
+                return json.dumps(
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": html},
+                    }
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._case_dir(root, "default-case")
+            security_case = self._case_dir(root, "security-case")
+            (security_case / "case.json").write_text(
+                json.dumps(
+                    {
+                        "id": "security-case",
+                        "title": "Security case",
+                        "category": "security",
+                        "suite": "security",
+                        "expected": {"should_pass": True, "must_block": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            seen_cases = []
+
+            def llm_factory(case):
+                seen_cases.append(case.case_id)
+                return FakeLLM()
+
+            suite = run_eval_suite(
+                root,
+                strategy="baseline",
+                suite="security",
+                llm_factory=llm_factory,
+                max_steps=1,
+            )
+
+            self.assertEqual(seen_cases, ["security-case"])
+            self.assertEqual(suite.total_cases, 1)
+            self.assertEqual(suite.results[0].case_id, "security-case")
+
     def test_run_eval_suite_accepts_llm_factory(self):
         class FakeLLM:
             def complete(self, context: str) -> str:

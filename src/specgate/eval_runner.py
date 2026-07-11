@@ -208,8 +208,9 @@ def run_eval_suite(
     max_steps: int | None = None,
     save_workspaces: bool = False,
     governance_profile: str | None = None,
+    suite: str | None = None,
 ) -> EvalSuiteResult:
-    cases = discover_eval_cases(root)
+    cases = discover_eval_cases(root, suite=suite)
     results: list[EvalCaseResult] = []
     output_dir = _output_dir(root)
     saved_workspaces_dir = output_dir / "workspaces"
