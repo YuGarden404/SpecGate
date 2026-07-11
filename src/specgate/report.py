@@ -312,6 +312,9 @@ def _render_benchmark_summary(root: Path) -> str:
             f"<td>{escape(str(result.get('approval_requests', 0)))}</td>"
             f"<td>{escape(str(result.get('parse_errors', 0)))}</td>"
             f"<td>{escape(str(result.get('gate_runs', 0)))}</td>"
+            f"<td>{escape(str(result.get('role_runs', 0)))}</td>"
+            f"<td>{escape(str(result.get('role_blocked_actions', 0)))}</td>"
+            f"<td>{escape(str(result.get('review_repairs', 0)))}</td>"
             "</tr>"
         )
     if not rows:
@@ -321,7 +324,8 @@ def _render_benchmark_summary(root: Path) -> str:
         "<table>"
         "<thead><tr><th>Strategy</th><th>Cases</th><th>Passed</th><th>Expected Matches</th>"
         "<th>Avg Context Chars</th><th>Avg Retrieved Chunks</th><th>Blocked Actions</th>"
-        "<th>Approval Requests</th><th>Parse Errors</th><th>Gate Runs</th></tr></thead>"
+        "<th>Approval Requests</th><th>Parse Errors</th><th>Gate Runs</th>"
+        "<th>Role Runs</th><th>Role Blocks</th><th>Review Repairs</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"
         "</table>"
     )

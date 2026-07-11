@@ -424,7 +424,22 @@ class ReportTests(unittest.TestCase):
                                 "approval_requests": 0,
                                 "parse_errors": 0,
                                 "gate_runs": 2,
-                            }
+                                "role_runs": 3,
+                                "role_blocked_actions": 1,
+                                "review_repairs": 1,
+                            },
+                            {
+                                "strategy": "baseline",
+                                "total_cases": 1,
+                                "passed_cases": 1,
+                                "expected_matches": 1,
+                                "avg_context_chars": 500,
+                                "avg_retrieved_chunks": 0,
+                                "blocked_actions": 0,
+                                "approval_requests": 0,
+                                "parse_errors": 0,
+                                "gate_runs": 1,
+                            },
                         ]
                     }
                 ),
@@ -437,6 +452,12 @@ class ReportTests(unittest.TestCase):
             self.assertIn("Benchmark Summary", html)
             self.assertIn("rag&lt;script&gt;", html)
             self.assertIn("2.5", html)
+            self.assertIn("Role Runs", html)
+            self.assertIn("Role Blocks", html)
+            self.assertIn("Review Repairs", html)
+            self.assertIn(">3<", html)
+            self.assertIn(">1<", html)
+            self.assertIn("<td>baseline</td><td>1</td><td>1</td><td>1</td><td>500</td><td>0</td><td>0</td><td>0</td><td>0</td><td>1</td><td>0</td><td>0</td><td>0</td>", html)
             self.assertNotIn("rag<script>", html)
 
     def test_generate_report_handles_missing_pending_approvals_queue(self):
