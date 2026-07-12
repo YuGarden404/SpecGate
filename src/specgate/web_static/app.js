@@ -183,7 +183,15 @@ function renderWorkspaceView() {
   const messages = byId("message-list");
   const detail = byId("detail-content");
   const runForm = byId("run-form");
+  const backButton = byId("back-button");
+  const forwardButton = byId("forward-button");
   const showingDetail = state.view !== "conversation";
+  if (backButton) {
+    backButton.disabled = state.viewBackStack.length === 0;
+  }
+  if (forwardButton) {
+    forwardButton.disabled = state.viewForwardStack.length === 0;
+  }
   if (messages) {
     messages.hidden = showingDetail;
   }
@@ -566,10 +574,14 @@ async function selectProject(projectId) {
   if (!project) {
     return;
   }
+  const isSwitchingProject = !state.selectedProject || state.selectedProject.id !== project.id;
   state.selectedProject = project;
   state.currentRun = null;
   state.runDebug = null;
   clearPolling();
+  if (isSwitchingProject) {
+    resetViewHistory("conversation");
+  }
   renderProjects();
   setText("project-title", project.name);
   await loadMessages(project.id);
@@ -694,7 +706,10 @@ function renderSearchResults() {
     return;
   }
   const query = input ? input.value.trim().toLowerCase() : "";
-  const matches = state.projects.filter((project) => project.name.toLowerCase().includes(query));
+  const matches = state.projects.filter((project) => {
+    const haystack = `${project.name || ""} ${project.last_run_status || ""}`.toLowerCase();
+    return haystack.includes(query);
+  });
   results.replaceChildren();
   if (!matches.length) {
     results.append(el("p", { className: "muted" }, ["No projects found."]));
@@ -713,10 +728,13 @@ function renderSearchResults() {
   }
 }
 
-async function readProjectFile(inputId) {
+async function readProjectFile(inputId, required = false) {
   const input = byId(inputId);
   const file = input && input.files ? input.files[0] : null;
   if (!file) {
+    if (required) {
+      throw new Error("请选择必需的项目文件。");
+    }
     return "";
   }
   return file.text();
@@ -726,9 +744,9 @@ async function createManualProject(event) {
   event.preventDefault();
   const nameInput = byId("project-name");
   try {
-    const specText = await readProjectFile("project-spec-file");
-    const checklistText = await readProjectFile("project-checklist-file");
-    const indexValue = await readProjectFile("project-index-file");
+    const specText = await readProjectFile("project-spec-file", true);
+    const checklistText = await readProjectFile("project-checklist-file", true);
+    const indexValue = await readProjectFile("project-index-file", false);
     const payload = await apiJson("/api/projects", {
       method: "POST",
       body: {
