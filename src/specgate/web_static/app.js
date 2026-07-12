@@ -405,6 +405,8 @@ function renderDetail() {
   content.replaceChildren();
   if (state.activeTab === "preview") {
     renderPreviewDetail(content);
+  } else if (state.activeTab === "report") {
+    renderReportDetail(content);
   } else if (state.activeTab === "approvals") {
     renderApprovalsDetail(content);
   } else if (state.activeTab === "settings") {
@@ -432,6 +434,40 @@ function renderStatusDetail(content) {
     dl.append(el("dt", {}, [label]), el("dd", {}, [value]));
   }
   card.append(dl);
+  content.append(card);
+}
+
+function renderReportDetail(content) {
+  const card = el("section", { className: "detail-card stack" });
+  card.append(el("h2", {}, ["Report summary"]));
+  const run = state.currentRun;
+  const rows = [
+    ["Project", state.selectedProject ? state.selectedProject.name : "None"],
+    ["Run", run ? `#${run.id}` : "No active run"],
+    ["Status", run ? run.status : state.selectedProject?.last_run_status || "Idle"],
+    ["Trust", run ? run.trust_level || "pending" : "n/a"],
+    ["Error", run ? run.error_message || "None" : "None"],
+    ["Created", run ? run.created_at || "n/a" : "n/a"],
+    ["Started", run ? run.started_at || "n/a" : "n/a"],
+    ["Finished", run ? run.finished_at || "n/a" : "n/a"],
+  ];
+  const dl = el("dl", { className: "detail-grid" });
+  for (const [label, value] of rows) {
+    dl.append(el("dt", {}, [label]), el("dd", {}, [value]));
+  }
+  card.append(dl);
+
+  const links = el("div", { className: "stack" });
+  if (run && run.index_artifact_url) {
+    links.append(el("a", { href: run.index_artifact_url, download: "index.html" }, ["Download index.html"]));
+  }
+  if (run && run.zip_artifact_url) {
+    links.append(el("a", { href: run.zip_artifact_url, download: "result.zip" }, ["Download result.zip"]));
+  }
+  if (!links.childElementCount) {
+    links.append(el("p", { className: "muted" }, ["No artifacts are available for this run yet."]));
+  }
+  card.append(links);
   content.append(card);
 }
 

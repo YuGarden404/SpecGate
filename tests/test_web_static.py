@@ -37,6 +37,10 @@ class WebStaticTests(unittest.TestCase):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html)
 
+    def test_index_contains_report_detail_tab(self) -> None:
+        html = read_static("index.html")
+        self.assertIn('data-tab="report"', html)
+
     def test_app_exports_required_workflow_functions(self) -> None:
         app_js = read_static("app.js")
         for function_name in (
@@ -48,6 +52,11 @@ class WebStaticTests(unittest.TestCase):
         ):
             with self.subTest(function_name=function_name):
                 self.assertIn(f"async function {function_name}", app_js)
+
+    def test_app_contains_report_render_workflow(self) -> None:
+        app_js = read_static("app.js")
+        self.assertIn('state.activeTab === "report"', app_js)
+        self.assertIn("function renderReportDetail", app_js)
 
     def test_app_does_not_execute_artifact_html_in_same_origin_iframe(self) -> None:
         app_js = read_static("app.js").lower()
