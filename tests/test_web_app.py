@@ -1,6 +1,9 @@
+from contextlib import closing
+from io import BytesIO
 import tempfile
 import unittest
 import warnings
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,14 +15,15 @@ warnings.filterwarnings(
 from fastapi.testclient import TestClient
 
 from specgate.web_app import create_app
+from specgate.web_db import connect_db
 
 
 class WebAppTests(unittest.TestCase):
-    def make_client(self):
+    def make_client(self, **app_kwargs):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         base = Path(tmp.name)
-        app = create_app(data_root=base / "data", db_path=base / "web.sqlite3")
+        app = create_app(data_root=base / "data", db_path=base / "web.sqlite3", **app_kwargs)
         return TestClient(app), app
 
     def register(self, client, username="alice", password="correct-password"):
@@ -88,14 +92,29 @@ class WebAppTests(unittest.TestCase):
 
         self.assertEqual(project["name"], "Manual Site")
         self.assertEqual(project["create_mode"], "manual")
+        self.assertNotIn("root_path", project)
 
         projects = client.get("/api/projects")
         self.assertEqual(projects.status_code, 200, projects.text)
         self.assertEqual([row["id"] for row in projects.json()["projects"]], [project["id"]])
+        self.assertNotIn("root_path", projects.json()["projects"][0])
 
         detail = client.get(f"/api/projects/{project['id']}")
         self.assertEqual(detail.status_code, 200, detail.text)
         self.assertEqual(detail.json()["project"]["id"], project["id"])
+        self.assertNotIn("root_path", detail.json()["project"])
+
+    def test_project_preview_returns_source_as_plain_text(self):
+        client, _app = self.make_client()
+        self.register(client)
+        project = self.create_project(client)
+
+        response = client.get(f"/api/projects/{project['id']}/preview")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.headers["content-type"].startswith("text/plain"))
+        self.assertIn("<!doctype html>", response.text)
+        self.assertNotEqual(response.headers["content-type"].split(";")[0], "text/html")
 
     def test_post_run_returns_queued_and_run_can_be_read(self):
         client, app = self.make_client()
@@ -111,13 +130,22 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         run = response.json()["run"]
         self.assertEqual(run["status"], "queued")
-        self.assertEqual(run["project_id"], project["id"])
+        self.assertNotIn("project_id", run)
+        self.assertNotIn("report_path", run)
+        self.assertNotIn("index_artifact_path", run)
+        self.assertNotIn("zip_artifact_path", run)
+        self.assertFalse(run["has_index_artifact"])
+        self.assertFalse(run["has_zip_artifact"])
+        self.assertNotIn("index_artifact_url", run)
+        self.assertNotIn("zip_artifact_url", run)
         starter.assert_called_once_with(app.state.db_path, app.state.data_root, run["id"])
 
         fetched = client.get(f"/api/runs/{run['id']}")
         self.assertEqual(fetched.status_code, 200, fetched.text)
         self.assertEqual(fetched.json()["run"]["id"], run["id"])
         self.assertEqual(fetched.json()["run"]["status"], "queued")
+        self.assertNotIn("index_artifact_path", fetched.json()["run"])
+        self.assertNotIn("zip_artifact_path", fetched.json()["run"])
 
     def test_settings_can_be_updated_and_api_key_cleared(self):
         client, _app = self.make_client()
@@ -160,6 +188,65 @@ class WebAppTests(unittest.TestCase):
 
         self.assertEqual(index.status_code, 404)
         self.assertEqual(result_zip.status_code, 404)
+
+    def test_artifact_index_is_not_served_as_executable_same_origin_html(self):
+        client, app = self.make_client()
+        self.register(client)
+        project = self.create_project(client)
+        with patch("specgate.web_app.start_run_background"):
+            run = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "Build the result"},
+            ).json()["run"]
+        artifact = app.state.data_root / "artifact-index.html"
+        artifact.write_text("<!doctype html><script>fetch('/api/me')</script>", encoding="utf-8")
+        with closing(connect_db(app.state.db_path)) as conn:
+            conn.execute(
+                "update runs set status = ?, index_artifact_path = ? where id = ?",
+                ("completed", str(artifact), run["id"]),
+            )
+            conn.commit()
+
+        response = client.get(f"/api/runs/{run['id']}/artifacts/index")
+        fetched = client.get(f"/api/runs/{run['id']}")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("attachment", response.headers.get("content-disposition", ""))
+        self.assertIn("sandbox", response.headers.get("content-security-policy", ""))
+        self.assertNotIn("index_artifact_path", fetched.json()["run"])
+        self.assertEqual(
+            fetched.json()["run"]["index_artifact_url"],
+            f"/api/runs/{run['id']}/artifacts/index",
+        )
+
+    def test_secure_cookie_can_be_enabled_for_production(self):
+        client, _app = self.make_client(secure_cookies=True)
+
+        response = client.post(
+            "/api/auth/register",
+            json={"username": "alice", "password": "correct-password"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("secure", response.headers["set-cookie"].lower())
+
+    def test_upload_rejects_files_over_limit(self):
+        client, _app = self.make_client()
+        self.register(client)
+        oversized = BytesIO()
+        with zipfile.ZipFile(oversized, "w", compression=zipfile.ZIP_STORED) as archive:
+            archive.writestr("SPEC.md", "Spec")
+            archive.writestr("CHECKLIST.md", "- Check")
+            archive.writestr("large.bin", b"x" * (5 * 1024 * 1024 + 1))
+        oversized.seek(0)
+
+        response = client.post(
+            "/api/projects/upload",
+            data={"name": "Too Big"},
+            files={"file": ("too-big.zip", oversized, "application/zip")},
+        )
+
+        self.assertIn(response.status_code, {400, 413})
 
     def test_users_cannot_access_each_others_projects_or_runs(self):
         client_a, app = self.make_client()

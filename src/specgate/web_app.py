@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -25,6 +25,7 @@ from specgate.web_settings import clear_api_key, get_settings, update_settings, 
 
 
 SESSION_COOKIE_NAME = "specgate_session"
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
 
 class AuthRequest(BaseModel):
@@ -61,7 +62,11 @@ class DenyRequest(BaseModel):
     reason: str
 
 
-def create_app(data_root: Path | None = None, db_path: Path | None = None) -> FastAPI:
+def create_app(
+    data_root: Path | None = None,
+    db_path: Path | None = None,
+    secure_cookies: bool | None = None,
+) -> FastAPI:
     resolved_data_root = Path(
         data_root
         or os.environ.get("SPECGATE_WEB_DATA_ROOT")
@@ -74,6 +79,11 @@ def create_app(data_root: Path | None = None, db_path: Path | None = None) -> Fa
     )
     resolved_data_root.mkdir(parents=True, exist_ok=True)
     init_db(resolved_db_path)
+    resolved_secure_cookies = (
+        os.environ.get("SPECGATE_WEB_SECURE_COOKIES") == "1"
+        if secure_cookies is None
+        else secure_cookies
+    )
 
     app = FastAPI(title="SpecGate Web")
     app.state.data_root = resolved_data_root
@@ -87,7 +97,7 @@ def create_app(data_root: Path | None = None, db_path: Path | None = None) -> Fa
             token = create_session(app.state.db_path, int(user["id"]))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _set_session_cookie(response, token)
+        _set_session_cookie(response, token, secure=resolved_secure_cookies)
         return {"user": _user_dict(user)}
 
     @app.post("/api/auth/login")
@@ -97,7 +107,7 @@ def create_app(data_root: Path | None = None, db_path: Path | None = None) -> Fa
             token = create_session(app.state.db_path, int(user["id"]))
         except ValueError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
-        _set_session_cookie(response, token)
+        _set_session_cookie(response, token, secure=resolved_secure_cookies)
         return {"user": _user_dict(user)}
 
     @app.post("/api/auth/logout")
@@ -147,13 +157,16 @@ def create_app(data_root: Path | None = None, db_path: Path | None = None) -> Fa
         file: UploadFile = File(...),
         user=Depends(current_user),
     ) -> dict[str, Any]:
+        content = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="upload exceeds 5 MiB limit")
         try:
             project = create_project_from_zip(
                 app.state.db_path,
                 app.state.data_root,
                 int(user["id"]),
                 name,
-                await file.read(),
+                content,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -169,7 +182,7 @@ def create_app(data_root: Path | None = None, db_path: Path | None = None) -> Fa
         preview = project_paths(app.state.data_root, int(user["id"]), int(project["id"])).workspace / "index.html"
         if not preview.is_file():
             raise HTTPException(status_code=404, detail="preview not found")
-        return FileResponse(preview, media_type="text/html")
+        return PlainTextResponse(preview.read_text(encoding="utf-8"))
 
     @app.get("/api/projects/{project_id}/messages")
     def list_messages(project_id: int, user=Depends(current_user)) -> dict[str, Any]:
@@ -233,7 +246,14 @@ def create_app(data_root: Path | None = None, db_path: Path | None = None) -> Fa
     @app.get("/api/runs/{run_id}/artifacts/index")
     def get_index_artifact(run_id: int, user=Depends(current_user)):
         run = _load_run_for_artifact(app.state.db_path, int(user["id"]), run_id)
-        return _artifact_response(run["index_artifact_path"], "text/html")
+        return _artifact_response(
+            run["index_artifact_path"],
+            "text/html",
+            headers={
+                "Content-Disposition": 'attachment; filename="index.html"',
+                "Content-Security-Policy": "sandbox",
+            },
+        )
 
     @app.get("/api/runs/{run_id}/artifacts/zip")
     def get_zip_artifact(run_id: int, user=Depends(current_user)):
@@ -331,11 +351,12 @@ def current_user(request: Request):
         raise HTTPException(status_code=401, detail="authentication required") from exc
 
 
-def _set_session_cookie(response: Response, token: str) -> None:
+def _set_session_cookie(response: Response, token: str, *, secure: bool) -> None:
     response.set_cookie(
         SESSION_COOKIE_NAME,
         token,
         httponly=True,
+        secure=secure,
         samesite="lax",
         path="/",
         max_age=60 * 60 * 24 * 7,
@@ -360,13 +381,13 @@ def _load_run_for_artifact(db_path: Path, user_id: int, run_id: int):
         raise _http_error_for_value_error(exc) from exc
 
 
-def _artifact_response(path_value: str | None, media_type: str):
+def _artifact_response(path_value: str | None, media_type: str, headers: dict[str, str] | None = None):
     if not path_value:
         raise HTTPException(status_code=404, detail="artifact not found")
     path = Path(path_value)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="artifact not found")
-    return FileResponse(path, media_type=media_type)
+    return FileResponse(path, media_type=media_type, headers=headers)
 
 
 def _http_error_for_value_error(exc: ValueError) -> HTTPException:
@@ -395,7 +416,6 @@ def _project_dict(row) -> dict[str, Any]:
         "id": data["id"],
         "name": data["name"],
         "create_mode": data["create_mode"],
-        "root_path": data["root_path"],
         "created_at": data["created_at"],
         "updated_at": data["updated_at"],
         "last_run_status": data["last_run_status"],
@@ -404,20 +424,23 @@ def _project_dict(row) -> dict[str, Any]:
 
 def _run_dict(row) -> dict[str, Any]:
     data = _row_dict(row)
-    return {
+    run = {
         "id": data["id"],
-        "project_id": data["project_id"],
         "status": data["status"],
         "prompt": data["prompt"],
         "trust_level": data["trust_level"],
-        "report_path": data["report_path"],
-        "index_artifact_path": data["index_artifact_path"],
-        "zip_artifact_path": data["zip_artifact_path"],
         "error_message": data["error_message"],
         "created_at": data["created_at"],
         "started_at": data["started_at"],
         "finished_at": data["finished_at"],
+        "has_index_artifact": bool(data["index_artifact_path"]),
+        "has_zip_artifact": bool(data["zip_artifact_path"]),
     }
+    if data["index_artifact_path"]:
+        run["index_artifact_url"] = f"/api/runs/{data['id']}/artifacts/index"
+    if data["zip_artifact_path"]:
+        run["zip_artifact_url"] = f"/api/runs/{data['id']}/artifacts/zip"
+    return run
 
 
 def _approval_dict(row) -> dict[str, Any]:
