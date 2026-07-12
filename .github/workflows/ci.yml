@@ -38,3 +38,6 @@ jobs:
 
       - name: Build Docker image
         run: docker build -t specgate:ci .
+
+      - name: Smoke test Docker WebUI entrypoint
+        run: docker run --rm specgate:ci specgate-web --help
