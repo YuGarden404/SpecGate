@@ -17,5 +17,6 @@ docker-build:
     - docker:26-dind
   script:
     - docker build -t specgate:ci .
+    - docker run --rm specgate:ci specgate-web --help
   rules:
     - if: $CI_COMMIT_BRANCH

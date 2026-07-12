@@ -300,10 +300,15 @@ var/specgate_web/
 $env:SPECGATE_WEB_DATA="D:\path\to\specgate-web-data"
 ```
 
-部署到服务器时建议额外设置：
+部署到服务器时建议设置随机密钥：
 
 ```powershell
 $env:SPECGATE_WEB_SECRET="<随机长密钥>"
+```
+
+如果使用 `http://公网IP:8000` 直接检查，不要开启 secure cookies；只有在 HTTPS 反向代理已经配置完成时，才设置：
+
+```powershell
 $env:SPECGATE_WEB_SECURE_COOKIES="1"
 ```
 
@@ -311,16 +316,40 @@ $env:SPECGATE_WEB_SECURE_COOKIES="1"
 
 上传 zip 当前限制为 5 MiB。导入逻辑会拒绝绝对路径、路径逃逸、Windows 盘符、反斜杠路径和空路径，避免 zip 内容写出隔离目录。
 
-## Docker
+## Docker / 服务器部署
+
+SpecGate 的 Docker 镜像默认启动 WebUI，适合部署到单台云服务器并提供课程检查 URL。
+
+本地构建：
 
 ```powershell
 docker build -t specgate:local .
-docker run --rm specgate:local
 ```
 
-已由用户在本机 PowerShell 设置代理环境变量后，完成 `python:3.11-slim` 拉取、镜像构建和容器运行验证。
+本地运行 WebUI：
 
-Mock 模式不需要 API key。真实 LLM 模式尚未作为 MVP 默认能力开放。
+```powershell
+docker run --rm -p 8000:8000 `
+  -e SPECGATE_WEB_SECRET="local-dev-secret-change-me" `
+  -v "${PWD}\var\specgate_web_docker:/data/specgate-web" `
+  specgate:local
+```
+
+打开：
+
+```text
+http://127.0.0.1:8000
+```
+
+云服务器上可以映射 `8000:8000`，并把宿主机目录挂载到 `/data/specgate-web` 保存用户、项目、运行记录和产物。老师检查作业时，可以使用：
+
+```text
+http://<服务器公网IP>:8000
+```
+
+完整部署步骤见 `docs/DEPLOYMENT.md`。
+
+Mock 模式不需要 API key。WebUI 当前默认仍然使用 MockLLM，不会因为保存 API key 就自动调用真实模型。
 
 ## CI
 
