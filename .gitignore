@@ -9,6 +9,7 @@ htmlcov/
 .env.*
 !.env.example
 runs/
+.specgate-web/
 var/specgate_web/
 memory.json
 reports/latest/

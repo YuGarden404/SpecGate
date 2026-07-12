@@ -69,13 +69,14 @@ def create_app(
 ) -> FastAPI:
     resolved_data_root = Path(
         data_root
+        or os.environ.get("SPECGATE_WEB_DATA")
         or os.environ.get("SPECGATE_WEB_DATA_ROOT")
-        or Path.cwd() / ".specgate-web" / "data"
+        or Path.cwd() / "var" / "specgate_web"
     )
     resolved_db_path = Path(
         db_path
         or os.environ.get("SPECGATE_WEB_DB_PATH")
-        or resolved_data_root.parent / "web.sqlite3"
+        or resolved_data_root / "web.sqlite3"
     )
     resolved_data_root.mkdir(parents=True, exist_ok=True)
     init_db(resolved_db_path)
@@ -88,7 +89,9 @@ def create_app(
     app = FastAPI(title="SpecGate Web")
     app.state.data_root = resolved_data_root
     app.state.db_path = resolved_db_path
-    app.state.api_key_encryption_secret = os.environ.get("SPECGATE_WEB_API_KEY_SECRET")
+    app.state.api_key_encryption_secret = os.environ.get("SPECGATE_WEB_SECRET") or os.environ.get(
+        "SPECGATE_WEB_API_KEY_SECRET"
+    )
 
     @app.post("/api/auth/register")
     def register(payload: AuthRequest, response: Response) -> dict[str, Any]:

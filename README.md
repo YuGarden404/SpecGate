@@ -261,6 +261,56 @@ examples/eval_cases/eval-runs/latest/results-<strategy>.json
 
 security suite 覆盖任务注入、RAG 间接注入、checklist 注入、隐藏 HTML 注入、tool result 注入、路径逃逸和敏感文件写入。
 
+## WebUI 产品壳
+
+除 CLI 和静态报告外，SpecGate 现在提供一个 mock-first 的 WebUI 产品壳，用于演示“用户上传/创建项目 -> 和 harness 对话 -> 生成或修复 HTML -> 查看报告与审批”的完整流程。它不是直接修改用户原始目录，而是把项目导入到隔离工作区，再返回生成产物和报告。
+
+启动本地 WebUI：
+
+```powershell
+$env:PYTHONPATH="src"
+python -m specgate.web --host 127.0.0.1 --port 8000
+```
+
+然后打开：
+
+```text
+http://127.0.0.1:8000
+```
+
+当前 WebUI 包含：
+
+- 注册、登录、退出和会话 cookie。
+- 用户设置页，可保存 API key 配置状态；当前仍然默认 `MockLLM`，不会主动调用真实 LLM。
+- 手动创建项目，或上传 zip 项目。上传项目必须包含 `SPEC` / `TASK_SPEC` 之一和 `CHECKLIST`，导入后会规范化为 `TASK_SPEC.md` 和 `CHECKLIST.md`；也可以包含已有 `index.html` 和其他辅助文件。
+- Codex 风格的左侧项目列表、中央任务输入、右侧预览/报告/审批/设置面板。
+- 后台 run 状态轮询：`queued`、`running`、`needs_approval`、`completed`、`failed`。
+- Web HITL 审批：高风险 action 可以在页面里 approve / deny，再 resume 继续运行。
+- 产物下载和源码预览。生成的 HTML 默认作为下载附件或纯文本源码查看，避免在同源认证上下文中直接执行用户/模型生成的 HTML。
+
+WebUI 默认数据目录是：
+
+```text
+var/specgate_web/
+```
+
+可以用环境变量覆盖：
+
+```powershell
+$env:SPECGATE_WEB_DATA="D:\path\to\specgate-web-data"
+```
+
+部署到服务器时建议额外设置：
+
+```powershell
+$env:SPECGATE_WEB_SECRET="<随机长密钥>"
+$env:SPECGATE_WEB_SECURE_COOKIES="1"
+```
+
+`SPECGATE_WEB_SECRET` 只用于 API key 配置状态的保护摘要；会话仍使用数据库里的随机 session token。WebUI 默认仍是 MockLLM，不会因为设置了 API key 就调用真实 LLM。
+
+上传 zip 当前限制为 5 MiB。导入逻辑会拒绝绝对路径、路径逃逸、Windows 盘符、反斜杠路径和空路径，避免 zip 内容写出隔离目录。
+
 ## Docker
 
 ```powershell

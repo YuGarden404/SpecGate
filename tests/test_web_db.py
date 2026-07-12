@@ -1,4 +1,6 @@
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import closing
@@ -128,6 +130,17 @@ class WebDbTests(unittest.TestCase):
         web = import_module("specgate.web")
 
         self.assertTrue(callable(web.main))
+
+    def test_web_module_entrypoint_invokes_cli_help(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "specgate.web", "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Run the SpecGate Web UI server.", result.stdout)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import warnings
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,6 +20,17 @@ from specgate.web_db import connect_db
 
 
 class WebAppTests(unittest.TestCase):
+    @contextmanager
+    def temporary_cwd(self, path):
+        import os
+
+        old_cwd = Path.cwd()
+        os.chdir(path)
+        try:
+            yield
+        finally:
+            os.chdir(old_cwd)
+
     def make_client(self, **app_kwargs):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -229,6 +241,36 @@ class WebAppTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertIn("secure", response.headers["set-cookie"].lower())
+
+    def test_default_data_root_and_env_override_match_documented_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with self.temporary_cwd(base), patch.dict(
+                "os.environ",
+                {
+                    "SPECGATE_WEB_DATA": "",
+                    "SPECGATE_WEB_DATA_ROOT": "",
+                    "SPECGATE_WEB_DB_PATH": "",
+                },
+                clear=False,
+            ):
+                app = create_app()
+
+            self.assertEqual(app.state.data_root, base / "var" / "specgate_web")
+            self.assertEqual(app.state.db_path, base / "var" / "specgate_web" / "web.sqlite3")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            override = Path(tmp) / "custom-data"
+            with patch.dict(
+                "os.environ",
+                {"SPECGATE_WEB_DATA": str(override), "SPECGATE_WEB_SECRET": "server-secret"},
+                clear=False,
+            ):
+                app = create_app()
+
+            self.assertEqual(app.state.data_root, override)
+            self.assertEqual(app.state.db_path, override / "web.sqlite3")
+            self.assertEqual(app.state.api_key_encryption_secret, "server-secret")
 
     def test_upload_rejects_files_over_limit(self):
         client, _app = self.make_client()
