@@ -6,6 +6,7 @@ unit-test:
   stage: test
   image: python:3.11-slim
   script:
+    - python -m pip install -e .
     - export PYTHONPATH=src
     - python -m unittest discover -s tests -v
 
