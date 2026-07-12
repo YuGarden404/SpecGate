@@ -836,11 +836,13 @@ a {
     box-shadow: var(--shadow);
   }
 
+  body:not(.sidebar-collapsed) .project-sidebar,
   body.sidebar-peeking .project-sidebar {
+    display: flex;
     transform: translateX(0);
   }
 
-  body:not(.sidebar-peeking) .project-sidebar {
+  body.sidebar-collapsed:not(.sidebar-peeking) .project-sidebar {
     display: none;
   }
 
