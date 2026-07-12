@@ -26,16 +26,65 @@ class WebStaticTests(unittest.TestCase):
         for element_id in (
             "auth-view",
             "workspace-view",
+            "app-menu-bar",
+            "sidebar-toggle-button",
+            "back-button",
+            "forward-button",
+            "project-sidebar",
             "project-list",
+            "workspace-main",
+            "workspace-titlebar",
             "message-list",
-            "detail-panel",
             "run-form",
             "project-dialog",
             "project-form",
-            "settings-detail",
+            "search-dialog",
+            "about-dialog",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html)
+
+    def test_index_contains_codex_like_menu_bar(self) -> None:
+        html = read_static("index.html")
+        for text in (
+            "文件",
+            "编辑",
+            "帮助",
+            "新窗口",
+            "Ctrl+Shift+N",
+            "新项目",
+            "Ctrl+N",
+            "关闭",
+            "Ctrl+W",
+            "设置",
+            "Ctrl+,",
+            "登出",
+            "退出",
+            "Ctrl+Q",
+            "搜索",
+            "Ctrl+G",
+            "关于 SpecGate",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, html)
+        self.assertNotIn(">视图<", html)
+
+    def test_project_dialog_uses_file_import_fields(self) -> None:
+        html = read_static("index.html")
+        for text in (
+            "project-name",
+            "project-spec-file",
+            "project-checklist-file",
+            "project-index-file",
+            'type="file"',
+            "spec.md",
+            "checklist.md",
+            "index.html",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, html)
+        self.assertNotIn('id="project-spec" name="spec_text"', html)
+        self.assertNotIn('id="project-checklist" name="checklist_text"', html)
 
     def test_index_contains_report_detail_tab(self) -> None:
         html = read_static("index.html")
@@ -76,6 +125,30 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("async function loadRunDebug", app_js)
         self.assertIn("function renderAuditDetail", app_js)
         self.assertIn("/debug", app_js)
+
+    def test_app_contains_codex_shell_workflows(self) -> None:
+        app_js = read_static("app.js")
+        for text in (
+            "viewBackStack",
+            "viewForwardStack",
+            "function pushView",
+            "function goBack",
+            "function goForward",
+            "function closeCurrentProject",
+            "function toggleSidebar",
+            "function showSidebarPeek",
+            "function hideSidebarPeek",
+            "function openSearchDialog",
+            "function renderSearchResults",
+            "async function readProjectFile",
+            "function openNewWindow",
+            "function exitWindow",
+            "function clearAuthForm",
+            "function renderWorkspaceView",
+            "function openProjectMenu",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, app_js)
 
     def test_app_contains_chinese_audit_visualization_helpers(self) -> None:
         app_js = read_static("app.js")
@@ -122,7 +195,22 @@ class WebStaticTests(unittest.TestCase):
 
     def test_styles_include_codex_like_layout_hooks(self) -> None:
         css = read_static("styles.css")
-        for selector in (".sidebar", ".conversation", ".detail-panel", ".composer"):
+        for selector in (
+            ".app-menu-bar",
+            ".menu-group",
+            ".menu-popover",
+            ".workspace-view",
+            ".app-shell",
+            ".project-sidebar",
+            ".sidebar-edge-hotzone",
+            ".workspace-main",
+            ".workspace-titlebar",
+            ".messages-frame",
+            ".composer-frame",
+            ".search-results",
+            "body.sidebar-collapsed",
+            "body.sidebar-peeking",
+        ):
             with self.subTest(selector=selector):
                 self.assertIn(selector, css)
 
