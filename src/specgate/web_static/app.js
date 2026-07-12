@@ -412,6 +412,10 @@ function handleGlobalShortcut(event) {
     return;
   }
   const key = event.key.toLowerCase();
+  const target = event.target;
+  const isEditable =
+    target instanceof Element &&
+    (target.matches("input, textarea, select") || target.isContentEditable);
   let command = null;
   if (event.shiftKey && key === "n") {
     command = "new-window";
@@ -437,8 +441,8 @@ function handleGlobalShortcut(event) {
     event.preventDefault();
     goForward();
     return;
-  } else if (!event.shiftKey && key === "c") {
-    command = "close-project";
+  } else if (isEditable) {
+    return;
   }
   if (command) {
     event.preventDefault();
@@ -485,7 +489,18 @@ async function logout() {
     state.approvals = [];
     state.settings = null;
     resetViewHistory("conversation");
+    closeAllMenus();
+    closeProjectDialog();
+    closeSearchDialog();
+    closeAboutDialog();
+    state.sidebarPeeking = false;
+    applySidebarState();
     clearAuthForm();
+    renderProjects();
+    renderWorkspaceView();
+    setText("project-title", "Select a project");
+    setRunPill("Idle");
+    setMessage("");
     showView(false);
   }
 }
@@ -993,8 +1008,7 @@ function renderRunWorkspaceApprovals(debug) {
   section.append(el("p", {}, [`审批数量：${approvals.length}`]));
   const button = el("button", { type: "button", className: "secondary" }, ["前往审批"]);
   button.addEventListener("click", () => {
-    state.activeTab = "approvals";
-    renderDetail();
+    pushView("detail-approvals");
   });
   section.append(button);
   return section;
