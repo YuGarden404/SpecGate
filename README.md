@@ -300,10 +300,15 @@ var/specgate_web/
 $env:SPECGATE_WEB_DATA="D:\path\to\specgate-web-data"
 ```
 
-部署到服务器时建议额外设置：
+部署到服务器时建议设置随机密钥：
 
 ```powershell
 $env:SPECGATE_WEB_SECRET="<随机长密钥>"
+```
+
+如果使用 `http://公网IP:8000` 直接检查，不要开启 secure cookies；只有在 HTTPS 反向代理已经配置完成时，才设置：
+
+```powershell
 $env:SPECGATE_WEB_SECURE_COOKIES="1"
 ```
 
