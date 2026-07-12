@@ -29,7 +29,7 @@
     </section>
   </main>
 
-  <main id="workspace-view" class="workspace-view" hidden>
+  <main id="workspace-view" class="workspace-view" lang="zh-CN" hidden>
     <header id="app-menu-bar" class="app-menu-bar">
       <div class="window-controls" aria-label="窗口控制">
         <button id="sidebar-toggle-button" type="button" class="icon-button" title="切换侧栏">侧栏</button>
@@ -38,8 +38,8 @@
       </div>
       <nav class="menu-bar" aria-label="应用菜单">
         <div class="menu-group">
-          <button type="button" class="menu-button" aria-haspopup="menu">文件</button>
-          <div class="menu-popover" role="menu">
+          <button id="file-menu-button" type="button" class="menu-button" aria-haspopup="menu" aria-controls="file-menu" aria-expanded="false">文件</button>
+          <div id="file-menu" class="menu-popover" role="menu" hidden>
             <button type="button" role="menuitem" data-command="new-window">
               <span>新窗口</span>
               <kbd>Ctrl+Shift+N</kbd>
@@ -66,8 +66,8 @@
           </div>
         </div>
         <div class="menu-group">
-          <button type="button" class="menu-button" aria-haspopup="menu">编辑</button>
-          <div class="menu-popover" role="menu">
+          <button id="edit-menu-button" type="button" class="menu-button" aria-haspopup="menu" aria-controls="edit-menu" aria-expanded="false">编辑</button>
+          <div id="edit-menu" class="menu-popover" role="menu" hidden>
             <button type="button" role="menuitem" data-command="search">
               <span>搜索</span>
               <kbd>Ctrl+G</kbd>
@@ -75,8 +75,8 @@
           </div>
         </div>
         <div class="menu-group">
-          <button type="button" class="menu-button" aria-haspopup="menu">帮助</button>
-          <div class="menu-popover" role="menu">
+          <button id="help-menu-button" type="button" class="menu-button" aria-haspopup="menu" aria-controls="help-menu" aria-expanded="false">帮助</button>
+          <div id="help-menu" class="menu-popover" role="menu" hidden>
             <button type="button" role="menuitem" data-command="about">
               <span>关于 SpecGate</span>
             </button>
@@ -103,9 +103,9 @@
           </div>
           <div class="project-title-actions">
             <span id="run-status-pill" class="pill">Idle</span>
-            <button id="project-menu-button" type="button" aria-haspopup="menu" aria-controls="project-menu">详情</button>
+            <button id="project-menu-button" type="button" aria-haspopup="menu" aria-controls="project-menu" aria-expanded="false">详情</button>
           </div>
-          <div id="project-menu" class="project-menu" role="menu" hidden>
+          <div id="project-menu" class="menu-popover project-menu" role="menu" hidden>
             <button type="button" role="menuitem" data-detail-view="detail-status">状态</button>
             <button type="button" role="menuitem" data-detail-view="detail-preview">预览</button>
             <button type="button" role="menuitem" data-detail-view="detail-report">报告</button>
@@ -163,7 +163,7 @@
   </dialog>
 
   <dialog id="search-dialog" class="search-dialog">
-    <form method="dialog" class="search-form">
+    <div class="search-form">
       <header class="dialog-header">
         <h2>搜索项目</h2>
         <button id="close-search-dialog" type="button" class="icon-button" title="关闭">关闭</button>
@@ -173,7 +173,7 @@
         <input id="project-search-input" name="query" autocomplete="off" placeholder="输入项目名称">
       </label>
       <div id="search-results" class="search-results" aria-live="polite"></div>
-    </form>
+    </div>
   </dialog>
 
   <dialog id="about-dialog" class="about-dialog">
