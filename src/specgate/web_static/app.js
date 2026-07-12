@@ -569,10 +569,14 @@ function renderAuditOverview(debug) {
   const summary = debug.summary || {};
   const trace = debug.trace || {};
   const evidence = debug.evidence || {};
+  const runStrategy = auditRunStrategy(debug);
   const evidenceState = Object.entries(evidence)
     .map(([key, value]) => `${translateEvidenceKey(key)}：${value ? "已记录" : "本次未启用"}`)
     .join("，");
   const rows = [
+    ["治理策略", runStrategy.governanceProfile],
+    ["上下文策略", runStrategy.contextStrategy],
+    ["运行模式", runStrategy.llmMode],
     ["状态", translateRunStatus(summary.status)],
     ["信任等级", translateTrustLevel(summary.trust_level)],
     ["产物数量", String(summary.artifact_count ?? 0)],
@@ -606,6 +610,21 @@ function renderAuditOverview(debug) {
     wrapper.append(links);
   }
   return wrapper;
+}
+
+function auditRunStrategy(debug) {
+  const events = (debug.trace && debug.trace.events) || [];
+  let contextStrategy = "未知";
+  let governanceProfile = "未知";
+  for (const event of events) {
+    if (event.event_type === "context_built" && event.payload && event.payload.strategy) {
+      contextStrategy = event.payload.strategy;
+    }
+    if (event.event_type === "run_summary" && event.payload && event.payload.profile) {
+      governanceProfile = event.payload.profile;
+    }
+  }
+  return { governanceProfile, contextStrategy, llmMode: "MockLLM" };
 }
 
 function renderAuditMetrics(debug) {

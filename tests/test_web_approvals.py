@@ -261,7 +261,9 @@ class WebApprovalsTests(unittest.TestCase):
             conn.execute("update runs set status = 'completed' where id = ?", (completed_run["id"],))
             conn.commit()
 
-        def fake_resume(paths):
+        def fake_resume(paths, settings):
+            self.assertEqual(settings["governance_profile"], "review")
+            self.assertEqual(settings["context_strategy"], "injection-safe")
             queue = ApprovalQueue.read(approval_queue_path(paths.workspace))
             queue.resolve(queue.next_resume_candidate().id, "applied", "2026-07-11T10:02:00Z").write(
                 approval_queue_path(paths.workspace)

@@ -91,6 +91,13 @@ class WebStaticTests(unittest.TestCase):
             with self.subTest(function_name=function_name):
                 self.assertIn(f"function {function_name}", app_js)
 
+    def test_app_contains_audit_strategy_display(self) -> None:
+        app_js = read_static("app.js")
+        for text in ("治理策略", "上下文策略", "运行模式"):
+            with self.subTest(text=text):
+                self.assertIn(text, app_js)
+        self.assertIn("function auditRunStrategy", app_js)
+
     def test_app_does_not_execute_artifact_html_in_same_origin_iframe(self) -> None:
         app_js = read_static("app.js").lower()
         self.assertNotIn("<iframe", app_js)

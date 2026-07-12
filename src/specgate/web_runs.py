@@ -16,6 +16,7 @@ from specgate.trace import redact
 from specgate.web_auth import utc_now
 from specgate.web_db import connect_db
 from specgate.web_projects import ProjectPaths, package_result_zip, project_paths
+from specgate.web_settings import get_settings
 
 
 def create_run(db_path: Path, project_id: int, user_id: int, prompt: str) -> sqlite3.Row:
@@ -88,7 +89,8 @@ def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
             return
 
         index_before = _index_signature(paths.workspace / "index.html")
-        result = _run_mock_agent(paths)
+        settings = get_settings(db_path, int(run["user_id"]))
+        result = _run_mock_agent(paths, settings)
         queue = ApprovalQueue.read(approval_queue_path(paths.workspace))
         index_path: Path | None = None
         zip_path: Path | None = None
@@ -137,7 +139,8 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
             return None
 
         index_before = _index_signature(paths.workspace / "index.html")
-        result = _run_resume_agent(paths)
+        settings = get_settings(db_path, user_id)
+        result = _run_resume_agent(paths, settings)
         queue = ApprovalQueue.read(approval_queue_path(paths.workspace))
         index_path: Path | None = None
         zip_path: Path | None = None
@@ -169,8 +172,8 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
         raise
 
 
-def _run_mock_agent(paths: ProjectPaths) -> RunResult:
-    governance = GovernanceConfig(profile="review")
+def _run_mock_agent(paths: ProjectPaths, settings: dict) -> RunResult:
+    governance = GovernanceConfig(profile=settings["governance_profile"])
     policy = WorkspacePolicy(
         root=paths.workspace,
         allowed_actions={"read_file", "list_files", "write_file", "replace_file", "finish"},
@@ -180,7 +183,7 @@ def _run_mock_agent(paths: ProjectPaths) -> RunResult:
     workspace_config = WorkspaceConfig(
         policy=policy,
         governance=governance,
-        context=ContextConfig(strategy="injection-safe"),
+        context=ContextConfig(strategy=settings["context_strategy"]),
     )
     llm = MockLLM(
         [
@@ -210,8 +213,8 @@ def _run_mock_agent(paths: ProjectPaths) -> RunResult:
     return runner.run()
 
 
-def _run_resume_agent(paths: ProjectPaths) -> RunResult:
-    governance = GovernanceConfig(profile="review")
+def _run_resume_agent(paths: ProjectPaths, settings: dict) -> RunResult:
+    governance = GovernanceConfig(profile=settings["governance_profile"])
     policy = WorkspacePolicy(
         root=paths.workspace,
         allowed_actions={"read_file", "list_files", "write_file", "replace_file", "finish"},
@@ -221,7 +224,7 @@ def _run_resume_agent(paths: ProjectPaths) -> RunResult:
     workspace_config = WorkspaceConfig(
         policy=policy,
         governance=governance,
-        context=ContextConfig(strategy="injection-safe"),
+        context=ContextConfig(strategy=settings["context_strategy"]),
     )
     llm = MockLLM(
         [

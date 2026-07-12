@@ -9,6 +9,7 @@ from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
 from specgate.web_projects import create_manual_project, project_paths
 from specgate.web_runs import create_run, execute_run_once, get_run
+from specgate.web_settings import update_settings
 
 
 class WebRunsTests(unittest.TestCase):
@@ -94,6 +95,23 @@ class WebRunsTests(unittest.TestCase):
             [(row["kind"], row["path"]) for row in artifacts],
             [("index", str(latest_index)), ("zip", str(result_zip))],
         )
+
+    def test_execute_run_once_uses_user_governance_and_context_settings(self):
+        db_path, data_root, user, project = self.make_context()
+        update_settings(
+            db_path,
+            user["id"],
+            governance_profile="strict",
+            context_strategy="rag-select",
+        )
+        run = create_run(db_path, project["id"], user["id"], "Build the result")
+
+        execute_run_once(db_path, data_root, run["id"])
+
+        paths = project_paths(data_root, user["id"], project["id"])
+        trace_text = (paths.workspace / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+        self.assertIn('"strategy": "rag-select"', trace_text)
+        self.assertIn('"profile": "strict"', trace_text)
 
     def test_execute_run_once_failure_marks_run_failed_when_index_is_missing(self):
         db_path, data_root, user, project = self.make_context()
