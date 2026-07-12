@@ -25,12 +25,16 @@ class WebStaticTests(unittest.TestCase):
         async_expected: bool = False,
     ) -> None:
         escaped_name = re.escape(name)
-        callable_patterns = [
-            rf"function\s+{escaped_name}\s*\(",
-            rf"(?:const|let|var)\s+{escaped_name}\s*=",
-        ]
         if async_expected:
-            callable_patterns.append(rf"async\s+function\s+{escaped_name}\s*\(")
+            callable_patterns = [
+                rf"async\s+function\s+{escaped_name}\s*\(",
+                rf"(?:const|let|var)\s+{escaped_name}\s*=\s*async\b",
+            ]
+        else:
+            callable_patterns = [
+                rf"function\s+{escaped_name}\s*\(",
+                rf"(?:const|let|var)\s+{escaped_name}\s*=",
+            ]
         self.assertRegex(app_js, "|".join(callable_patterns))
 
     def test_static_assets_exist(self) -> None:
