@@ -439,9 +439,40 @@ function renderDetail() {
 }
 
 function renderStatusDetail(content) {
-  const card = el("section", { className: "detail-card" });
-  card.append(el("h2", {}, ["Run status"]));
+  const card = el("section", { className: "detail-card stack" });
+  card.append(el("h2", {}, ["运行工作台"]));
   const run = state.currentRun;
+  if (!state.selectedProject) {
+    card.append(el("p", { className: "muted" }, ["请先创建或选择项目。"]));
+    content.append(card);
+    return;
+  }
+  if (!run) {
+    card.append(el("p", { className: "muted" }, ["当前项目还没有运行。"]));
+    card.append(renderBasicRunRows(null));
+    content.append(card);
+    return;
+  }
+
+  const body = el("div", { className: "run-workspace" }, ["正在加载运行证据..."]);
+  card.append(body);
+  content.append(card);
+
+  const existing = state.runDebug && state.runDebug.run && state.runDebug.run.id === run.id;
+  const loader = existing ? Promise.resolve(state.runDebug) : loadRunDebug(run.id);
+  loader
+    .then((debug) => {
+      body.replaceChildren(renderRunWorkspace(debug));
+    })
+    .catch((error) => {
+      body.replaceChildren(
+        renderBasicRunRows(run),
+        el("p", { className: "message-line error" }, [`运行证据暂不可用：${error.message}`]),
+      );
+    });
+}
+
+function renderBasicRunRows(run) {
   const rows = [
     ["Project", state.selectedProject ? state.selectedProject.name : "None"],
     ["Run", run ? `#${run.id}` : "No active run"],
@@ -449,14 +480,137 @@ function renderStatusDetail(content) {
     ["Trust", run ? run.trust_level || "pending" : "n/a"],
     ["Error", run ? run.error_message || "None" : "None"],
     ["Created", run ? run.created_at || "n/a" : "n/a"],
+    ["Started", run ? run.started_at || "n/a" : "n/a"],
     ["Finished", run ? run.finished_at || "n/a" : "n/a"],
   ];
   const dl = el("dl", { className: "detail-grid" });
   for (const [label, value] of rows) {
     dl.append(el("dt", {}, [label]), el("dd", {}, [value]));
   }
-  card.append(dl);
-  content.append(card);
+  return dl;
+}
+
+function renderRunWorkspace(debug) {
+  const wrapper = el("div", { className: "run-workspace stack" });
+  wrapper.append(renderBasicRunRows(debug.run || state.currentRun));
+  wrapper.append(renderRunWorkspaceMetrics(debug));
+  wrapper.append(renderRunWorkspaceFlow(debug));
+  wrapper.append(renderRunWorkspaceArtifacts(debug));
+  wrapper.append(renderRunWorkspaceApprovals(debug));
+  return wrapper;
+}
+
+function renderRunWorkspaceMetrics(debug) {
+  const strategy = auditRunStrategy(debug);
+  const summary = latestRunSummary(debug);
+  const metrics = summary.metrics || {};
+  const items = [
+    ["治理策略", strategy.governanceProfile],
+    ["上下文策略", strategy.contextStrategy],
+    ["运行模式", strategy.llmMode],
+    ["LLM 调用", metrics.llm_calls ?? 0],
+    ["工具调用", metrics.tool_calls ?? 0],
+    ["Gate 次数", metrics.gate_runs ?? 0],
+    ["阻止动作", metrics.blocked_actions ?? 0],
+    ["审批请求", metrics.approval_requests ?? 0],
+    ["RAG 查询", metrics.retrieval_queries ?? 0],
+    ["最大上下文", metrics.context_chars_max ?? 0],
+  ];
+  const section = el("section", { className: "run-workspace-section" });
+  section.append(el("h3", {}, ["策略与指标"]));
+  const grid = el("div", { className: "run-workspace-grid" });
+  for (const [label, value] of items) {
+    grid.append(el("div", { className: "audit-metric" }, [el("span", {}, [label]), el("strong", {}, [value])]));
+  }
+  section.append(grid);
+  return section;
+}
+
+function renderRunWorkspaceFlow(debug) {
+  const section = el("section", { className: "run-workspace-section" });
+  section.append(el("h3", {}, ["执行流程"]));
+  const events = ((debug.trace && debug.trace.events) || []).slice(0, 6);
+  if (!events.length) {
+    section.append(el("p", { className: "muted" }, ["本次运行还没有流程事件。"]));
+    return section;
+  }
+  const list = el("ol", { className: "run-flow" });
+  for (const event of events) {
+    const payload = event.payload || {};
+    const step = payload.step ? `Step ${payload.step}` : event.event_type || "event";
+    list.append(
+      el("li", { className: "run-flow-item" }, [
+        el("strong", {}, [translateTraceEvent(event.event_type)]),
+        el("small", {}, [step]),
+        el("p", {}, [describeTraceEvent(event)]),
+      ]),
+    );
+  }
+  section.append(list);
+  const trace = debug.trace || {};
+  if (trace.truncated || (trace.total_events || 0) > events.length) {
+    section.append(el("p", { className: "muted" }, ["更多流程细节请查看 Audit。"]));
+  }
+  return section;
+}
+
+function renderRunWorkspaceArtifacts(debug) {
+  const section = el("section", { className: "run-workspace-section" });
+  section.append(el("h3", {}, ["产物"]));
+  const artifacts = debug.artifacts || [];
+  if (!artifacts.length) {
+    section.append(el("p", { className: "muted" }, ["暂无产物。"]));
+    return section;
+  }
+  const list = el("div", { className: "artifact-list" });
+  for (const artifact of artifacts) {
+    const item = el("div", { className: "artifact-item" });
+    item.append(el("strong", {}, [artifact.kind || "artifact"]));
+    item.append(el("span", { className: artifact.exists ? "pill" : "pill danger" }, [artifact.exists ? "已生成" : "缺失"]));
+    item.append(el("small", {}, [formatBytes(artifact.size_bytes || 0)]));
+    if (artifact.exists && artifact.download_url) {
+      item.append(
+        el(
+          "a",
+          { href: artifact.download_url, download: artifact.kind === "zip" ? "result.zip" : "index.html" },
+          ["下载"],
+        ),
+      );
+    }
+    list.append(item);
+  }
+  section.append(list);
+  return section;
+}
+
+function renderRunWorkspaceApprovals(debug) {
+  const section = el("section", { className: "run-workspace-section" });
+  section.append(el("h3", {}, ["审批"]));
+  const approvals = debug.approvals || [];
+  const run = debug.run || state.currentRun || {};
+  if (!approvals.length && run.status !== "needs_approval") {
+    section.append(el("p", { className: "muted" }, ["无待处理审批。"]));
+    return section;
+  }
+  section.append(el("p", {}, [`审批数量：${approvals.length}`]));
+  const button = el("button", { type: "button", className: "secondary" }, ["前往审批"]);
+  button.addEventListener("click", () => {
+    state.activeTab = "approvals";
+    renderDetail();
+  });
+  section.append(button);
+  return section;
+}
+
+function formatBytes(value) {
+  const size = Number(value || 0);
+  if (size >= 1024 * 1024) {
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (size >= 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${size} B`;
 }
 
 function renderReportDetail(content) {

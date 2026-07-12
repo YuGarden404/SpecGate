@@ -388,6 +388,70 @@ label {
   overflow-wrap: anywhere;
 }
 
+.run-workspace {
+  display: grid;
+  gap: 1rem;
+}
+
+.run-workspace-section {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.run-workspace-section h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.run-workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.6rem;
+}
+
+.run-flow {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.run-flow-item {
+  border-left: 2px solid var(--accent);
+  padding-left: 0.75rem;
+}
+
+.run-flow-item strong,
+.run-flow-item small,
+.run-flow-item p {
+  display: block;
+}
+
+.run-flow-item small {
+  color: var(--muted);
+}
+
+.run-flow-item p {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.artifact-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.artifact-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0.65rem;
+  background: var(--panel);
+}
+
 .approval-item {
   display: grid;
   gap: 0.65rem;

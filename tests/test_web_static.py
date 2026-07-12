@@ -98,6 +98,22 @@ class WebStaticTests(unittest.TestCase):
                 self.assertIn(text, app_js)
         self.assertIn("function auditRunStrategy", app_js)
 
+    def test_app_contains_status_run_workspace_helpers(self) -> None:
+        app_js = read_static("app.js")
+        for function_name in (
+            "renderRunWorkspace",
+            "renderRunWorkspaceMetrics",
+            "renderRunWorkspaceFlow",
+            "renderRunWorkspaceArtifacts",
+            "renderRunWorkspaceApprovals",
+            "formatBytes",
+        ):
+            with self.subTest(function_name=function_name):
+                self.assertIn(f"function {function_name}", app_js)
+        for text in ("运行工作台", "执行流程", "产物", "前往审批", "暂无产物"):
+            with self.subTest(text=text):
+                self.assertIn(text, app_js)
+
     def test_app_does_not_execute_artifact_html_in_same_origin_iframe(self) -> None:
         app_js = read_static("app.js").lower()
         self.assertNotIn("<iframe", app_js)
@@ -117,6 +133,19 @@ class WebStaticTests(unittest.TestCase):
                 self.assertIn(selector, css)
         self.assertIn("flex-wrap: wrap", css)
         self.assertNotIn("grid-template-columns: repeat(6, 1fr)", css)
+
+    def test_styles_include_run_workspace_hooks(self) -> None:
+        css = read_static("styles.css")
+        for selector in (
+            ".run-workspace",
+            ".run-workspace-grid",
+            ".run-flow",
+            ".run-flow-item",
+            ".artifact-list",
+            ".artifact-item",
+        ):
+            with self.subTest(selector=selector):
+                self.assertIn(selector, css)
 
     def test_styles_preserve_hidden_attribute_for_view_switching(self) -> None:
         css = read_static("styles.css")
