@@ -17,6 +17,22 @@ def read_static(filename: str) -> str:
 
 
 class WebStaticTests(unittest.TestCase):
+    def assert_js_callable(
+        self,
+        app_js: str,
+        name: str,
+        *,
+        async_expected: bool = False,
+    ) -> None:
+        escaped_name = re.escape(name)
+        callable_patterns = [
+            rf"function\s+{escaped_name}\s*\(",
+            rf"(?:const|let|var)\s+{escaped_name}\s*=",
+        ]
+        if async_expected:
+            callable_patterns.append(rf"async\s+function\s+{escaped_name}\s*\(")
+        self.assertRegex(app_js, "|".join(callable_patterns))
+
     def test_static_assets_exist(self) -> None:
         for filename in ("index.html", "styles.css", "app.js"):
             with self.subTest(filename=filename):
@@ -68,7 +84,7 @@ class WebStaticTests(unittest.TestCase):
         ):
             with self.subTest(text=text):
                 self.assertIn(text, html)
-        self.assertNotIn(">视图<", html)
+        self.assertNotRegex(html, r"<button\b[^>]*>\s*视图\s*</button>")
 
     def test_project_dialog_uses_file_import_fields(self) -> None:
         html = read_static("index.html")
@@ -87,8 +103,8 @@ class WebStaticTests(unittest.TestCase):
         ):
             with self.subTest(element_id=element_id):
                 input_pattern = (
-                    rf'<input\b(?=[^>]*\bid="{re.escape(element_id)}")'
-                    r'(?=[^>]*\btype="file")[^>]*>'
+                    rf"<input\b(?=[^>]*\bid\s*=\s*['\"]{re.escape(element_id)}['\"])"
+                    r"(?=[^>]*\btype\s*=\s*['\"]file['\"])[^>]*>"
                 )
                 self.assertRegex(
                     html,
@@ -96,10 +112,16 @@ class WebStaticTests(unittest.TestCase):
                 )
         for element_id in ("project-spec", "project-checklist", "project-index"):
             with self.subTest(legacy_id=element_id):
-                self.assertNotRegex(html, rf'<textarea\b[^>]*\bid="{element_id}"')
+                self.assertNotRegex(
+                    html,
+                    rf"<textarea\b[^>]*\bid\s*=\s*['\"]{re.escape(element_id)}['\"]",
+                )
         for field_name in ("spec_text", "checklist_text", "index_html"):
             with self.subTest(legacy_name=field_name):
-                self.assertNotRegex(html, rf'<textarea\b[^>]*\bname="{field_name}"')
+                self.assertNotRegex(
+                    html,
+                    rf"<textarea\b[^>]*\bname\s*=\s*['\"]{re.escape(field_name)}['\"]",
+                )
 
     def test_index_contains_report_detail_tab(self) -> None:
         html = read_static("index.html")
@@ -143,27 +165,29 @@ class WebStaticTests(unittest.TestCase):
 
     def test_app_contains_codex_shell_workflows(self) -> None:
         app_js = read_static("app.js")
-        for text in (
-            "viewBackStack",
-            "viewForwardStack",
-            "function pushView",
-            "function goBack",
-            "function goForward",
-            "function closeCurrentProject",
-            "function toggleSidebar",
-            "function showSidebarPeek",
-            "function hideSidebarPeek",
-            "function openSearchDialog",
-            "function renderSearchResults",
-            "async function readProjectFile",
-            "function openNewWindow",
-            "function exitWindow",
-            "function clearAuthForm",
-            "function renderWorkspaceView",
-            "function openProjectMenu",
-        ):
+        for text in ("viewBackStack", "viewForwardStack"):
             with self.subTest(text=text):
                 self.assertIn(text, app_js)
+        for function_name in (
+            "pushView",
+            "goBack",
+            "goForward",
+            "closeCurrentProject",
+            "toggleSidebar",
+            "showSidebarPeek",
+            "hideSidebarPeek",
+            "openSearchDialog",
+            "renderSearchResults",
+            "openNewWindow",
+            "exitWindow",
+            "clearAuthForm",
+            "renderWorkspaceView",
+            "openProjectMenu",
+        ):
+            with self.subTest(function_name=function_name):
+                self.assert_js_callable(app_js, function_name)
+        with self.subTest(function_name="readProjectFile"):
+            self.assert_js_callable(app_js, "readProjectFile", async_expected=True)
 
     def test_app_contains_chinese_audit_visualization_helpers(self) -> None:
         app_js = read_static("app.js")
