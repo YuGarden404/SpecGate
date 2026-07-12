@@ -256,6 +256,7 @@ async function selectProject(projectId) {
   renderProjects();
   setText("project-title", project.name);
   await loadMessages(project.id);
+  await loadLatestProjectRun(project);
   renderConversation();
   renderDetail();
 }
@@ -263,6 +264,19 @@ async function selectProject(projectId) {
 async function loadMessages(projectId) {
   const payload = await apiJson(`/api/projects/${projectId}/messages`);
   state.messages = payload.messages || [];
+}
+
+async function loadLatestProjectRun(project) {
+  state.currentRun = null;
+  if (!project || !project.latest_run_id) {
+    return;
+  }
+  try {
+    const payload = await apiJson(`/api/runs/${project.latest_run_id}`);
+    state.currentRun = payload.run;
+  } catch (error) {
+    setMessage(`Latest run could not be loaded: ${error.message}`, true);
+  }
 }
 
 function renderConversation() {
@@ -673,6 +687,7 @@ async function clearApiKey() {
 
 window.SpecGateWeb = {
   startRun,
+  loadLatestProjectRun,
   loadSettings,
   approveApproval,
   denyApproval,

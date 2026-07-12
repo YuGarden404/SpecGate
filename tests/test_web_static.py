@@ -51,6 +51,7 @@ class WebStaticTests(unittest.TestCase):
         app_js = read_static("app.js")
         for function_name in (
             "startRun",
+            "loadLatestProjectRun",
             "loadSettings",
             "approveApproval",
             "denyApproval",
@@ -63,6 +64,7 @@ class WebStaticTests(unittest.TestCase):
         app_js = read_static("app.js")
         self.assertIn('state.activeTab === "report"', app_js)
         self.assertIn("function renderReportDetail", app_js)
+        self.assertIn("latest_run_id", app_js)
 
     def test_app_does_not_execute_artifact_html_in_same_origin_iframe(self) -> None:
         app_js = read_static("app.js").lower()

@@ -231,6 +231,29 @@ class WebAppTests(unittest.TestCase):
             f"/api/runs/{run['id']}/artifacts/index",
         )
 
+    def test_project_responses_include_latest_run_id_without_paths(self):
+        client, _app = self.make_client()
+        self.register(client)
+        project = self.create_project(client)
+        with patch("specgate.web_app.start_run_background"):
+            run = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "Build the result"},
+            ).json()["run"]
+
+        listed = client.get("/api/projects")
+        detail = client.get(f"/api/projects/{project['id']}")
+
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(detail.status_code, 200, detail.text)
+        listed_project = listed.json()["projects"][0]
+        detail_project = detail.json()["project"]
+        self.assertEqual(listed_project["latest_run_id"], run["id"])
+        self.assertEqual(detail_project["latest_run_id"], run["id"])
+        self.assertNotIn("root_path", listed_project)
+        self.assertNotIn("index_artifact_path", listed_project)
+        self.assertNotIn("zip_artifact_path", listed_project)
+
     def test_secure_cookie_can_be_enabled_for_production(self):
         client, _app = self.make_client(secure_cookies=True)
 

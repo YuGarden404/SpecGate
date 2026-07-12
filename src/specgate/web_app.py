@@ -130,8 +130,16 @@ def create_app(
         with closing(connect_db(app.state.db_path)) as conn:
             rows = conn.execute(
                 """
-                select * from projects
-                where user_id = ?
+                select
+                  projects.*,
+                  (
+                    select runs.id from runs
+                    where runs.project_id = projects.id and runs.user_id = projects.user_id
+                    order by runs.id desc
+                    limit 1
+                  ) as latest_run_id
+                from projects
+                where projects.user_id = ?
                 order by id desc
                 """,
                 (user["id"],),
@@ -369,7 +377,18 @@ def _set_session_cookie(response: Response, token: str, *, secure: bool) -> None
 def _load_project_or_404(db_path: Path, user_id: int, project_id: int):
     with closing(connect_db(db_path)) as conn:
         row = conn.execute(
-            "select * from projects where id = ? and user_id = ?",
+            """
+            select
+              projects.*,
+              (
+                select runs.id from runs
+                where runs.project_id = projects.id and runs.user_id = projects.user_id
+                order by runs.id desc
+                limit 1
+              ) as latest_run_id
+            from projects
+            where projects.id = ? and projects.user_id = ?
+            """,
             (project_id, user_id),
         ).fetchone()
     if row is None:
@@ -422,6 +441,7 @@ def _project_dict(row) -> dict[str, Any]:
         "created_at": data["created_at"],
         "updated_at": data["updated_at"],
         "last_run_status": data["last_run_status"],
+        "latest_run_id": data.get("latest_run_id"),
     }
 
 
