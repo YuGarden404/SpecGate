@@ -1,50 +1,50 @@
-# Deployment-Ready WebUI Implementation Plan
+# WebUI 可部署化实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **给代理执行者：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 逐任务执行本计划。步骤使用复选框（`- [ ]`）跟踪进度。
 
-**Goal:** Make SpecGate WebUI deployable on a single cloud server with Docker, persistent data, public URL guidance, and CI smoke coverage.
+**目标：** 让 SpecGate WebUI 可以通过 Docker 部署到单台云服务器，并具备持久化数据、公网 URL 部署说明和 CI smoke 检查。
 
-**Architecture:** Keep the current mock-first FastAPI WebUI unchanged. Package the existing Python project into a Docker image whose default command starts `specgate-web` on `0.0.0.0:8000`, persist WebUI state under `/data/specgate-web`, and document how to expose it via `http://<server-ip>:8000` or optional Nginx reverse proxy.
+**架构：** 不改变现有 mock-first FastAPI WebUI 的运行语义。把当前 Python 项目打包成 Docker 镜像，镜像默认用 `specgate-web` 在 `0.0.0.0:8000` 启动；WebUI 数据统一保存在 `/data/specgate-web`；文档说明如何通过 `http://<服务器公网IP>:8000` 或可选 Nginx 反向代理提供真实访问地址。
 
-**Tech Stack:** Python 3.11, FastAPI, Uvicorn, SQLite, Docker, GitHub Actions, GitLab CI, Markdown docs.
-
----
-
-## File Structure
-
-- Modify `Dockerfile`
-  - Install the package with dependencies using `python -m pip install -e .`.
-  - Set `SPECGATE_WEB_DATA=/data/specgate-web`.
-  - Expose `8000`.
-  - Default to `specgate-web --host 0.0.0.0 --port 8000`.
-
-- Create `docs/DEPLOYMENT.md`
-  - Chinese deployment guide for local Docker verification, cloud server deployment, public IP URL, optional Nginx/domain reverse proxy, operations, backup, and security notes.
-
-- Modify `README.md`
-  - Update Docker section so it matches WebUI deployment instead of CLI demo.
-  - Link to `docs/DEPLOYMENT.md`.
-  - Mention that a real homework-check URL can be `http://公网IP:8000`.
-
-- Modify `.github/workflows/ci.yml`
-  - Keep `unit-test`.
-  - Keep `docker-build`.
-  - Add a Docker smoke step: `docker run --rm specgate:ci specgate-web --help`.
-
-- Modify `.gitlab-ci.yml`
-  - Keep existing test and build jobs.
-  - Add the same Docker smoke command after build in `docker-build`.
+**技术栈：** Python 3.11、FastAPI、Uvicorn、SQLite、Docker、GitHub Actions、GitLab CI、Markdown 文档。
 
 ---
 
-### Task 1: Update Docker Image Defaults
+## 文件结构
 
-**Files:**
-- Modify: `Dockerfile`
+- 修改 `Dockerfile`
+  - 使用 `python -m pip install -e .` 安装项目及依赖。
+  - 设置 `SPECGATE_WEB_DATA=/data/specgate-web`。
+  - 暴露 `8000` 端口。
+  - 默认启动 `specgate-web --host 0.0.0.0 --port 8000`。
 
-- [ ] **Step 1: Replace the Dockerfile with WebUI-first packaging**
+- 新增 `docs/DEPLOYMENT.md`
+  - 中文部署指南，覆盖本地 Docker 验证、云服务器部署、公网 IP URL、可选 Nginx/域名反代、运维、备份和安全注意事项。
 
-Edit `Dockerfile` to exactly this content:
+- 修改 `README.md`
+  - 更新 Docker 章节，使其匹配 WebUI 部署，而不是旧的 CLI demo。
+  - 链接到 `docs/DEPLOYMENT.md`。
+  - 说明作业检查的真实 URL 可以是 `http://公网IP:8000`。
+
+- 修改 `.github/workflows/ci.yml`
+  - 保留 `unit-test`。
+  - 保留 `docker-build`。
+  - 增加 Docker smoke 检查：`docker run --rm specgate:ci specgate-web --help`。
+
+- 修改 `.gitlab-ci.yml`
+  - 保留现有 test 和 build job。
+  - 在 `docker-build` 中增加相同的 Docker smoke 命令。
+
+---
+
+### 任务 1：更新 Docker 镜像默认启动目标
+
+**文件：**
+- 修改：`Dockerfile`
+
+- [ ] **步骤 1：把 Dockerfile 替换为 WebUI 优先的镜像配置**
+
+将 `Dockerfile` 改成以下完整内容：
 
 ```dockerfile
 FROM python:3.11-slim
@@ -67,15 +67,15 @@ EXPOSE 8000
 CMD ["specgate-web", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-- [ ] **Step 2: Verify the Dockerfile contains the expected WebUI command**
+- [ ] **步骤 2：确认 Dockerfile 包含预期的 WebUI 启动命令**
 
-Run:
+运行：
 
 ```powershell
 Get-Content -LiteralPath Dockerfile
 ```
 
-Expected: output includes:
+期望：输出包含：
 
 ```text
 RUN python -m pip install --no-cache-dir -e .
@@ -84,27 +84,27 @@ EXPOSE 8000
 CMD ["specgate-web", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-- [ ] **Step 3: Commit Dockerfile change**
+- [ ] **步骤 3：提交 Dockerfile 改动**
 
-Run:
+运行：
 
 ```powershell
 git add Dockerfile
 git commit -m "build: make Docker image start WebUI"
 ```
 
-Expected: commit succeeds with one modified file.
+期望：提交成功，且只修改 `Dockerfile`。
 
 ---
 
-### Task 2: Add Deployment Guide
+### 任务 2：新增部署指南
 
-**Files:**
-- Create: `docs/DEPLOYMENT.md`
+**文件：**
+- 新增：`docs/DEPLOYMENT.md`
 
-- [ ] **Step 1: Create the deployment guide**
+- [ ] **步骤 1：创建部署指南**
 
-Create `docs/DEPLOYMENT.md` with this content:
+创建 `docs/DEPLOYMENT.md`，内容如下：
 
 ````markdown
 # SpecGate WebUI 部署指南
@@ -287,49 +287,49 @@ tar -czf specgate-data-backup.tar.gz -C /opt/specgate data
 - 生成的 HTML 以下载或源码预览为主，避免在同源认证上下文中直接执行模型生成内容。
 ````
 
-- [ ] **Step 2: Check the guide includes the public URL and cookie warning**
+- [ ] **步骤 2：检查部署指南包含公网 URL 和 Cookie 警告**
 
-Run:
+运行：
 
 ```powershell
 rg -n "http://<服务器公网IP>:8000|SPECGATE_WEB_SECURE_COOKIES|MockLLM|/opt/specgate/data" docs\DEPLOYMENT.md
 ```
 
-Expected: output includes all four patterns.
+期望：输出包含这四类内容。
 
-- [ ] **Step 3: Commit deployment guide**
+- [ ] **步骤 3：提交部署指南**
 
-Run:
+运行：
 
 ```powershell
 git add docs/DEPLOYMENT.md
 git commit -m "docs: add WebUI deployment guide"
 ```
 
-Expected: commit succeeds with one new file.
+期望：提交成功，且新增一个文件。
 
 ---
 
-### Task 3: Update README Deployment Pointers
+### 任务 3：更新 README 部署入口
 
-**Files:**
-- Modify: `README.md`
+**文件：**
+- 修改：`README.md`
 
-- [ ] **Step 1: Replace the current Docker section**
+- [ ] **步骤 1：替换当前 Docker 章节**
 
-Find the section beginning with:
+找到以下章节开头：
 
 ```markdown
 ## Docker
 ```
 
-Replace that section through the paragraph ending with:
+从该章节开始，替换到以下段落结束：
 
 ```markdown
 Mock 模式不需要 API key。真实 LLM 模式尚未作为 MVP 默认能力开放。
 ```
 
-with:
+替换为：
 
 ````markdown
 ## Docker / 服务器部署
@@ -368,61 +368,61 @@ http://<服务器公网IP>:8000
 Mock 模式不需要 API key。WebUI 当前默认仍然使用 MockLLM，不会因为保存 API key 就自动调用真实模型。
 ````
 
-- [ ] **Step 2: Verify README links to deployment guide**
+- [ ] **步骤 2：确认 README 链接到部署指南**
 
-Run:
+运行：
 
 ```powershell
 rg -n "Docker / 服务器部署|docs/DEPLOYMENT.md|http://<服务器公网IP>:8000|MockLLM" README.md
 ```
 
-Expected: output includes all four patterns.
+期望：输出包含这四类内容。
 
-- [ ] **Step 3: Commit README update**
+- [ ] **步骤 3：提交 README 更新**
 
-Run:
+运行：
 
 ```powershell
 git add README.md
 git commit -m "docs: document Docker WebUI deployment"
 ```
 
-Expected: commit succeeds with one modified file.
+期望：提交成功，且只修改 `README.md`。
 
 ---
 
-### Task 4: Add CI Docker Smoke Checks
+### 任务 4：增加 CI Docker smoke 检查
 
-**Files:**
-- Modify: `.github/workflows/ci.yml`
-- Modify: `.gitlab-ci.yml`
+**文件：**
+- 修改：`.github/workflows/ci.yml`
+- 修改：`.gitlab-ci.yml`
 
-- [ ] **Step 1: Update GitHub Actions Docker job**
+- [ ] **步骤 1：更新 GitHub Actions Docker job**
 
-In `.github/workflows/ci.yml`, after:
+在 `.github/workflows/ci.yml` 中，找到：
 
 ```yaml
       - name: Build Docker image
         run: docker build -t specgate:ci .
 ```
 
-add:
+在其后增加：
 
 ```yaml
       - name: Smoke test Docker WebUI entrypoint
         run: docker run --rm specgate:ci specgate-web --help
 ```
 
-- [ ] **Step 2: Update GitLab CI Docker job**
+- [ ] **步骤 2：更新 GitLab CI Docker job**
 
-In `.gitlab-ci.yml`, update the `docker-build` script from:
+在 `.gitlab-ci.yml` 中，把 `docker-build` 的 script 从：
 
 ```yaml
   script:
     - docker build -t specgate:ci .
 ```
 
-to:
+改成：
 
 ```yaml
   script:
@@ -430,88 +430,88 @@ to:
     - docker run --rm specgate:ci specgate-web --help
 ```
 
-- [ ] **Step 3: Verify CI files contain the smoke command**
+- [ ] **步骤 3：确认 CI 文件包含 smoke 命令**
 
-Run:
+运行：
 
 ```powershell
 rg -n "Smoke test Docker WebUI entrypoint|specgate-web --help" .github\workflows\ci.yml .gitlab-ci.yml
 ```
 
-Expected: output includes both CI files.
+期望：输出同时包含两个 CI 文件。
 
-- [ ] **Step 4: Commit CI smoke checks**
+- [ ] **步骤 4：提交 CI smoke 检查**
 
-Run:
+运行：
 
 ```powershell
 git add .github/workflows/ci.yml .gitlab-ci.yml
 git commit -m "ci: smoke test Docker WebUI entrypoint"
 ```
 
-Expected: commit succeeds with two modified files.
+期望：提交成功，且修改两个 CI 文件。
 
 ---
 
-### Task 5: Final Verification
+### 任务 5：最终验证
 
-**Files:**
-- No intended source changes.
+**文件：**
+- 不应产生新的源码改动。
 
-- [ ] **Step 1: Confirm working tree before verification**
+- [ ] **步骤 1：确认验证前工作区状态**
 
-Run:
+运行：
 
 ```powershell
 git status --short --branch
 ```
 
-Expected: branch is `feat-deployment-ready`; no uncommitted changes.
+期望：当前分支为 `feat-deployment-ready`，且没有未提交改动。
 
-- [ ] **Step 2: Run full unit tests**
+- [ ] **步骤 2：运行全量单元测试**
 
-Run:
+运行：
 
 ```powershell
 $env:PYTHONPATH="src"
 python -m unittest discover -s tests -v
 ```
 
-Expected: all tests pass.
+期望：所有测试通过。
 
-- [ ] **Step 3: Build Docker image**
+- [ ] **步骤 3：构建 Docker 镜像**
 
-Run:
+运行：
 
 ```powershell
 docker build -t specgate:local .
 ```
 
-Expected: image builds successfully and installs package dependencies.
+期望：镜像构建成功，并安装项目依赖。
 
-- [ ] **Step 4: Run Docker WebUI entrypoint smoke test**
+- [ ] **步骤 4：运行 Docker WebUI 入口 smoke 检查**
 
-Run:
+运行：
 
 ```powershell
 docker run --rm specgate:local specgate-web --help
 ```
 
-Expected: command exits with status 0 and prints usage for `specgate-web`.
+期望：命令以状态码 0 退出，并输出 `specgate-web` 的 usage/help。
 
-- [ ] **Step 5: Review final diff against main**
+- [ ] **步骤 5：检查最终 diff 范围**
 
-Run:
+运行：
 
 ```powershell
 git diff main...HEAD --stat
 ```
 
-Expected: diff includes the deployment spec, deployment plan, Dockerfile, README, `docs/DEPLOYMENT.md`, and CI files only.
+期望：diff 只包含部署规格、部署计划、Dockerfile、README、`docs/DEPLOYMENT.md` 和 CI 文件。
 
-- [ ] **Step 6: Prepare PR summary**
+- [ ] **步骤 6：准备 PR 总结**
 
-Use this Chinese PR summary:
+使用以下中文 PR 内容：
 
 ```markdown
 ## 概述
@@ -540,4 +540,4 @@ Use this Chinese PR summary:
 - [ ] `docker run --rm specgate:local specgate-web --help`
 ```
 
-Expected: final response can tell the user which commands passed and whether Docker was available locally.
+期望：最终回复需要告诉用户哪些命令已通过，以及本机 Docker 是否可用。
