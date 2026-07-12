@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -73,18 +74,32 @@ class WebStaticTests(unittest.TestCase):
         html = read_static("index.html")
         for text in (
             "project-name",
-            "project-spec-file",
-            "project-checklist-file",
-            "project-index-file",
-            'type="file"',
             "spec.md",
             "checklist.md",
             "index.html",
         ):
             with self.subTest(text=text):
                 self.assertIn(text, html)
-        self.assertNotIn('id="project-spec" name="spec_text"', html)
-        self.assertNotIn('id="project-checklist" name="checklist_text"', html)
+        for element_id in (
+            "project-spec-file",
+            "project-checklist-file",
+            "project-index-file",
+        ):
+            with self.subTest(element_id=element_id):
+                input_pattern = (
+                    rf'<input\b(?=[^>]*\bid="{re.escape(element_id)}")'
+                    r'(?=[^>]*\btype="file")[^>]*>'
+                )
+                self.assertRegex(
+                    html,
+                    input_pattern,
+                )
+        for element_id in ("project-spec", "project-checklist", "project-index"):
+            with self.subTest(legacy_id=element_id):
+                self.assertNotRegex(html, rf'<textarea\b[^>]*\bid="{element_id}"')
+        for field_name in ("spec_text", "checklist_text", "index_html"):
+            with self.subTest(legacy_name=field_name):
+                self.assertNotRegex(html, rf'<textarea\b[^>]*\bname="{field_name}"')
 
     def test_index_contains_report_detail_tab(self) -> None:
         html = read_static("index.html")
