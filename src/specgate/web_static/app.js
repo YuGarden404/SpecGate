@@ -7,6 +7,11 @@ const state = {
   runDebug: null,
   approvals: [],
   settings: null,
+  view: "conversation",
+  viewBackStack: [],
+  viewForwardStack: [],
+  sidebarCollapsed: false,
+  sidebarPeeking: false,
   activeTab: "status",
   pollTimer: null,
 };
@@ -68,14 +73,18 @@ function setText(id, value) {
 
 function setMessage(value, isError = false) {
   const node = byId("app-message");
-  node.textContent = value || "";
-  node.classList.toggle("error", Boolean(isError));
+  if (node) {
+    node.textContent = value || "";
+    node.classList.toggle("error", Boolean(isError));
+  }
 }
 
 function setAuthMessage(value, isError = false) {
   const node = byId("auth-message");
-  node.textContent = value || "";
-  node.classList.toggle("error", Boolean(isError));
+  if (node) {
+    node.textContent = value || "";
+    node.classList.toggle("error", Boolean(isError));
+  }
 }
 
 async function apiJson(path, options = {}) {
@@ -114,8 +123,206 @@ async function apiText(path) {
 }
 
 function showView(isAuthed) {
-  byId("auth-view").hidden = isAuthed;
-  byId("workspace-view").hidden = !isAuthed;
+  const authView = byId("auth-view");
+  const workspaceView = byId("workspace-view");
+  if (authView) {
+    authView.hidden = isAuthed;
+  }
+  if (workspaceView) {
+    workspaceView.hidden = !isAuthed;
+  }
+}
+
+function on(id, eventName, handler) {
+  const node = byId(id);
+  if (node) {
+    node.addEventListener(eventName, handler);
+  }
+}
+
+function resetViewHistory(view = "conversation") {
+  state.view = view;
+  state.viewBackStack = [];
+  state.viewForwardStack = [];
+}
+
+function pushView(view) {
+  if (!view || view === state.view) {
+    return;
+  }
+  state.viewBackStack.push(state.view);
+  state.view = view;
+  state.viewForwardStack = [];
+  renderWorkspaceView();
+}
+
+function goBack() {
+  const previous = state.viewBackStack.pop();
+  if (!previous) {
+    return;
+  }
+  state.viewForwardStack.push(state.view);
+  state.view = previous;
+  renderWorkspaceView();
+}
+
+function goForward() {
+  const next = state.viewForwardStack.pop();
+  if (!next) {
+    return;
+  }
+  state.viewBackStack.push(state.view);
+  state.view = next;
+  renderWorkspaceView();
+}
+
+function renderWorkspaceView() {
+  if (state.view.startsWith("detail-")) {
+    state.activeTab = state.view.replace("detail-", "") || "status";
+  }
+  const messages = byId("message-list");
+  const detail = byId("detail-content");
+  const runForm = byId("run-form");
+  const showingDetail = state.view !== "conversation";
+  if (messages) {
+    messages.hidden = showingDetail;
+  }
+  if (detail) {
+    detail.hidden = !showingDetail;
+  }
+  if (runForm) {
+    runForm.hidden = showingDetail;
+  }
+  if (showingDetail) {
+    renderDetail();
+  } else {
+    renderConversation();
+  }
+}
+
+function closeAllMenus() {
+  document.querySelectorAll(".menu-popover").forEach((menu) => {
+    menu.hidden = true;
+    const button = menu.id ? document.querySelector(`[aria-controls="${menu.id}"]`) : null;
+    if (button) {
+      button.setAttribute("aria-expanded", "false");
+    }
+  });
+}
+
+function toggleMenu(buttonId, menuId) {
+  const button = byId(buttonId);
+  const menu = byId(menuId);
+  if (!button || !menu) {
+    return;
+  }
+  const willOpen = menu.hidden;
+  closeAllMenus();
+  menu.hidden = !willOpen;
+  button.setAttribute("aria-expanded", String(willOpen));
+}
+
+function openProjectMenu() {
+  toggleMenu("project-menu-button", "project-menu");
+}
+
+function runCommand(command) {
+  closeAllMenus();
+  if (command === "new-window") {
+    openNewWindow();
+  } else if (command === "new-project") {
+    openProjectDialog();
+  } else if (command === "close-project") {
+    closeCurrentProject();
+  } else if (command === "settings") {
+    pushView("detail-settings");
+  } else if (command === "logout") {
+    logout();
+  } else if (command === "exit") {
+    exitWindow();
+  } else if (command === "search" || command === "search-projects") {
+    openSearchDialog();
+  } else if (command === "about") {
+    openAboutDialog();
+  }
+}
+
+function openNewWindow() {
+  window.open(window.location.href, "_blank", "noopener");
+}
+
+function exitWindow() {
+  window.close();
+  setMessage("如果浏览器阻止关闭，请直接关闭当前页签。");
+}
+
+function applySidebarState() {
+  document.body.classList.toggle("sidebar-collapsed", state.sidebarCollapsed);
+  document.body.classList.toggle("sidebar-peeking", state.sidebarPeeking);
+}
+
+function toggleSidebar() {
+  state.sidebarCollapsed = !state.sidebarCollapsed;
+  state.sidebarPeeking = false;
+  applySidebarState();
+}
+
+function showSidebarPeek() {
+  if (state.sidebarCollapsed) {
+    state.sidebarPeeking = true;
+    applySidebarState();
+  }
+}
+
+function hideSidebarPeek() {
+  if (state.sidebarPeeking) {
+    state.sidebarPeeking = false;
+    applySidebarState();
+  }
+}
+
+function closeCurrentProject() {
+  state.selectedProject = null;
+  state.messages = [];
+  state.currentRun = null;
+  state.runDebug = null;
+  clearPolling();
+  resetViewHistory("conversation");
+  renderProjects();
+  renderWorkspaceView();
+  setMessage("Project closed.");
+}
+
+function openAboutDialog() {
+  const dialog = byId("about-dialog");
+  if (!dialog) {
+    return;
+  }
+  if (typeof dialog.showModal === "function") {
+    dialog.showModal();
+  } else {
+    dialog.setAttribute("open", "");
+  }
+}
+
+function closeAboutDialog() {
+  const dialog = byId("about-dialog");
+  if (!dialog) {
+    return;
+  }
+  if (typeof dialog.close === "function") {
+    dialog.close();
+  } else {
+    dialog.removeAttribute("open");
+  }
+}
+
+function clearAuthForm() {
+  const form = byId("auth-form");
+  if (form) {
+    form.reset();
+  }
+  setAuthMessage("");
 }
 
 async function init() {
@@ -132,27 +339,111 @@ async function init() {
 }
 
 function bindEvents() {
-  byId("auth-form").addEventListener("submit", (event) => {
+  on("auth-form", "submit", (event) => {
     event.preventDefault();
     login();
   });
-  byId("register-button").addEventListener("click", register);
-  byId("logout-button").addEventListener("click", logout);
-  byId("refresh-button").addEventListener("click", hydrateWorkspace);
-  byId("new-project-button").addEventListener("click", openProjectDialog);
-  byId("close-project-dialog").addEventListener("click", closeProjectDialog);
-  byId("cancel-project-button").addEventListener("click", closeProjectDialog);
-  byId("project-form").addEventListener("submit", createManualProject);
-  byId("run-form").addEventListener("submit", startRun);
-  byId("settings-form").addEventListener("submit", updateSettings);
-  byId("api-key-form").addEventListener("submit", saveApiKey);
-  byId("clear-api-key-button").addEventListener("click", clearApiKey);
+  on("register-button", "click", register);
+  on("sidebar-toggle-button", "click", toggleSidebar);
+  on("back-button", "click", goBack);
+  on("forward-button", "click", goForward);
+  on("file-menu-button", "click", (event) => {
+    event.stopPropagation();
+    toggleMenu("file-menu-button", "file-menu");
+  });
+  on("edit-menu-button", "click", (event) => {
+    event.stopPropagation();
+    toggleMenu("edit-menu-button", "edit-menu");
+  });
+  on("help-menu-button", "click", (event) => {
+    event.stopPropagation();
+    toggleMenu("help-menu-button", "help-menu");
+  });
+  on("project-menu-button", "click", (event) => {
+    event.stopPropagation();
+    openProjectMenu();
+  });
+  on("new-project-button", "click", () => runCommand("new-project"));
+  on("search-project-button", "click", () => runCommand("search"));
+  on("sidebar-settings-button", "click", () => pushView("detail-settings"));
+  on("sidebar-edge-hotzone", "mouseenter", showSidebarPeek);
+  on("project-sidebar", "mouseleave", hideSidebarPeek);
+  on("close-project-dialog", "click", closeProjectDialog);
+  on("cancel-project-button", "click", closeProjectDialog);
+  on("project-form", "submit", createManualProject);
+  on("run-form", "submit", startRun);
+  on("project-search-input", "input", renderSearchResults);
+  on("close-search-dialog", "click", closeSearchDialog);
+  on("close-about-dialog", "click", closeAboutDialog);
+  document.querySelectorAll("[data-command]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      runCommand(button.dataset.command);
+    });
+  });
+  document.querySelectorAll("[data-detail-view]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      pushView(button.dataset.detailView);
+      closeAllMenus();
+    });
+  });
   document.querySelectorAll("[data-tab]").forEach((button) => {
     button.addEventListener("click", () => {
       state.activeTab = button.dataset.tab;
-      renderDetail();
+      pushView(`detail-${state.activeTab}`);
     });
   });
+  document.addEventListener("keydown", handleGlobalShortcut);
+  document.addEventListener("click", (event) => {
+    if (
+      event.target instanceof Element &&
+      !event.target.closest(".menu-group") &&
+      !event.target.closest("#project-menu")
+    ) {
+      closeAllMenus();
+    }
+  });
+  applySidebarState();
+}
+
+function handleGlobalShortcut(event) {
+  if (!event.ctrlKey || event.altKey || event.metaKey) {
+    return;
+  }
+  const key = event.key.toLowerCase();
+  let command = null;
+  if (event.shiftKey && key === "n") {
+    command = "new-window";
+  } else if (!event.shiftKey && key === "n") {
+    command = "new-project";
+  } else if (!event.shiftKey && key === "g") {
+    command = "search";
+  } else if (!event.shiftKey && key === "q") {
+    command = "exit";
+  } else if (!event.shiftKey && key === ",") {
+    command = "settings";
+  } else if (!event.shiftKey && key === "w") {
+    command = "close-project";
+  } else if (!event.shiftKey && key === "b") {
+    event.preventDefault();
+    toggleSidebar();
+    return;
+  } else if (!event.shiftKey && key === "[") {
+    event.preventDefault();
+    goBack();
+    return;
+  } else if (!event.shiftKey && key === "]") {
+    event.preventDefault();
+    goForward();
+    return;
+  } else if (!event.shiftKey && key === "c") {
+    command = "close-project";
+  }
+  if (command) {
+    event.preventDefault();
+    runCommand(command);
+  }
 }
 
 async function login() {
@@ -188,8 +479,13 @@ async function logout() {
     state.user = null;
     state.projects = [];
     state.selectedProject = null;
+    state.messages = [];
     state.currentRun = null;
     state.runDebug = null;
+    state.approvals = [];
+    state.settings = null;
+    resetViewHistory("conversation");
+    clearAuthForm();
     showView(false);
   }
 }
@@ -199,13 +495,13 @@ async function hydrateWorkspace() {
     return;
   }
   setText("current-user", state.user.username);
+  resetViewHistory("conversation");
   await Promise.all([loadProjects(), loadApprovals(), loadSettings()]);
   if (!state.selectedProject && state.projects.length) {
     await selectProject(state.projects[0].id);
   } else {
     renderProjects();
-    renderConversation();
-    renderDetail();
+    renderWorkspaceView();
   }
 }
 
@@ -223,6 +519,9 @@ async function loadProjects() {
 
 function renderProjects() {
   const list = byId("project-list");
+  if (!list) {
+    return;
+  }
   list.replaceChildren();
   if (!state.projects.length) {
     list.append(el("p", { className: "muted" }, ["No projects yet."]));
@@ -260,8 +559,7 @@ async function selectProject(projectId) {
   setText("project-title", project.name);
   await loadMessages(project.id);
   await loadLatestProjectRun(project);
-  renderConversation();
-  renderDetail();
+  renderWorkspaceView();
 }
 
 async function loadMessages(projectId) {
@@ -285,6 +583,9 @@ async function loadLatestProjectRun(project) {
 
 function renderConversation() {
   const list = byId("message-list");
+  if (!list) {
+    return;
+  }
   list.replaceChildren();
   if (!state.selectedProject) {
     list.append(el("li", { className: "message" }, ["Create or select a project to begin."]));
@@ -304,14 +605,22 @@ function renderConversation() {
 
 function setRunPill(status) {
   const pill = byId("run-status-pill");
-  pill.textContent = status || "Idle";
-  pill.classList.toggle("warning", status === "needs_approval");
-  pill.classList.toggle("danger", status === "failed");
+  if (pill) {
+    pill.textContent = status || "Idle";
+    pill.classList.toggle("warning", status === "needs_approval");
+    pill.classList.toggle("danger", status === "failed");
+  }
 }
 
 function openProjectDialog() {
   const dialog = byId("project-dialog");
-  byId("project-form").reset();
+  const form = byId("project-form");
+  if (!dialog) {
+    return;
+  }
+  if (form) {
+    form.reset();
+  }
   if (typeof dialog.showModal === "function") {
     dialog.showModal();
   } else {
@@ -321,6 +630,9 @@ function openProjectDialog() {
 
 function closeProjectDialog() {
   const dialog = byId("project-dialog");
+  if (!dialog) {
+    return;
+  }
   if (typeof dialog.close === "function") {
     dialog.close();
   } else {
@@ -328,16 +640,86 @@ function closeProjectDialog() {
   }
 }
 
+function openSearchDialog() {
+  const dialog = byId("search-dialog");
+  const input = byId("project-search-input");
+  if (!dialog) {
+    return;
+  }
+  if (input) {
+    input.value = "";
+  }
+  renderSearchResults();
+  if (typeof dialog.showModal === "function") {
+    dialog.showModal();
+  } else {
+    dialog.setAttribute("open", "");
+  }
+  if (input) {
+    input.focus();
+  }
+}
+
+function closeSearchDialog() {
+  const dialog = byId("search-dialog");
+  if (!dialog) {
+    return;
+  }
+  if (typeof dialog.close === "function") {
+    dialog.close();
+  } else {
+    dialog.removeAttribute("open");
+  }
+}
+
+function renderSearchResults() {
+  const results = byId("search-results");
+  const input = byId("project-search-input");
+  if (!results) {
+    return;
+  }
+  const query = input ? input.value.trim().toLowerCase() : "";
+  const matches = state.projects.filter((project) => project.name.toLowerCase().includes(query));
+  results.replaceChildren();
+  if (!matches.length) {
+    results.append(el("p", { className: "muted" }, ["No projects found."]));
+    return;
+  }
+  for (const project of matches) {
+    const button = el("button", { type: "button", className: "project-item" }, [
+      el("strong", {}, [project.name]),
+      el("small", {}, [project.last_run_status || "no runs"]),
+    ]);
+    button.addEventListener("click", async () => {
+      closeSearchDialog();
+      await selectProject(project.id);
+    });
+    results.append(button);
+  }
+}
+
+async function readProjectFile(inputId) {
+  const input = byId(inputId);
+  const file = input && input.files ? input.files[0] : null;
+  if (!file) {
+    return "";
+  }
+  return file.text();
+}
+
 async function createManualProject(event) {
   event.preventDefault();
-  const indexValue = byId("project-index").value;
+  const nameInput = byId("project-name");
   try {
+    const specText = await readProjectFile("project-spec-file");
+    const checklistText = await readProjectFile("project-checklist-file");
+    const indexValue = await readProjectFile("project-index-file");
     const payload = await apiJson("/api/projects", {
       method: "POST",
       body: {
-        name: byId("project-name").value,
-        spec_text: byId("project-spec").value,
-        checklist_text: byId("project-checklist").value,
+        name: nameInput ? nameInput.value : "",
+        spec_text: specText,
+        checklist_text: checklistText,
         index_html: indexValue.trim() ? indexValue : null,
       },
     });
@@ -356,12 +738,16 @@ async function startRun(event) {
     setMessage("Select a project before starting a run.", true);
     return;
   }
-  const prompt = byId("run-prompt").value.trim();
+  const promptInput = byId("run-prompt");
+  const prompt = promptInput ? promptInput.value.trim() : "";
   if (!prompt) {
     return;
   }
-  const submitButton = byId("run-form").querySelector("button");
-  submitButton.disabled = true;
+  const form = byId("run-form");
+  const submitButton = form ? form.querySelector("button") : null;
+  if (submitButton) {
+    submitButton.disabled = true;
+  }
   try {
     const payload = await apiJson(`/api/projects/${state.selectedProject.id}/runs`, {
       method: "POST",
@@ -369,16 +755,20 @@ async function startRun(event) {
     });
     state.currentRun = payload.run;
     state.runDebug = null;
-    byId("run-prompt").value = "";
+    const promptInput = byId("run-prompt");
+    if (promptInput) {
+      promptInput.value = "";
+    }
     await loadMessages(state.selectedProject.id);
-    renderConversation();
-    renderDetail();
+    renderWorkspaceView();
     pollRun(state.currentRun.id);
     setMessage("Run started.");
   } catch (error) {
     setMessage(error.message, true);
   } finally {
-    submitButton.disabled = false;
+    if (submitButton) {
+      submitButton.disabled = false;
+    }
   }
 }
 
@@ -401,8 +791,7 @@ async function refreshRun(runId) {
       if (state.selectedProject) {
         await loadMessages(state.selectedProject.id);
       }
-      renderConversation();
-      renderDetail();
+      renderWorkspaceView();
     }
   } catch (error) {
     clearPolling();
@@ -418,10 +807,19 @@ function clearPolling() {
 }
 
 function renderDetail() {
+  if (state.view.startsWith("detail-")) {
+    state.activeTab = state.view.replace("detail-", "") || "status";
+  }
   document.querySelectorAll("[data-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === state.activeTab);
   });
+  document.querySelectorAll("[data-detail-view]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.detailView === `detail-${state.activeTab}`);
+  });
   const content = byId("detail-content");
+  if (!content) {
+    return;
+  }
   content.replaceChildren();
   if (state.activeTab === "preview") {
     renderPreviewDetail(content);
@@ -1037,8 +1435,14 @@ async function resumeRun(runId = null) {
 async function loadSettings() {
   const payload = await apiJson("/api/settings");
   state.settings = payload.settings;
-  byId("governance-profile").value = state.settings.governance_profile;
-  byId("context-strategy").value = state.settings.context_strategy;
+  const governanceProfile = byId("governance-profile");
+  const contextStrategy = byId("context-strategy");
+  if (governanceProfile) {
+    governanceProfile.value = state.settings.governance_profile;
+  }
+  if (contextStrategy) {
+    contextStrategy.value = state.settings.context_strategy;
+  }
   setText(
     "settings-api-state",
     state.settings.api_key_configured ? "API key: configured" : "API key: not configured",
@@ -1047,12 +1451,17 @@ async function loadSettings() {
 
 async function updateSettings(event) {
   event.preventDefault();
+  const governanceProfile = byId("governance-profile");
+  const contextStrategy = byId("context-strategy");
+  if (!governanceProfile || !contextStrategy) {
+    return;
+  }
   try {
     const payload = await apiJson("/api/settings", {
       method: "PUT",
       body: {
-        governance_profile: byId("governance-profile").value,
-        context_strategy: byId("context-strategy").value,
+        governance_profile: governanceProfile.value,
+        context_strategy: contextStrategy.value,
       },
     });
     state.settings = payload.settings;
@@ -1066,7 +1475,8 @@ async function updateSettings(event) {
 
 async function saveApiKey(event) {
   event.preventDefault();
-  const apiKey = byId("api-key-input").value;
+  const apiKeyInput = byId("api-key-input");
+  const apiKey = apiKeyInput ? apiKeyInput.value : "";
   if (!apiKey.trim()) {
     setMessage("Enter an API key first.", true);
     return;
@@ -1077,7 +1487,9 @@ async function saveApiKey(event) {
       body: { api_key: apiKey },
     });
     state.settings = payload.settings;
-    byId("api-key-input").value = "";
+    if (apiKeyInput) {
+      apiKeyInput.value = "";
+    }
     await loadSettings();
     renderDetail();
     setMessage("API key stored.");
@@ -1106,6 +1518,21 @@ window.SpecGateWeb = {
   approveApproval,
   denyApproval,
   resumeRun,
+  pushView,
+  goBack,
+  goForward,
+  closeCurrentProject,
+  toggleSidebar,
+  showSidebarPeek,
+  hideSidebarPeek,
+  openSearchDialog,
+  renderSearchResults,
+  openNewWindow,
+  exitWindow,
+  clearAuthForm,
+  renderWorkspaceView,
+  openProjectMenu,
+  readProjectFile,
   escapeHtml,
 };
 
