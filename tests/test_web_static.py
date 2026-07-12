@@ -77,6 +77,20 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("function renderAuditDetail", app_js)
         self.assertIn("/debug", app_js)
 
+    def test_app_contains_chinese_audit_visualization_helpers(self) -> None:
+        app_js = read_static("app.js")
+        for text in ("运行概览", "关键指标", "执行流程", "Evidence 状态", "原始 JSON"):
+            with self.subTest(text=text):
+                self.assertIn(text, app_js)
+        for function_name in (
+            "renderAuditMetrics",
+            "renderAuditTimeline",
+            "translateRunStatus",
+            "translateTrustLevel",
+        ):
+            with self.subTest(function_name=function_name):
+                self.assertIn(f"function {function_name}", app_js)
+
     def test_app_does_not_execute_artifact_html_in_same_origin_iframe(self) -> None:
         app_js = read_static("app.js").lower()
         self.assertNotIn("<iframe", app_js)
@@ -88,6 +102,14 @@ class WebStaticTests(unittest.TestCase):
         for selector in (".sidebar", ".conversation", ".detail-panel", ".composer"):
             with self.subTest(selector=selector):
                 self.assertIn(selector, css)
+
+    def test_styles_include_audit_visualization_hooks(self) -> None:
+        css = read_static("styles.css")
+        for selector in (".audit-metrics", ".audit-timeline", ".audit-event"):
+            with self.subTest(selector=selector):
+                self.assertIn(selector, css)
+        self.assertIn("flex-wrap: wrap", css)
+        self.assertNotIn("grid-template-columns: repeat(6, 1fr)", css)
 
     def test_styles_preserve_hidden_attribute_for_view_switching(self) -> None:
         css = read_static("styles.css")

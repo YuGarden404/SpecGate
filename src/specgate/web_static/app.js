@@ -531,48 +531,56 @@ async function loadRunDebug(runId) {
 
 function renderAuditDetail(content) {
   const card = el("section", { className: "detail-card stack" });
-  card.append(el("h2", {}, ["Audit / Debug"]));
+  card.append(el("h2", {}, ["审计 / 调试"]));
   const run = state.currentRun;
   if (!run) {
-    card.append(el("p", { className: "muted" }, ["No run is available to inspect."]));
+    card.append(el("p", { className: "muted" }, ["当前没有可检查的运行。"]));
     content.append(card);
     return;
   }
 
-  const summary = el("div", { className: "audit-summary" }, ["Loading audit data..."]);
+  const body = el("div", { className: "audit-summary" }, ["正在加载审计数据..."]);
   const pre = el("pre", { className: "source-view" }, [""]);
-  card.append(summary, pre);
+  card.append(body);
   content.append(card);
 
   const existing = state.runDebug && state.runDebug.run && state.runDebug.run.id === run.id;
   const loader = existing ? Promise.resolve(state.runDebug) : loadRunDebug(run.id);
   loader
     .then((debug) => {
-      summary.replaceChildren(renderAuditSummary(debug));
+      body.replaceChildren(
+        renderAuditOverview(debug),
+        renderAuditMetrics(debug),
+        renderAuditTimeline(debug),
+        renderAuditEvidence(debug),
+        el("h3", {}, ["原始 JSON"]),
+        pre,
+      );
       pre.textContent = JSON.stringify(debug, null, 2);
     })
     .catch((error) => {
-      summary.textContent = `Audit data is not available: ${error.message}`;
+      body.textContent = `审计数据不可用：${error.message}`;
       pre.textContent = "";
     });
 }
 
-function renderAuditSummary(debug) {
+function renderAuditOverview(debug) {
   const wrapper = el("div", { className: "audit-summary" });
   const summary = debug.summary || {};
   const trace = debug.trace || {};
   const evidence = debug.evidence || {};
   const evidenceState = Object.entries(evidence)
-    .map(([key, value]) => `${key}: ${value ? "present" : "none"}`)
-    .join(", ");
+    .map(([key, value]) => `${translateEvidenceKey(key)}：${value ? "已记录" : "本次未启用"}`)
+    .join("，");
   const rows = [
-    ["Status", summary.status || "n/a"],
-    ["Trust", summary.trust_level || "n/a"],
-    ["Artifacts", String(summary.artifact_count ?? 0)],
-    ["Approvals", String(summary.approval_count ?? 0)],
-    ["Trace events", `${summary.trace_event_count ?? 0}${trace.truncated ? " (truncated)" : ""}`],
-    ["Evidence", evidenceState || "none"],
+    ["状态", translateRunStatus(summary.status)],
+    ["信任等级", translateTrustLevel(summary.trust_level)],
+    ["产物数量", String(summary.artifact_count ?? 0)],
+    ["审批数量", String(summary.approval_count ?? 0)],
+    ["Trace 事件", `${summary.trace_event_count ?? 0}${trace.truncated ? "（已截断）" : ""}`],
+    ["Evidence", evidenceState || "无"],
   ];
+  wrapper.append(el("h3", {}, ["运行概览"]));
   const dl = el("dl", { className: "detail-grid" });
   for (const [label, value] of rows) {
     dl.append(el("dt", {}, [label]), el("dd", {}, [value]));
@@ -589,7 +597,7 @@ function renderAuditSummary(debug) {
             href: artifact.download_url,
             download: artifact.kind === "zip" ? "result.zip" : "index.html",
           },
-          [`Download ${artifact.kind}`],
+          [`下载 ${artifact.kind}`],
         ),
       );
     }
@@ -598,6 +606,153 @@ function renderAuditSummary(debug) {
     wrapper.append(links);
   }
   return wrapper;
+}
+
+function renderAuditMetrics(debug) {
+  const wrapper = el("section", { className: "audit-section" });
+  wrapper.append(el("h3", {}, ["关键指标"]));
+  const summary = latestRunSummary(debug);
+  const metrics = (summary && summary.metrics) || {};
+  const items = [
+    ["LLM 调用", metrics.llm_calls ?? 0],
+    ["工具调用", metrics.tool_calls ?? 0],
+    ["被阻止动作", metrics.blocked_actions ?? 0],
+    ["Gate 次数", metrics.gate_runs ?? 0],
+    ["Gate 失败", metrics.gate_failures ?? 0],
+    ["审批请求", metrics.approval_requests ?? 0],
+    ["RAG 查询", metrics.retrieval_queries ?? 0],
+    ["压缩输入", metrics.compression_original_chars ?? 0],
+    ["压缩输出", metrics.compression_compressed_chars ?? 0],
+    ["角色运行", metrics.role_runs ?? 0],
+  ];
+  const grid = el("div", { className: "audit-metrics" });
+  for (const [label, value] of items) {
+    grid.append(el("div", { className: "audit-metric" }, [el("span", {}, [label]), el("strong", {}, [value])]));
+  }
+  wrapper.append(grid);
+  return wrapper;
+}
+
+function renderAuditTimeline(debug) {
+  const wrapper = el("section", { className: "audit-section" });
+  wrapper.append(el("h3", {}, ["执行流程"]));
+  const events = (debug.trace && debug.trace.events) || [];
+  if (!events.length) {
+    wrapper.append(el("p", { className: "muted" }, ["本次运行没有 Trace 事件。"]));
+    return wrapper;
+  }
+  const list = el("ol", { className: "audit-timeline" });
+  for (const event of events) {
+    const payload = event.payload || {};
+    const step = payload.step || payload.result?.step;
+    const title = translateTraceEvent(event.event_type);
+    const detail = describeTraceEvent(event);
+    const meta = step ? `Step ${step}` : event.event_type || "event";
+    list.append(
+      el("li", { className: "audit-event" }, [
+        el("strong", {}, [title]),
+        el("small", {}, [meta]),
+        el("p", {}, [detail]),
+      ]),
+    );
+  }
+  wrapper.append(list);
+  return wrapper;
+}
+
+function renderAuditEvidence(debug) {
+  const wrapper = el("section", { className: "audit-section" });
+  wrapper.append(el("h3", {}, ["Evidence 状态"]));
+  const evidence = debug.evidence || {};
+  const rows = [
+    ["RAG 检索证据", evidence.retrieval],
+    ["上下文压缩证据", evidence.compression],
+    ["多代理隔离证据", evidence.isolation],
+    ["安全评估证据", evidence.security],
+  ];
+  const dl = el("dl", { className: "detail-grid" });
+  for (const [label, value] of rows) {
+    dl.append(el("dt", {}, [label]), el("dd", {}, [value ? "已记录" : "本次未启用"]));
+  }
+  wrapper.append(dl);
+  return wrapper;
+}
+
+function latestRunSummary(debug) {
+  const events = (debug.trace && debug.trace.events) || [];
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index].event_type === "run_summary") {
+      return events[index].payload || {};
+    }
+  }
+  return {};
+}
+
+function translateRunStatus(status) {
+  const values = {
+    completed: "已完成",
+    running: "运行中",
+    queued: "排队中",
+    failed: "失败",
+    needs_approval: "等待审批",
+  };
+  return values[status] || status || "未知";
+}
+
+function translateTrustLevel(level) {
+  const values = {
+    trusted: "可信",
+    warning: "警告",
+    failed: "失败",
+  };
+  return values[level] || level || "未知";
+}
+
+function translateEvidenceKey(key) {
+  const values = {
+    retrieval: "RAG",
+    compression: "压缩",
+    isolation: "隔离",
+    security: "安全",
+  };
+  return values[key] || key;
+}
+
+function translateTraceEvent(eventType) {
+  const values = {
+    context_built: "构建上下文",
+    llm_response: "LLM 返回动作",
+    permission_decision: "权限判定",
+    tool_result: "工具执行",
+    gate_result: "Gate 校验",
+    run_summary: "运行总结",
+  };
+  return values[eventType] || "其他事件";
+}
+
+function describeTraceEvent(event) {
+  const payload = event.payload || {};
+  if (event.event_type === "context_built") {
+    return `策略 ${payload.strategy || "unknown"}，上下文 ${payload.context_chars ?? 0} 字符。`;
+  }
+  if (event.event_type === "llm_response") {
+    return "模型返回了下一步结构化动作。";
+  }
+  if (event.event_type === "permission_decision") {
+    return `${payload.action || "action"} ${payload.allowed ? "允许" : "拒绝"}：${payload.reason || "无原因"}`;
+  }
+  if (event.event_type === "tool_result") {
+    const result = payload.result || {};
+    return `${result.action || "tool"} ${result.ok ? "执行成功" : "执行失败"}：${result.message || "无消息"}`;
+  }
+  if (event.event_type === "gate_result") {
+    return `${payload.passed ? "通过" : "未通过"}：${payload.summary || "无摘要"}`;
+  }
+  if (event.event_type === "run_summary") {
+    const trust = payload.trust || {};
+    return `最终状态 ${translateTrustLevel(trust.status)}，原因：${(trust.reasons || []).join(", ") || "无"}`;
+  }
+  return event.event_type || "未分类事件";
 }
 
 function renderApprovalsDetail(content) {
