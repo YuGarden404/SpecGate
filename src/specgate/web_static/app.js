@@ -4,6 +4,7 @@ const state = {
   selectedProject: null,
   messages: [],
   currentRun: null,
+  runDebug: null,
   approvals: [],
   settings: null,
   activeTab: "status",
@@ -188,6 +189,7 @@ async function logout() {
     state.projects = [];
     state.selectedProject = null;
     state.currentRun = null;
+    state.runDebug = null;
     showView(false);
   }
 }
@@ -252,6 +254,7 @@ async function selectProject(projectId) {
   }
   state.selectedProject = project;
   state.currentRun = null;
+  state.runDebug = null;
   clearPolling();
   renderProjects();
   setText("project-title", project.name);
@@ -274,6 +277,7 @@ async function loadLatestProjectRun(project) {
   try {
     const payload = await apiJson(`/api/runs/${project.latest_run_id}`);
     state.currentRun = payload.run;
+    state.runDebug = null;
   } catch (error) {
     setMessage(`Latest run could not be loaded: ${error.message}`, true);
   }
@@ -364,6 +368,7 @@ async function startRun(event) {
       body: { prompt },
     });
     state.currentRun = payload.run;
+    state.runDebug = null;
     byId("run-prompt").value = "";
     await loadMessages(state.selectedProject.id);
     renderConversation();
@@ -387,6 +392,7 @@ async function refreshRun(runId) {
   try {
     const payload = await apiJson(`/api/runs/${runId}`);
     state.currentRun = payload.run;
+    state.runDebug = null;
     setRunPill(state.currentRun.status);
     renderDetail();
     if (!["queued", "running"].includes(state.currentRun.status)) {
@@ -421,6 +427,8 @@ function renderDetail() {
     renderPreviewDetail(content);
   } else if (state.activeTab === "report") {
     renderReportDetail(content);
+  } else if (state.activeTab === "audit") {
+    renderAuditDetail(content);
   } else if (state.activeTab === "approvals") {
     renderApprovalsDetail(content);
   } else if (state.activeTab === "settings") {
@@ -513,6 +521,83 @@ function renderPreviewDetail(content) {
     pre.textContent = "Select a project to inspect source.";
   }
   content.append(card);
+}
+
+async function loadRunDebug(runId) {
+  const payload = await apiJson(`/api/runs/${runId}/debug`);
+  state.runDebug = payload.debug;
+  return state.runDebug;
+}
+
+function renderAuditDetail(content) {
+  const card = el("section", { className: "detail-card stack" });
+  card.append(el("h2", {}, ["Audit / Debug"]));
+  const run = state.currentRun;
+  if (!run) {
+    card.append(el("p", { className: "muted" }, ["No run is available to inspect."]));
+    content.append(card);
+    return;
+  }
+
+  const summary = el("div", { className: "audit-summary" }, ["Loading audit data..."]);
+  const pre = el("pre", { className: "source-view" }, [""]);
+  card.append(summary, pre);
+  content.append(card);
+
+  const existing = state.runDebug && state.runDebug.run && state.runDebug.run.id === run.id;
+  const loader = existing ? Promise.resolve(state.runDebug) : loadRunDebug(run.id);
+  loader
+    .then((debug) => {
+      summary.replaceChildren(renderAuditSummary(debug));
+      pre.textContent = JSON.stringify(debug, null, 2);
+    })
+    .catch((error) => {
+      summary.textContent = `Audit data is not available: ${error.message}`;
+      pre.textContent = "";
+    });
+}
+
+function renderAuditSummary(debug) {
+  const wrapper = el("div", { className: "audit-summary" });
+  const summary = debug.summary || {};
+  const trace = debug.trace || {};
+  const evidence = debug.evidence || {};
+  const evidenceState = Object.entries(evidence)
+    .map(([key, value]) => `${key}: ${value ? "present" : "none"}`)
+    .join(", ");
+  const rows = [
+    ["Status", summary.status || "n/a"],
+    ["Trust", summary.trust_level || "n/a"],
+    ["Artifacts", String(summary.artifact_count ?? 0)],
+    ["Approvals", String(summary.approval_count ?? 0)],
+    ["Trace events", `${summary.trace_event_count ?? 0}${trace.truncated ? " (truncated)" : ""}`],
+    ["Evidence", evidenceState || "none"],
+  ];
+  const dl = el("dl", { className: "detail-grid" });
+  for (const [label, value] of rows) {
+    dl.append(el("dt", {}, [label]), el("dd", {}, [value]));
+  }
+  wrapper.append(dl);
+
+  const links = el("div", { className: "audit-links" });
+  for (const artifact of debug.artifacts || []) {
+    if (artifact.download_url && artifact.exists) {
+      links.append(
+        el(
+          "a",
+          {
+            href: artifact.download_url,
+            download: artifact.kind === "zip" ? "result.zip" : "index.html",
+          },
+          [`Download ${artifact.kind}`],
+        ),
+      );
+    }
+  }
+  if (links.childElementCount) {
+    wrapper.append(links);
+  }
+  return wrapper;
 }
 
 function renderApprovalsDetail(content) {
@@ -689,6 +774,7 @@ window.SpecGateWeb = {
   startRun,
   loadLatestProjectRun,
   loadSettings,
+  loadRunDebug,
   approveApproval,
   denyApproval,
   resumeRun,

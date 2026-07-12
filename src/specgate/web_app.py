@@ -19,6 +19,7 @@ from specgate.web_auth import (
     get_user_by_session,
 )
 from specgate.web_db import connect_db, init_db
+from specgate.web_debug import build_run_debug
 from specgate.web_projects import create_manual_project, create_project_from_zip, project_paths
 from specgate.web_runs import create_run, get_run, resume_run_once, start_run_background
 from specgate.web_settings import clear_api_key, get_settings, update_settings, upsert_api_key
@@ -253,6 +254,14 @@ def create_app(
         except ValueError as exc:
             raise _http_error_for_value_error(exc) from exc
         return {"run": _run_dict(run)}
+
+    @app.get("/api/runs/{run_id}/debug")
+    def read_run_debug(run_id: int, user=Depends(current_user)) -> dict[str, Any]:
+        try:
+            debug = build_run_debug(app.state.db_path, app.state.data_root, int(user["id"]), run_id)
+        except ValueError as exc:
+            raise _http_error_for_value_error(exc) from exc
+        return {"debug": debug}
 
     @app.get("/api/runs/{run_id}/artifacts/index")
     def get_index_artifact(run_id: int, user=Depends(current_user)):

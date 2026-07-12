@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from specgate.web_app import create_app
 from specgate.web_db import connect_db
+from specgate.web_runs import execute_run_once
 
 
 class WebAppTests(unittest.TestCase):
@@ -158,6 +159,28 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(fetched.json()["run"]["status"], "queued")
         self.assertNotIn("index_artifact_path", fetched.json()["run"])
         self.assertNotIn("zip_artifact_path", fetched.json()["run"])
+
+    def test_run_debug_endpoint_returns_backend_audit_payload(self):
+        client, app = self.make_client()
+        self.register(client)
+        project = self.create_project(client)
+        with patch("specgate.web_app.start_run_background"):
+            run = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "Build the result"},
+            ).json()["run"]
+        execute_run_once(app.state.db_path, app.state.data_root, run["id"])
+
+        response = client.get(f"/api/runs/{run['id']}/debug")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        debug = response.json()["debug"]
+        self.assertEqual(debug["run"]["id"], run["id"])
+        self.assertEqual(debug["project"]["id"], project["id"])
+        self.assertEqual(debug["summary"]["status"], "completed")
+        self.assertIn("artifacts", debug)
+        self.assertIn("trace", debug)
+        self.assertIn("evidence", debug)
 
     def test_settings_can_be_updated_and_api_key_cleared(self):
         client, _app = self.make_client()

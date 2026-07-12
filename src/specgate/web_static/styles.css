@@ -253,7 +253,7 @@ label {
 
 .detail-tabs {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   border-bottom: 1px solid var(--line);
   padding: 0.65rem;
   gap: 0.35rem;
@@ -308,6 +308,17 @@ label {
   color: #26312d;
   background: #f6f8f5;
   white-space: pre-wrap;
+}
+
+.audit-summary {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.audit-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
 }
 
 .approval-item {

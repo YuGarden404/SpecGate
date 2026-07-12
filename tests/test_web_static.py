@@ -41,6 +41,10 @@ class WebStaticTests(unittest.TestCase):
         html = read_static("index.html")
         self.assertIn('data-tab="report"', html)
 
+    def test_index_contains_audit_detail_tab(self) -> None:
+        html = read_static("index.html")
+        self.assertIn('data-tab="audit"', html)
+
     def test_index_version_tags_static_assets(self) -> None:
         html = read_static("index.html")
 
@@ -65,6 +69,13 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('state.activeTab === "report"', app_js)
         self.assertIn("function renderReportDetail", app_js)
         self.assertIn("latest_run_id", app_js)
+
+    def test_app_contains_audit_render_workflow(self) -> None:
+        app_js = read_static("app.js")
+        self.assertIn('state.activeTab === "audit"', app_js)
+        self.assertIn("async function loadRunDebug", app_js)
+        self.assertIn("function renderAuditDetail", app_js)
+        self.assertIn("/debug", app_js)
 
     def test_app_does_not_execute_artifact_html_in_same_origin_iframe(self) -> None:
         app_js = read_static("app.js").lower()
