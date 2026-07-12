@@ -25,6 +25,10 @@ body {
   background: var(--bg);
 }
 
+[hidden] {
+  display: none !important;
+}
+
 button,
 input,
 select,

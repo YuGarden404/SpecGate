@@ -41,6 +41,12 @@ class WebStaticTests(unittest.TestCase):
         html = read_static("index.html")
         self.assertIn('data-tab="report"', html)
 
+    def test_index_version_tags_static_assets(self) -> None:
+        html = read_static("index.html")
+
+        self.assertIn('/styles.css?v=', html)
+        self.assertIn('/app.js?v=', html)
+
     def test_app_exports_required_workflow_functions(self) -> None:
         app_js = read_static("app.js")
         for function_name in (
@@ -69,6 +75,12 @@ class WebStaticTests(unittest.TestCase):
         for selector in (".sidebar", ".conversation", ".detail-panel", ".composer"):
             with self.subTest(selector=selector):
                 self.assertIn(selector, css)
+
+    def test_styles_preserve_hidden_attribute_for_view_switching(self) -> None:
+        css = read_static("styles.css")
+
+        self.assertIn("[hidden]", css)
+        self.assertIn("display: none", css)
 
 
 if __name__ == "__main__":
