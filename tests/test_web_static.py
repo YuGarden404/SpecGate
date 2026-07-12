@@ -127,13 +127,13 @@ class WebStaticTests(unittest.TestCase):
                     rf"<textarea\b[^>]*\bname\s*=\s*['\"]{re.escape(field_name)}['\"]",
                 )
 
-    def test_index_contains_report_detail_tab(self) -> None:
+    def test_index_contains_report_detail_view_menu_item(self) -> None:
         html = read_static("index.html")
-        self.assertIn('data-tab="report"', html)
+        self.assertIn('data-detail-view="detail-report"', html)
 
-    def test_index_contains_audit_detail_tab(self) -> None:
+    def test_index_contains_audit_detail_view_menu_item(self) -> None:
         html = read_static("index.html")
-        self.assertIn('data-tab="audit"', html)
+        self.assertIn('data-detail-view="detail-audit"', html)
 
     def test_index_version_tags_static_assets(self) -> None:
         html = read_static("index.html")
