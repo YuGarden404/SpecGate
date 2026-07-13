@@ -252,14 +252,9 @@ def read_approval_queue_if_present(
             "invalid_path",
         ) from exc
 
-    scan = workspace_fs.scan_workspace_files(root)
+    scan = _scan_approval_queue_files(root)
     for rejection in scan.rejections:
         if relative_path == rejection.path or relative_path.startswith(f"{rejection.path}/"):
-            if rejection.rule_family == "path_race":
-                state = workspace_fs.workspace_file_state(root, relative_path)
-                if not state.exists:
-                    return None
-                return read_existing_approval_queue(absolute_path)
             raise workspace_fs.WorkspacePathError(
                 "approval queue path could not be inspected safely",
                 rejection.rule_family,
@@ -268,6 +263,15 @@ def read_approval_queue_if_present(
     if relative_path not in scan.files:
         return None
     return read_existing_approval_queue(absolute_path)
+
+
+def _scan_approval_queue_files(root: Path) -> workspace_fs.WorkspaceScanResult:
+    if os.name == "nt":
+        return workspace_fs.WorkspaceScanResult(
+            list(workspace_fs.iter_workspace_files(root)),
+            [],
+        )
+    return workspace_fs.scan_workspace_files(root)
 
 
 def _parse_approval_queue_content(content: str) -> ApprovalQueue:
