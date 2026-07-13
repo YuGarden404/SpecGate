@@ -4,7 +4,6 @@ import errno
 import json
 import os
 import shutil
-import tempfile
 import warnings
 from pathlib import Path
 
@@ -14,6 +13,12 @@ else:
     import fcntl
 
 from specgate.web_projects import ProjectPaths, RunPaths, web_run_paths
+from specgate.workspace_fs import (
+    WorkspacePathError,
+    copy_workspace_tree,
+    publish_workspace_snapshot,
+    read_workspace_text,
+)
 
 
 class RunStorageCleanupError(RuntimeError):
@@ -112,17 +117,19 @@ class RunPublicationLock(_RunPhaseLock):
 def initialize_run_storage(project: ProjectPaths, run_id: int) -> RunPaths:
     run = web_run_paths(project, run_id)
     project.runs.mkdir(parents=True, exist_ok=True)
-    if run.root.exists():
-        raise RunStorageTargetExists(f"run storage already exists: {run.root}")
-
-    temporary_root = Path(tempfile.mkdtemp(prefix=f".{run_id}.tmp-", dir=project.runs))
     try:
-        _write_ownership_marker(temporary_root, run_id)
-        shutil.copytree(project.workspace, temporary_root / "workspace")
-        (temporary_root / "audit").mkdir()
-        (temporary_root / "approvals").mkdir()
-        (temporary_root / "artifacts").mkdir()
-        _publish_initialized_storage(temporary_root, run.root, run_id)
+        publish_workspace_snapshot(
+            run.root,
+            source_trees=((project.workspace, "workspace"),),
+            directories=("audit", "approvals", "artifacts"),
+            files=((_OWNERSHIP_MARKER, _ownership_marker_bytes(run_id)),),
+        )
+    except (FileExistsError, WorkspacePathError) as exc:
+        if isinstance(exc, WorkspacePathError) and str(exc) != (
+            "workspace snapshot destination already exists"
+        ):
+            raise
+        raise RunStorageTargetExists(f"run storage already exists: {run.root}") from exc
     except Exception as exc:
         _add_owned_cleanup_failure_note(
             exc,
@@ -130,31 +137,8 @@ def initialize_run_storage(project: ProjectPaths, run_id: int) -> RunPaths:
             run_id,
             "run initialization cleanup failed",
         )
-        _add_owned_cleanup_failure_note(
-            exc,
-            temporary_root,
-            run_id,
-            "run initialization cleanup failed",
-        )
         raise
     return run
-
-
-def _publish_initialized_storage(temporary_root: Path, target_root: Path, run_id: int) -> None:
-    try:
-        temporary_root.rename(target_root)
-        return
-    except PermissionError as exc:
-        if os.name != "nt" or getattr(exc, "winerror", None) != 5:
-            raise
-
-    if _path_exists(target_root):
-        raise RunStorageTargetExists(f"run storage already exists: {target_root}")
-
-    target_root.mkdir()
-    _write_ownership_marker(target_root, run_id)
-    shutil.copytree(temporary_root, target_root, dirs_exist_ok=True)
-    _remove_owned_tree(temporary_root, run_id, "run storage fallback cleanup failed")
 
 
 def remove_run_storage(project: ProjectPaths, run_id: int) -> None:
@@ -166,8 +150,8 @@ def remove_run_storage(project: ProjectPaths, run_id: int) -> None:
 def validate_run_storage_ownership(project: ProjectPaths, run_id: int) -> dict[str, int]:
     run = web_run_paths(project, run_id)
     try:
-        marker = json.loads((run.root / _OWNERSHIP_MARKER).read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        marker = json.loads(read_workspace_text(run.root, _OWNERSHIP_MARKER))
+    except (OSError, UnicodeError, json.JSONDecodeError, WorkspacePathError) as exc:
         raise RunStorageOwnershipError("run storage ownership marker is invalid") from exc
     expected = {"run_id": run_id, "schema_version": _OWNERSHIP_SCHEMA_VERSION}
     if marker != expected:
@@ -176,7 +160,9 @@ def validate_run_storage_ownership(project: ProjectPaths, run_id: int) -> dict[s
 
 
 def cleanup_interrupted_run_storage(project: ProjectPaths, run_id: int) -> None:
-    candidates = sorted(project.runs.glob(f".{run_id}.tmp-*"))
+    candidates = sorted(
+        (*project.runs.glob(f".{run_id}.tmp-*"), *project.runs.glob(f".{run_id}.specgate-copy-*"))
+    )
     run = web_run_paths(project, run_id)
     if _path_exists(run.root):
         candidates.append(run.root)
@@ -201,7 +187,7 @@ def promote_run_workspace(project: ProjectPaths, run_id: int) -> None:
         return
 
     try:
-        shutil.copytree(run.workspace, next_workspace)
+        copy_workspace_tree(run.workspace, next_workspace)
         project.workspace.rename(backup_workspace)
         try:
             next_workspace.rename(project.workspace)
@@ -255,20 +241,17 @@ def _remove_tree_required(path: Path, context: str) -> None:
         raise RunStorageCleanupError(f"{context}: {exc}") from exc
 
 
-def _write_ownership_marker(root: Path, run_id: int) -> None:
-    (root / _OWNERSHIP_MARKER).write_text(
-        json.dumps(
-            {"run_id": run_id, "schema_version": _OWNERSHIP_SCHEMA_VERSION},
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
+def _ownership_marker_bytes(run_id: int) -> bytes:
+    return json.dumps(
+        {"run_id": run_id, "schema_version": _OWNERSHIP_SCHEMA_VERSION},
+        sort_keys=True,
+    ).encode("utf-8")
 
 
 def _has_matching_ownership_marker(root: Path, run_id: int) -> bool:
     try:
-        marker = json.loads((root / _OWNERSHIP_MARKER).read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+        marker = json.loads(read_workspace_text(root, _OWNERSHIP_MARKER))
+    except (OSError, UnicodeError, json.JSONDecodeError, WorkspacePathError):
         return False
     return marker == {"run_id": run_id, "schema_version": _OWNERSHIP_SCHEMA_VERSION}
 

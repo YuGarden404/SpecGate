@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import specgate.run_storage as run_storage
+import specgate.workspace_fs as workspace_fs
 from specgate.run_storage import (
     RunStorageCleanupError,
     initialize_run_storage,
@@ -15,6 +16,7 @@ from specgate.run_storage import (
     remove_run_storage,
 )
 from specgate.web_projects import RunPaths, project_paths, web_run_paths
+from specgate.workspace_fs import WorkspacePathError
 
 
 class RunStorageTests(unittest.TestCase):
@@ -119,23 +121,49 @@ class RunStorageTests(unittest.TestCase):
         self.assertFalse((run.workspace / self.ownership_marker).exists())
         self.assertFalse((run.artifacts / self.ownership_marker).exists())
 
-    @unittest.skipUnless(os.name == "nt", "Windows fallback")
-    def test_initialize_run_storage_falls_back_to_owned_copy_when_windows_rename_is_denied(self):
+    def test_initialize_rejects_mocked_reparse_workspace_root(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("trusted", encoding="utf-8")
+        external = project.root.parent / "external"
+        external.mkdir()
+        sentinel = external / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+        real_is_link_like = workspace_fs.is_link_like
+
+        def mark_workspace_reparse(path):
+            if Path(path) == project.workspace:
+                return True
+            return real_is_link_like(path)
+
+        with patch(
+            "specgate.workspace_fs.is_link_like",
+            side_effect=mark_workspace_reparse,
+        ):
+            with self.assertRaises(WorkspacePathError) as raised:
+                initialize_run_storage(project, 11)
+
+        self.assertEqual(raised.exception.rule_family, "reparse_point")
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
+        self.assertFalse(web_run_paths(project, 11).root.exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows publication failure")
+    def test_initialize_run_storage_fails_closed_when_windows_rename_is_denied(self):
         project = self.make_project()
         (project.workspace / "index.html").write_text("v1", encoding="utf-8")
         denied = PermissionError(13, "rename denied")
         denied.winerror = 5
 
-        with patch.object(Path, "rename", autospec=True, side_effect=denied) as rename:
-            run = initialize_run_storage(project, 11)
+        with patch(
+            "specgate.workspace_fs._rename_staging_noreplace",
+            side_effect=denied,
+        ):
+            with self.assertRaises(WorkspacePathError) as raised:
+                initialize_run_storage(project, 11)
 
-        self.assertEqual(rename.call_count, 1)
-        self.assertEqual((run.workspace / "index.html").read_text(encoding="utf-8"), "v1")
-        self.assertEqual(
-            json.loads((run.root / self.ownership_marker).read_text(encoding="utf-8")),
-            {"run_id": 11, "schema_version": 1},
-        )
-        self.assertEqual(list(project.runs.glob(".11.tmp-*")), [])
+        self.assertEqual(raised.exception.rule_family, "path_race")
+        self.assertFalse(web_run_paths(project, 11).root.exists())
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v1")
+        self.assertEqual(len(list(project.runs.glob(".11.specgate-copy-*"))), 1)
 
     def test_initialize_run_storage_rejects_existing_target(self):
         project = self.make_project()
@@ -153,40 +181,29 @@ class RunStorageTests(unittest.TestCase):
     def test_initialize_run_storage_cleans_temporary_directory_on_copy_failure(self):
         project = self.make_project()
 
-        def fail_after_partial_copy(source, destination):
-            destination.mkdir()
-            (destination / "partial.txt").write_text("partial", encoding="utf-8")
-            raise OSError("copy failed")
-
-        with patch("specgate.run_storage.shutil.copytree", side_effect=fail_after_partial_copy):
+        with patch(
+            "specgate.run_storage.publish_workspace_snapshot",
+            side_effect=OSError("copy failed"),
+        ):
             with self.assertRaisesRegex(OSError, "copy failed"):
                 initialize_run_storage(project, 11)
 
         self.assertEqual(list(project.runs.iterdir()), [])
 
-    def test_initialize_run_storage_preserves_copy_error_when_temporary_cleanup_fails(self):
+    def test_initialize_run_storage_retains_uncertain_staging_without_recursive_cleanup(self):
         project = self.make_project()
-
-        def fail_after_partial_copy(source, destination):
-            destination.mkdir()
-            (destination / "partial.txt").write_text("partial", encoding="utf-8")
-            raise OSError("copy failed")
-
+        denied = PermissionError(13, "rename denied")
+        denied.winerror = 5
         with (
-            patch("specgate.run_storage.shutil.copytree", side_effect=fail_after_partial_copy),
-            patch("specgate.run_storage.shutil.rmtree", side_effect=OSError("temporary cleanup failed")),
+            patch("specgate.workspace_fs._rename_staging_noreplace", side_effect=denied),
+            patch("specgate.run_storage.shutil.rmtree") as rmtree,
         ):
-            try:
+            with self.assertRaises(WorkspacePathError):
                 initialize_run_storage(project, 11)
-            except Exception as exc:
-                error = exc
-            else:
-                self.fail("initialize_run_storage did not fail")
 
-        self.assertEqual(str(error), "copy failed")
-        self.assertTrue(
-            any("temporary cleanup failed" in note for note in getattr(error, "__notes__", ()))
-        )
+        rmtree.assert_not_called()
+        self.assertFalse(web_run_paths(project, 11).root.exists())
+        self.assertEqual(len(list(project.runs.glob(".11.specgate-copy-*"))), 1)
 
     def test_initialize_run_storage_leaves_unowned_stale_temporary_directory(self):
         project = self.make_project()

@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import specgate.web_runs as web_runs
 import specgate.run_storage as run_storage
+import specgate.workspace_fs as workspace_fs
 from specgate.run_storage import (
     initialize_run_storage as initialize_run_storage_real,
     promote_run_workspace as promote_run_workspace_real,
@@ -21,6 +22,7 @@ from specgate.web_db import connect_db, init_db
 from specgate.web_projects import create_manual_project, project_paths, web_run_paths
 from specgate.web_runs import ActiveRunConflict, create_run, execute_run_once, get_run
 from specgate.web_settings import update_settings
+from specgate.workspace_fs import WorkspacePathError
 
 
 class WebRunsTests(unittest.TestCase):
@@ -535,16 +537,14 @@ class WebRunsTests(unittest.TestCase):
     def test_create_run_keeps_owned_partial_storage_recoverable_when_initial_cleanup_fails(self):
         db_path, data_root, user, project = self.make_context()
 
-        def fail_after_partial_copy(source, destination):
-            destination.mkdir()
-            (destination / "partial.txt").write_text("partial", encoding="utf-8")
-            raise OSError("copy failed")
-
         with (
-            patch("specgate.run_storage.shutil.copytree", side_effect=fail_after_partial_copy),
+            patch(
+                "specgate.workspace_fs._rename_staging_noreplace",
+                side_effect=OSError("copy failed"),
+            ),
             patch("specgate.run_storage.shutil.rmtree", side_effect=OSError("cleanup failed")),
         ):
-            with self.assertRaisesRegex(OSError, "copy failed"):
+            with self.assertRaises(WorkspacePathError) as raised:
                 create_run(
                     db_path,
                     project["id"],
@@ -552,9 +552,10 @@ class WebRunsTests(unittest.TestCase):
                     "Build the result",
                     data_root=data_root,
                 )
+        self.assertEqual(raised.exception.rule_family, "path_race")
 
         paths = project_paths(data_root, user["id"], project["id"])
-        temporary_roots = list(paths.runs.glob(".1.tmp-*"))
+        temporary_roots = list(paths.runs.glob(".1.specgate-copy-*"))
         self.assertEqual(len(temporary_roots), 1)
         self.assertTrue((temporary_roots[0] / self.ownership_marker).is_file())
         with closing(connect_db(db_path)) as conn:
@@ -567,7 +568,7 @@ class WebRunsTests(unittest.TestCase):
 
         with closing(connect_db(db_path)) as conn:
             self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
-        self.assertEqual(list(paths.runs.glob(".1.tmp-*")), [])
+        self.assertEqual(list(paths.runs.glob(".1.specgate-copy-*")), [])
 
     def test_slow_initialization_does_not_hold_write_lock_across_projects(self):
         db_path, data_root, user, first_project = self.make_context()
@@ -721,6 +722,29 @@ class WebRunsTests(unittest.TestCase):
             [(row["kind"], row["path"]) for row in artifacts],
             [("index", str(latest_index)), ("zip", str(result_zip))],
         )
+
+    def test_publish_artifacts_rejects_mocked_reparse_artifact_root(self):
+        _db_path, data_root, user, project = self.make_context()
+        project_storage = project_paths(data_root, user["id"], project["id"])
+        paths = initialize_run_storage_real(project_storage, 99)
+        (paths.workspace / "index.html").write_text("trusted", encoding="utf-8")
+        real_is_link_like = workspace_fs.is_link_like
+
+        def mark_artifacts_reparse(path):
+            if Path(path) == paths.artifacts:
+                return True
+            return real_is_link_like(path)
+
+        with patch(
+            "specgate.workspace_fs.is_link_like",
+            side_effect=mark_artifacts_reparse,
+        ):
+            with self.assertRaises(WorkspacePathError) as raised:
+                web_runs._publish_artifacts(paths)
+
+        self.assertEqual(raised.exception.rule_family, "reparse_point")
+        self.assertFalse(paths.index_artifact.exists())
+        self.assertFalse(paths.zip_artifact.exists())
 
     def test_completed_run_is_prepared_as_publishing_before_workspace_promotion(self):
         db_path, data_root, user, project = self.make_context()

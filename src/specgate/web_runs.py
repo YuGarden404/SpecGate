@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
-import shutil
+import os
 import sqlite3
 import threading
 import zipfile
@@ -27,8 +28,15 @@ from specgate.runner import AgentRunner, RunResult
 from specgate.trace import redact
 from specgate.web_auth import utc_now
 from specgate.web_db import connect_db
-from specgate.web_projects import ProjectPaths, RunPaths, package_result_zip, project_paths, web_run_paths
+from specgate.web_projects import ProjectPaths, RunPaths, project_paths, web_run_paths
 from specgate.web_settings import get_settings
+from specgate.workspace_fs import (
+    open_workspace_file,
+    publish_workspace_bytes,
+    read_workspace_bytes,
+    read_workspace_text,
+    workspace_file_state,
+)
 
 
 ACTIVE_RUN_CONFLICT_MESSAGE = "该项目已有进行中的运行 / This project already has an active run"
@@ -899,13 +907,17 @@ def _validate_publication_storage(
     project: ProjectPaths,
     paths: RunPaths,
 ) -> None:
-    if not paths.workspace.is_dir():
-        raise ValueError("run workspace is required for publication recovery")
-    if not (paths.workspace / "index.html").is_file():
+    if not workspace_file_state(paths.workspace, "index.html").exists:
         raise ValueError("workspace index.html is required for publication recovery")
-    if run["index_artifact_path"] != str(paths.index_artifact) or not paths.index_artifact.is_file():
+    if run["index_artifact_path"] != str(paths.index_artifact) or not workspace_file_state(
+        paths.artifacts,
+        "index.html",
+    ).exists:
         raise ValueError("index.html artifact is required for publication recovery")
-    if run["zip_artifact_path"] != str(paths.zip_artifact) or not paths.zip_artifact.is_file():
+    if run["zip_artifact_path"] != str(paths.zip_artifact) or not workspace_file_state(
+        paths.artifacts,
+        "result.zip",
+    ).exists:
         raise ValueError("result.zip artifact is required for publication recovery")
 
     _validate_publication_manifest(project, paths, int(run["id"]))
@@ -942,16 +954,11 @@ def _write_and_validate_publication_manifest(
         "zip_index_sha256": hashlib.sha256(zip_index).hexdigest(),
     }
     manifest_path = paths.audit / "publication-manifest.json"
-    temporary_path = paths.audit / "publication-manifest.json.tmp"
-    try:
-        temporary_path.write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        temporary_path.replace(manifest_path)
-    finally:
-        if temporary_path.exists():
-            temporary_path.unlink()
+    publish_workspace_bytes(
+        paths.audit,
+        manifest_path.name,
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8"),
+    )
     _validate_publication_manifest(project, paths, run_id)
 
 
@@ -959,7 +966,7 @@ def _validate_publication_manifest(project: ProjectPaths, paths: RunPaths, run_i
     ownership = validate_run_storage_ownership(project, run_id)
     manifest_path = paths.audit / "publication-manifest.json"
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = json.loads(read_workspace_text(paths.audit, manifest_path.name))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("publication manifest is invalid") from exc
     expected = {
@@ -980,14 +987,17 @@ def _validate_publication_manifest(project: ProjectPaths, paths: RunPaths, run_i
 
 
 def _sha256_file(path: Path) -> str:
-    if not path.is_file():
-        raise ValueError(f"{path.name} is required for publication")
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    try:
+        content = read_workspace_bytes(path.parent, path.name)
+    except ValueError as exc:
+        raise ValueError(f"{path.name} is required for publication") from exc
+    return hashlib.sha256(content).hexdigest()
 
 
 def _read_publication_zip_index(path: Path) -> bytes:
     try:
-        with zipfile.ZipFile(path) as archive:
+        content = read_workspace_bytes(path.parent, path.name)
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
             if archive.namelist() != ["index.html"]:
                 raise ValueError("publication zip must contain only index.html")
             return archive.read("index.html")
@@ -1027,22 +1037,27 @@ def _mark_failed(db_path: Path, run_id: int, error_message: str) -> None:
 
 
 def _publish_artifacts(paths: RunPaths) -> tuple[Path, Path]:
-    source = paths.workspace / "index.html"
-    if not source.is_file():
+    try:
+        index_content = read_workspace_bytes(paths.workspace, "index.html")
+    except ValueError as exc:
         raise ValueError("index.html was not produced")
-    paths.artifacts.mkdir(parents=True, exist_ok=True)
     index_path = paths.index_artifact
-    shutil.copy2(source, index_path)
-    zip_path = package_result_zip(index_path, paths.zip_artifact)
+    publish_workspace_bytes(paths.artifacts, index_path.name, index_content)
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("index.html", index_content)
+    zip_path = paths.zip_artifact
+    publish_workspace_bytes(paths.artifacts, zip_path.name, archive_buffer.getvalue())
     return index_path, zip_path
 
 
 def _index_signature(path: Path) -> tuple[int, int, str] | None:
-    if not path.is_file():
+    if not workspace_file_state(path.parent, path.name).exists:
         return None
-    stat = path.stat()
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    return stat.st_mtime_ns, stat.st_size, digest
+    with open_workspace_file(path.parent, path.name) as handle:
+        file_stat = os.fstat(handle.fileno())
+        digest = hashlib.sha256(handle.read()).hexdigest()
+    return file_stat.st_mtime_ns, file_stat.st_size, digest
 
 
 def _record_artifacts(

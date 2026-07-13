@@ -9,6 +9,7 @@ import secrets
 import stat
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, Collection, Iterator
@@ -56,9 +57,19 @@ class WorkspaceScanResult:
 class _StagingOwnership:
     path: Path
     identity: tuple[int, int]
+    parent_path: Path
+    parent_identity: tuple[int, int]
+    trusted_parent: Path
     marker_path: Path
     marker_identity: tuple[int, int]
     token: str
+
+
+@dataclass(frozen=True)
+class _WorkspaceRootBinding:
+    path: Path
+    trusted_path: Path
+    identity: tuple[int, int]
 
 
 def normalize_workspace_relative(value: str) -> str:
@@ -104,6 +115,7 @@ def open_workspace_file(
     access: str = "read",
     *,
     create: bool = False,
+    _binding: _WorkspaceRootBinding | None = None,
 ) -> Iterator[BinaryIO]:
     normalized = normalize_workspace_relative(relative)
     if access not in {"read", "write"}:
@@ -115,6 +127,13 @@ def open_workspace_file(
     try:
         try:
             root_path, trusted_root, root_identity = _validate_root(Path(root))
+            if _binding is not None:
+                _validate_root_binding(
+                    root_path,
+                    trusted_root,
+                    root_identity,
+                    _binding,
+                )
             parts = normalized.split("/")
             if os.name == "nt":
                 descriptor = _open_windows_workspace_fd(
@@ -302,7 +321,7 @@ def copy_workspace_tree(
     destination: str | os.PathLike[str],
 ) -> None:
     source_path = Path(source)
-    directories, files = _scan_workspace(source_path)
+    source_binding, directories, files = _scan_bound_workspace(source_path)
 
     destination_path = Path(os.path.abspath(destination))
     ownership: _StagingOwnership | None = None
@@ -325,7 +344,7 @@ def copy_workspace_tree(
             write_workspace_bytes(
                 ownership.path,
                 relative,
-                read_workspace_bytes(source_path, relative),
+                _read_bound_workspace_bytes(source_binding, relative),
             )
         _publish_workspace_tree(ownership, destination_path)
         ownership = None
@@ -341,6 +360,169 @@ def copy_workspace_tree(
                 "path_race",
             ) from copy_error
         raise
+
+
+def publish_workspace_snapshot(
+    destination: str | os.PathLike[str],
+    *,
+    source_trees: Collection[tuple[str | os.PathLike[str], str]] = (),
+    directories: Collection[str] = (),
+    files: Collection[tuple[str, bytes]] = (),
+) -> None:
+    destination_path = Path(os.path.abspath(destination))
+    ownership: _StagingOwnership | None = None
+    try:
+        try:
+            destination_path.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            _reject_link_like(destination_path)
+            raise WorkspacePathError(
+                "workspace snapshot destination already exists",
+                "path_race",
+            )
+        ownership = _create_private_staging(destination_path)
+
+        for relative in directories:
+            _ensure_owned_workspace_directory(ownership, relative)
+        for source, prefix in source_trees:
+            normalized_prefix = normalize_workspace_relative(prefix)
+            source_path = Path(source)
+            source_binding, source_directories, source_files = _scan_bound_workspace(source_path)
+            _ensure_owned_workspace_directory(ownership, normalized_prefix)
+            for relative in source_directories:
+                _ensure_owned_workspace_directory(
+                    ownership,
+                    f"{normalized_prefix}/{relative}",
+                )
+            for relative in source_files:
+                _write_owned_workspace_bytes(
+                    ownership,
+                    f"{normalized_prefix}/{relative}",
+                    _read_bound_workspace_bytes(source_binding, relative),
+                )
+        for relative, content in files:
+            _write_owned_workspace_bytes(ownership, relative, content)
+
+        _publish_workspace_tree(ownership, destination_path)
+        ownership = None
+    except BaseException as publish_error:
+        if isinstance(publish_error, WorkspacePathError):
+            raise
+        if isinstance(publish_error, OSError):
+            raise WorkspacePathError(
+                "workspace snapshot failed during filesystem I/O",
+                "path_race",
+            ) from publish_error
+        raise
+
+
+def publish_workspace_bytes(
+    root: str | os.PathLike[str],
+    relative: str,
+    content: bytes,
+) -> None:
+    normalized = normalize_workspace_relative(relative)
+    root_path, trusted_path, identity = _validate_root(Path(root))
+    binding = _WorkspaceRootBinding(root_path, trusted_path, identity)
+    parts = normalized.split("/")
+    temporary_name = f".{parts[-1]}.specgate-publish-{secrets.token_hex(16)}"
+    temporary_relative = "/".join((*parts[:-1], temporary_name))
+
+    try:
+        write_workspace_bytes(root_path, temporary_relative, content)
+        _verify_bound_root(root_path, trusted_path, identity)
+        if workspace_file_state(root_path, normalized).exists:
+            raise WorkspacePathError(
+                "workspace publication target already exists",
+                "path_race",
+            )
+        _rename_bound_workspace_noreplace(
+            binding,
+            temporary_relative,
+            normalized,
+        )
+        _verify_bound_root(root_path, trusted_path, identity)
+        if _read_bound_workspace_bytes(binding, normalized) != content:
+            raise WorkspacePathError(
+                "workspace publication content could not be verified",
+                "path_race",
+            )
+    except WorkspacePathError:
+        raise
+    except OSError as exc:
+        raise WorkspacePathError(
+            "workspace file publication failed during filesystem I/O",
+            "path_race",
+        ) from exc
+
+
+def _rename_bound_workspace_noreplace(
+    binding: _WorkspaceRootBinding,
+    source_relative: str,
+    target_relative: str,
+) -> None:
+    source = normalize_workspace_relative(source_relative)
+    target = normalize_workspace_relative(target_relative)
+    _verify_bound_root(binding.path, binding.trusted_path, binding.identity)
+    _platform_rename_noreplace(
+        binding.path.joinpath(*source.split("/")),
+        binding.path.joinpath(*target.split("/")),
+    )
+    _verify_bound_root(binding.path, binding.trusted_path, binding.identity)
+
+
+def _ensure_owned_workspace_directory(
+    ownership: _StagingOwnership,
+    relative: str,
+) -> None:
+    _verify_owned_tree(ownership.path, ownership)
+    _ensure_workspace_directory(ownership.path, relative)
+    _verify_owned_tree(ownership.path, ownership)
+
+
+def _write_owned_workspace_bytes(
+    ownership: _StagingOwnership,
+    relative: str,
+    content: bytes,
+) -> None:
+    _verify_owned_tree(ownership.path, ownership)
+    write_workspace_bytes(ownership.path, relative, content)
+    _verify_owned_tree(ownership.path, ownership)
+
+
+def _scan_bound_workspace(
+    root: Path,
+) -> tuple[_WorkspaceRootBinding, list[str], list[str]]:
+    root_path, trusted_path, identity = _validate_root(root)
+    binding = _WorkspaceRootBinding(root_path, trusted_path, identity)
+    directories, files = _scan_workspace(root_path)
+    _verify_bound_root(root_path, trusted_path, identity)
+    return binding, directories, files
+
+
+def _read_bound_workspace_bytes(
+    binding: _WorkspaceRootBinding,
+    relative: str,
+) -> bytes:
+    try:
+        with open_workspace_file(
+            binding.path,
+            relative,
+            "read",
+            _binding=binding,
+        ) as handle:
+            content = handle.read()
+    except WorkspacePathError:
+        raise
+    except OSError as exc:
+        raise WorkspacePathError(
+            f"workspace file could not be read: {relative}",
+            "path_race",
+        ) from exc
+    _verify_bound_root(binding.path, binding.trusted_path, binding.identity)
+    return content
 
 
 def _scan_workspace(root: Path) -> tuple[list[str], list[str]]:
@@ -734,11 +916,13 @@ def _scan_windows_workspace_tolerant(
 
 
 def _create_private_staging(destination: Path) -> _StagingOwnership:
+    parent_path, trusted_parent, parent_identity = _validate_root(destination.parent)
     prefix = f".{destination.name}.specgate-copy-"
-    staging = Path(tempfile.mkdtemp(prefix=prefix, dir=destination.parent))
+    staging = Path(tempfile.mkdtemp(prefix=prefix, dir=parent_path))
+    _verify_bound_root(parent_path, trusted_parent, parent_identity)
     token = secrets.token_hex(32)
     marker_name = f".{staging.name}.owner-{secrets.token_hex(16)}"
-    marker_path = destination.parent / marker_name
+    marker_path = parent_path / marker_name
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     flags |= getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
     descriptor = os.open(marker_path, flags, 0o600)
@@ -747,6 +931,9 @@ def _create_private_staging(destination: Path) -> _StagingOwnership:
     return _StagingOwnership(
         path=staging,
         identity=_stat_identity(staging.lstat()),
+        parent_path=parent_path,
+        parent_identity=parent_identity,
+        trusted_parent=trusted_parent,
         marker_path=marker_path,
         marker_identity=_stat_identity(marker_path.lstat()),
         token=token,
@@ -760,7 +947,24 @@ def _publish_workspace_tree(
     _verify_owned_tree(ownership.path, ownership)
     renamed = False
     try:
-        _rename_staging_noreplace(ownership.path, destination)
+        for attempt in range(3):
+            try:
+                _rename_staging_noreplace(ownership.path, destination)
+                break
+            except PermissionError as exc:
+                if os.name != "nt" or getattr(exc, "winerror", None) != 5 or attempt == 2:
+                    raise
+                _verify_owned_tree(ownership.path, ownership)
+                try:
+                    destination.lstat()
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise WorkspacePathError(
+                        "workspace copy destination appeared during publication",
+                        "path_race",
+                    ) from exc
+                time.sleep(0.01 * (attempt + 1))
         renamed = True
         _verify_published_tree(
             destination,
@@ -770,6 +974,11 @@ def _publish_workspace_tree(
         )
         _finalize_ownership_marker(ownership)
         _verify_tree_identity(destination, ownership.identity)
+        _verify_bound_root(
+            ownership.parent_path,
+            ownership.trusted_parent,
+            ownership.parent_identity,
+        )
     except BaseException as publish_error:
         if renamed:
             _quarantine_unknown_tree(destination)
@@ -804,10 +1013,20 @@ def _verify_ownership_marker(
     token: str,
 ) -> None:
     marker_stat = marker_path.lstat()
+    try:
+        with open_workspace_file(marker_path.parent, marker_path.name) as marker:
+            opened_stat = os.fstat(marker.fileno())
+            marker_content = marker.read().decode("ascii")
+    except (OSError, UnicodeError) as exc:
+        raise WorkspacePathError(
+            "workspace copy ownership marker is uncertain",
+            "path_race",
+        ) from exc
     if (
         not stat.S_ISREG(marker_stat.st_mode)
         or _stat_identity(marker_stat) != expected_identity
-        or marker_path.read_text(encoding="ascii") != token
+        or _stat_identity(opened_stat) != expected_identity
+        or marker_content != token
     ):
         raise WorkspacePathError(
             "workspace copy ownership marker is uncertain",
@@ -816,12 +1035,51 @@ def _verify_ownership_marker(
 
 
 def _verify_owned_tree(path: Path, ownership: _StagingOwnership) -> None:
+    _verify_bound_root(
+        ownership.parent_path,
+        ownership.trusted_parent,
+        ownership.parent_identity,
+    )
     _verify_tree_identity(path, ownership.identity)
     _verify_ownership_marker(
         ownership.marker_path,
         ownership.marker_identity,
         ownership.token,
     )
+
+
+def _verify_bound_root(
+    path: Path,
+    trusted_path: Path,
+    expected_identity: tuple[int, int],
+) -> None:
+    _, current_trusted, current_identity = _validate_root(path)
+    if current_identity != expected_identity or os.path.normcase(
+        os.path.normpath(current_trusted)
+    ) != os.path.normcase(os.path.normpath(trusted_path)):
+        raise WorkspacePathError(
+            "workspace root identity changed during publication",
+            "path_race",
+        )
+
+
+def _validate_root_binding(
+    root_path: Path,
+    trusted_path: Path,
+    identity: tuple[int, int],
+    binding: _WorkspaceRootBinding,
+) -> None:
+    if (
+        os.path.normcase(os.path.normpath(root_path))
+        != os.path.normcase(os.path.normpath(binding.path))
+        or os.path.normcase(os.path.normpath(trusted_path))
+        != os.path.normcase(os.path.normpath(binding.trusted_path))
+        or identity != binding.identity
+    ):
+        raise WorkspacePathError(
+            "workspace root identity changed after scan",
+            "path_race",
+        )
 
 
 def _verify_published_tree(
@@ -1296,7 +1554,8 @@ def _stat_identity(file_stat: os.stat_result | Any) -> tuple[int, int]:
 
 def _windows_handle_identity(handle: int, information: Any) -> tuple[int, int]:
     file_index = (information.file_index_high << 32) | information.file_index_low
-    return _windows_handle_volume_serial(handle), file_index
+    volume_serial = _windows_handle_volume_serial(handle) & 0xFFFFFFFF
+    return volume_serial, file_index
 
 
 def _windows_handle_volume_serial(handle: int) -> int:

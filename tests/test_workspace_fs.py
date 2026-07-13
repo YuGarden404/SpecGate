@@ -18,6 +18,8 @@ from specgate.workspace_fs import (
     is_link_like,
     normalize_workspace_relative,
     open_workspace_file,
+    publish_workspace_bytes,
+    publish_workspace_snapshot,
     read_workspace_bytes,
     read_workspace_text,
     workspace_file_state,
@@ -552,6 +554,248 @@ class WorkspaceFileIOTests(unittest.TestCase):
 
 
 class WorkspaceScanAndCopyTests(unittest.TestCase):
+    def test_publishes_workspace_bytes_atomically(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            publish_workspace_bytes(root, "publication-manifest.json", b'{"run_id": 11}')
+
+            self.assertEqual(
+                (root / "publication-manifest.json").read_bytes(),
+                b'{"run_id": 11}',
+            )
+            self.assertEqual(
+                [path.name for path in root.iterdir()],
+                ["publication-manifest.json"],
+            )
+
+    def test_workspace_bytes_rejects_root_replaced_at_rename_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "audit"
+            replacement = base / "replacement-audit"
+            displaced = base / "displaced-audit"
+            root.mkdir()
+            replacement.mkdir()
+            real_rename = getattr(workspace_fs, "_rename_bound_workspace_noreplace", None)
+            staging_name = None
+
+            def replace_root_before_rename(binding, source_relative, target_relative):
+                nonlocal staging_name
+                staging_name = source_relative
+                root.rename(displaced)
+                replacement.rename(root)
+                write_workspace_text(root, source_relative, "EXTERNAL_SENTINEL")
+                if real_rename is None:
+                    raise AssertionError("bound rename helper was not called")
+                return real_rename(binding, source_relative, target_relative)
+
+            with mock.patch.object(
+                workspace_fs,
+                "_rename_bound_workspace_noreplace",
+                create=True,
+                side_effect=replace_root_before_rename,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    publish_workspace_bytes(
+                        root,
+                        "publication-manifest.json",
+                        b'{"run_id": 11}',
+                    )
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertIsNotNone(staging_name)
+            self.assertFalse((root / "publication-manifest.json").exists())
+            self.assertEqual(
+                read_workspace_text(root, staging_name),
+                "EXTERNAL_SENTINEL",
+            )
+
+    def test_publishes_composed_workspace_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "source"
+            destination = base / "run"
+            (source / "nested").mkdir(parents=True)
+            (source / "nested" / "data.txt").write_text("data", encoding="utf-8")
+
+            publish_workspace_snapshot(
+                destination,
+                source_trees=((source, "workspace"),),
+                directories=("audit", "artifacts"),
+                files=(("owner.json", b'{"run_id": 11}'),),
+            )
+
+            self.assertEqual(
+                (destination / "workspace" / "nested" / "data.txt").read_text(
+                    encoding="utf-8"
+                ),
+                "data",
+            )
+            self.assertTrue((destination / "audit").is_dir())
+            self.assertTrue((destination / "artifacts").is_dir())
+            self.assertEqual((destination / "owner.json").read_bytes(), b'{"run_id": 11}')
+
+    def test_snapshot_rejects_linked_destination_parent_without_writing_external_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            external = base / "external"
+            external.mkdir()
+            sentinel = external / "sentinel.txt"
+            sentinel.write_text("external sentinel", encoding="utf-8")
+            runs = base / "runs"
+            try:
+                os.symlink(external, runs, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"directory symlink unavailable: {exc}")
+
+            with self.assertRaises(WorkspacePathError) as raised:
+                publish_workspace_snapshot(
+                    runs / "11",
+                    files=(("owner.json", b'{"run_id": 11}'),),
+                )
+
+            self.assertIn(raised.exception.rule_family, {"linked_path", "reparse_point"})
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
+            self.assertFalse((external / "11").exists())
+            self.assertEqual(sorted(path.name for path in external.iterdir()), ["sentinel.txt"])
+
+    def test_snapshot_rejects_mocked_reparse_destination_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            runs = base / "runs"
+            runs.mkdir()
+            destination = runs / "11"
+            real_is_link_like = workspace_fs.is_link_like
+
+            def mark_runs_reparse(path):
+                if Path(path) == runs:
+                    return True
+                return real_is_link_like(path)
+
+            with mock.patch.object(
+                workspace_fs,
+                "is_link_like",
+                side_effect=mark_runs_reparse,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    publish_workspace_snapshot(
+                        destination,
+                        files=(("owner.json", b'{"run_id": 11}'),),
+                    )
+
+            self.assertEqual(raised.exception.rule_family, "reparse_point")
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(runs.iterdir()), [])
+
+    def test_snapshot_rejects_destination_parent_replaced_before_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            runs = base / "runs"
+            replacement_parent = base / "replacement-runs"
+            displaced_parent = base / "displaced-runs"
+            runs.mkdir()
+            replacement_parent.mkdir()
+            destination = runs / "11"
+            real_write = getattr(workspace_fs, "_write_owned_workspace_bytes", None)
+            replaced = False
+
+            def replace_parent_before_write(ownership, relative, content):
+                nonlocal replaced
+                if not replaced:
+                    replaced = True
+                    staging_name = ownership.path.name
+                    runs.rename(displaced_parent)
+                    replacement_parent.rename(runs)
+                    replacement_staging = runs / staging_name
+                    replacement_staging.mkdir()
+                    (replacement_staging / "sentinel.txt").write_text(
+                        "external sentinel",
+                        encoding="utf-8",
+                    )
+                if real_write is None:
+                    raise AssertionError("owned writer was not called")
+                return real_write(ownership, relative, content)
+
+            with mock.patch.object(
+                workspace_fs,
+                "_write_owned_workspace_bytes",
+                create=True,
+                side_effect=replace_parent_before_write,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    publish_workspace_snapshot(
+                        destination,
+                        files=(("owner.json", b'{"run_id": 11}'),),
+                    )
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertTrue(replaced)
+            self.assertFalse(destination.exists())
+            replacement_staging = next(runs.glob(".11.specgate-copy-*"))
+            self.assertEqual(
+                sorted(path.name for path in replacement_staging.iterdir()),
+                ["sentinel.txt"],
+            )
+            self.assertEqual(
+                (replacement_staging / "sentinel.txt").read_text(encoding="utf-8"),
+                "external sentinel",
+            )
+
+    def test_snapshot_rejects_source_root_replaced_after_scan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "source"
+            replacement = base / "replacement-source"
+            displaced = base / "displaced-source"
+            destination = base / "run"
+            source.mkdir()
+            replacement.mkdir()
+            (source / "index.html").write_text("trusted", encoding="utf-8")
+            (replacement / "index.html").write_text(
+                "EXTERNAL_CONTENT_SENTINEL",
+                encoding="utf-8",
+            )
+            real_read = getattr(workspace_fs, "_read_bound_workspace_bytes", None)
+            replaced = False
+
+            def replace_source_before_read(binding, relative):
+                nonlocal replaced
+                if not replaced:
+                    replaced = True
+                    source.rename(displaced)
+                    replacement.rename(source)
+                if real_read is None:
+                    raise AssertionError("bound reader was not called")
+                return real_read(binding, relative)
+
+            with mock.patch.object(
+                workspace_fs,
+                "_read_bound_workspace_bytes",
+                create=True,
+                side_effect=replace_source_before_read,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    publish_workspace_snapshot(
+                        destination,
+                        source_trees=((source, "workspace"),),
+                    )
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertTrue(replaced)
+            self.assertFalse(destination.exists())
+            self.assertEqual(
+                (source / "index.html").read_text(encoding="utf-8"),
+                "EXTERNAL_CONTENT_SENTINEL",
+            )
+            staged_content = "".join(
+                path.read_text(encoding="utf-8", errors="ignore")
+                for staging in base.glob(".run.specgate-copy-*")
+                for path in staging.rglob("*")
+                if path.is_file()
+            )
+            self.assertNotIn("EXTERNAL_CONTENT_SENTINEL", staged_content)
+
     def test_tolerant_scan_prunes_excluded_directory_without_enumerating_children(self):
         self.assertTrue(hasattr(workspace_fs, "scan_workspace_files"))
         with tempfile.TemporaryDirectory() as tmp:
