@@ -16,12 +16,7 @@ from specgate.approvals import (
     target_state_matches,
 )
 from specgate.policy import WorkspacePolicy
-from specgate.workspace_fs import (
-    WorkspaceFileState,
-    WorkspacePathError,
-    WorkspaceScanRejection,
-    WorkspaceScanResult,
-)
+from specgate.workspace_fs import WorkspacePathError
 
 
 class ApprovalTests(unittest.TestCase):
@@ -39,16 +34,17 @@ class ApprovalTests(unittest.TestCase):
             with self.assertRaises(WorkspacePathError):
                 approvals_module.read_existing_approval_queue(queue_path)
 
-    def test_read_queue_if_present_safely_handles_missing_parent(self):
+    def test_read_queue_if_present_handles_explicitly_missing_queue(self):
         self.assertTrue(hasattr(approvals_module, "read_approval_queue_if_present"))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with (
                 mock.patch(
-                    "specgate.approvals._scan_approval_queue_files",
-                    return_value=WorkspaceScanResult([], []),
-                ) as scan,
-                mock.patch("specgate.workspace_fs.workspace_file_state") as state,
+                    "specgate.workspace_fs.read_optional_workspace_text",
+                    return_value=None,
+                    create=True,
+                ) as read,
+                mock.patch("specgate.workspace_fs.scan_workspace_files") as scan,
             ):
                 queue = approvals_module.read_approval_queue_if_present(
                     root,
@@ -56,47 +52,70 @@ class ApprovalTests(unittest.TestCase):
                 )
 
             self.assertIsNone(queue)
-            scan.assert_called_once_with(root)
-            state.assert_not_called()
+            read.assert_called_once_with(
+                root,
+                "runs/latest/pending_approvals.json",
+                encoding="utf-8-sig",
+            )
+            scan.assert_not_called()
 
-    def test_read_queue_if_present_propagates_related_path_race_without_state_retry(self):
-        relative_path = "runs/latest/pending_approvals.json"
-        for rejected_path in ("runs", relative_path):
-            with self.subTest(rejected_path=rejected_path), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                rejection = WorkspaceScanRejection(
-                    rejected_path,
-                    "path_race",
-                    "queue path changed during scan",
+    def test_read_queue_if_present_parses_optional_read_content_without_scanning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (
+                mock.patch(
+                    "specgate.workspace_fs.read_optional_workspace_text",
+                    return_value='{"approvals": []}',
+                    create=True,
+                ) as read,
+                mock.patch("specgate.workspace_fs.scan_workspace_files") as scan,
+            ):
+                queue = approvals_module.read_approval_queue_if_present(
+                    root,
+                    root / "runs" / "latest" / "pending_approvals.json",
                 )
-                with (
-                    mock.patch(
-                        "specgate.approvals._scan_approval_queue_files",
-                        return_value=WorkspaceScanResult([], [rejection]),
-                    ),
-                    mock.patch(
-                        "specgate.workspace_fs.workspace_file_state",
-                        return_value=WorkspaceFileState(False, None),
-                    ) as state,
-                ):
+
+            self.assertEqual(queue, ApprovalQueue())
+            read.assert_called_once_with(
+                root,
+                "runs/latest/pending_approvals.json",
+                encoding="utf-8-sig",
+            )
+            scan.assert_not_called()
+
+    def test_read_queue_if_present_propagates_target_path_race(self):
+        relative_path = "runs/latest/pending_approvals.json"
+        errors = (
+            WorkspacePathError("ancestor missing", "path_race"),
+            WorkspacePathError("target changed", "path_race", missing_path=relative_path),
+        )
+        for error in errors:
+            with self.subTest(missing_path=error.missing_path), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                with mock.patch(
+                    "specgate.workspace_fs.read_optional_workspace_text",
+                    side_effect=error,
+                    create=True,
+                ) as read:
                     with self.assertRaises(WorkspacePathError) as raised:
                         approvals_module.read_approval_queue_if_present(
                             root,
                             root / relative_path,
                         )
 
-                self.assertEqual(raised.exception.rule_family, "path_race")
-                state.assert_not_called()
+                self.assertIs(raised.exception, error)
+                read.assert_called_once()
 
-    def test_read_queue_if_present_propagates_related_link_rejections(self):
+    def test_read_queue_if_present_propagates_target_link_rejections(self):
         relative_path = "runs/latest/pending_approvals.json"
         for family in ("linked_path", "reparse_point"):
             with self.subTest(family=family), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
-                rejection = WorkspaceScanRejection("runs", family, "unsafe queue path")
+                error = WorkspacePathError("unsafe queue path", family)
                 with mock.patch(
-                    "specgate.approvals._scan_approval_queue_files",
-                    return_value=WorkspaceScanResult([], [rejection]),
+                    "specgate.workspace_fs.read_optional_workspace_text",
+                    side_effect=error,
+                    create=True,
                 ):
                     with self.assertRaises(WorkspacePathError) as raised:
                         approvals_module.read_approval_queue_if_present(
@@ -104,7 +123,7 @@ class ApprovalTests(unittest.TestCase):
                             root / relative_path,
                         )
 
-                self.assertEqual(raised.exception.rule_family, family)
+                self.assertIs(raised.exception, error)
 
     def test_allowed_write_to_normal_artifact_is_safe(self):
         policy = WorkspacePolicy(Path("."), {"write_file"}, set(), {"index.html"})

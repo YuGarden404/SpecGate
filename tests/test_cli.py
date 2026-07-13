@@ -231,13 +231,13 @@ class CliTests(unittest.TestCase):
             self.assertEqual(captured["governance_profile"], "strict")
             self.assertEqual(captured["governance_config"].profile, "review")
 
-    def test_approvals_list_empty_queue_reports_no_pending_approvals(self):
+    def test_approvals_list_missing_queue_parent_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             with redirect_stdout(io.StringIO()) as output:
                 code = main(["approvals", "list", tmp])
 
-            self.assertEqual(code, 0)
-            self.assertIn("no pending approvals", output.getvalue())
+            self.assertEqual(code, 1)
+            self.assertIn("path_race", output.getvalue())
 
     def test_approvals_list_reports_safe_missing_queue_with_existing_parent(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -255,7 +255,10 @@ class CliTests(unittest.TestCase):
             with self.subTest(family=family), tempfile.TemporaryDirectory() as tmp:
                 ApprovalQueue().write(approval_queue_path(Path(tmp)))
                 error = WorkspacePathError(f"unsafe queue: {sentinel}", family)
-                with patch("specgate.workspace_fs.read_workspace_text", side_effect=error):
+                with patch(
+                    "specgate.workspace_fs.read_optional_workspace_text",
+                    side_effect=error,
+                ):
                     with redirect_stdout(io.StringIO()) as output:
                         code = main(["approvals", "list", tmp])
 

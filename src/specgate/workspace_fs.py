@@ -178,6 +178,23 @@ def read_workspace_text(
     return read_workspace_bytes(root, relative).decode(encoding, errors)
 
 
+def read_optional_workspace_text(
+    root: str | os.PathLike[str],
+    relative: str,
+    *,
+    encoding: str = "utf-8",
+    errors: str = "strict",
+) -> str | None:
+    normalized = normalize_workspace_relative(relative)
+    try:
+        content = read_workspace_bytes(root, normalized)
+    except WorkspacePathError as exc:
+        if exc.rule_family == "path_race" and exc.missing_path == normalized:
+            return None
+        raise
+    return content.decode(encoding, errors)
+
+
 def write_workspace_text(
     root: str | os.PathLike[str],
     relative: str,

@@ -136,6 +136,93 @@ class LinkLikeTests(unittest.TestCase):
 
 
 class WorkspaceFileIOTests(unittest.TestCase):
+    def _read_optional_text(self, root, relative, **kwargs):
+        self.assertTrue(hasattr(workspace_fs, "read_optional_workspace_text"))
+        return workspace_fs.read_optional_workspace_text(root, relative, **kwargs)
+
+    def test_optional_text_read_returns_content_or_final_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "trusted").mkdir()
+            (root / "trusted" / "value.txt").write_text("hello", encoding="utf-8")
+
+            self.assertEqual(
+                self._read_optional_text(root, "trusted/value.txt"),
+                "hello",
+            )
+            self.assertIsNone(
+                self._read_optional_text(root, "trusted/missing.txt")
+            )
+
+    def test_optional_text_read_only_accepts_exact_final_missing_error(self):
+        cases = (
+            WorkspacePathError("linked", "linked_path", missing_path="value.txt"),
+            WorkspacePathError("reparse", "reparse_point", missing_path="value.txt"),
+            WorkspacePathError("ancestor missing", "path_race", missing_path="parent"),
+            WorkspacePathError("opaque race", "path_race"),
+        )
+        for error in cases:
+            with self.subTest(family=error.rule_family, missing_path=error.missing_path):
+                with mock.patch.object(
+                    workspace_fs,
+                    "read_workspace_bytes",
+                    side_effect=error,
+                ):
+                    with self.assertRaises(WorkspacePathError) as raised:
+                        self._read_optional_text("unused", "value.txt")
+
+                self.assertIs(raised.exception, error)
+
+    def test_optional_text_read_missing_then_created_does_not_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "value.txt"
+            error = WorkspacePathError(
+                "missing at open",
+                "path_race",
+                missing_path="value.txt",
+            )
+
+            def create_after_missing(_root, _relative):
+                target.write_text("created later", encoding="utf-8")
+                raise error
+
+            with mock.patch.object(
+                workspace_fs,
+                "read_workspace_bytes",
+                side_effect=create_after_missing,
+            ) as read:
+                result = self._read_optional_text(root, "value.txt")
+
+            self.assertIsNone(result)
+            read.assert_called_once_with(root, "value.txt")
+            self.assertEqual(target.read_text(encoding="utf-8"), "created later")
+
+    def test_optional_text_read_does_not_scan_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "value.txt").write_text("content", encoding="utf-8")
+
+            with mock.patch.object(
+                workspace_fs,
+                "scan_workspace_files",
+                side_effect=AssertionError("optional read must not scan"),
+            ) as scan:
+                result = self._read_optional_text(root, "value.txt")
+
+            self.assertEqual(result, "content")
+            scan.assert_not_called()
+
+    def test_optional_text_read_ignores_unrelated_link(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            (root / "value.txt").write_text("content", encoding="utf-8")
+            outside_file = Path(outside) / "sentinel.txt"
+            outside_file.write_text("external sentinel", encoding="utf-8")
+            self._symlink_or_skip(outside_file, root / "unrelated.txt")
+
+            self.assertEqual(self._read_optional_text(root, "value.txt"), "content")
+
     def test_writes_and_reads_nested_text_and_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
