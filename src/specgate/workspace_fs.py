@@ -94,7 +94,7 @@ def open_workspace_file(
             _validate_regular_file(descriptor, normalized)
             if access == "write":
                 os.ftruncate(descriptor, 0)
-        except (WorkspacePathError, FileNotFoundError):
+        except WorkspacePathError:
             raise
         except OSError as exc:
             raise WorkspacePathError(
@@ -119,8 +119,16 @@ def open_workspace_file(
 
 
 def read_workspace_bytes(root: str | os.PathLike[str], relative: str) -> bytes:
-    with open_workspace_file(root, relative, "read") as handle:
-        return handle.read()
+    try:
+        with open_workspace_file(root, relative, "read") as handle:
+            return handle.read()
+    except WorkspacePathError:
+        raise
+    except OSError as exc:
+        raise WorkspacePathError(
+            f"workspace file could not be read: {relative}",
+            "path_race",
+        ) from exc
 
 
 def read_workspace_text(
@@ -150,8 +158,16 @@ def write_workspace_bytes(
     relative: str,
     content: bytes,
 ) -> None:
-    with open_workspace_file(root, relative, "write", create=True) as handle:
-        handle.write(content)
+    try:
+        with open_workspace_file(root, relative, "write", create=True) as handle:
+            handle.write(content)
+    except WorkspacePathError:
+        raise
+    except OSError as exc:
+        raise WorkspacePathError(
+            f"workspace file could not be written: {relative}",
+            "path_race",
+        ) from exc
 
 
 def workspace_file_state(
@@ -160,8 +176,10 @@ def workspace_file_state(
 ) -> WorkspaceFileState:
     try:
         content = read_workspace_bytes(root, relative)
-    except FileNotFoundError:
-        return WorkspaceFileState(False, None)
+    except WorkspacePathError as exc:
+        if isinstance(exc.__cause__, FileNotFoundError):
+            return WorkspaceFileState(False, None)
+        raise
     return WorkspaceFileState(True, hashlib.sha256(content).hexdigest())
 
 
@@ -178,16 +196,21 @@ def copy_workspace_tree(
     directories, files = _scan_workspace(source_path)
 
     destination_path = Path(os.path.abspath(destination))
+    destination_created = False
     try:
-        destination_path.lstat()
-    except FileNotFoundError:
-        pass
-    else:
-        _reject_link_like(destination_path)
-        raise FileExistsError(destination_path)
-    destination_path.mkdir()
+        try:
+            destination_path.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            _reject_link_like(destination_path)
+            raise WorkspacePathError(
+                "workspace copy destination already exists",
+                "path_race",
+            )
+        destination_path.mkdir()
+        destination_created = True
 
-    try:
         for relative in directories:
             _ensure_workspace_directory(destination_path, relative)
         for relative in files:
@@ -196,14 +219,22 @@ def copy_workspace_tree(
                 relative,
                 read_workspace_bytes(source_path, relative),
             )
-    except BaseException:
-        try:
-            _remove_created_destination(destination_path)
-        except OSError as exc:
+    except BaseException as copy_error:
+        if destination_created:
+            try:
+                _remove_created_destination(destination_path)
+            except OSError as cleanup_error:
+                raise WorkspacePathError(
+                    "workspace copy failed and destination cleanup was incomplete",
+                    "path_race",
+                ) from cleanup_error
+        if isinstance(copy_error, WorkspacePathError):
+            raise
+        if isinstance(copy_error, OSError):
             raise WorkspacePathError(
-                "workspace copy failed and destination cleanup was incomplete",
+                "workspace copy failed during filesystem I/O",
                 "path_race",
-            ) from exc
+            ) from copy_error
         raise
 
 
@@ -308,10 +339,14 @@ def _scan_windows_workspace(
     directories: list[str] = []
     files: list[str] = []
 
-    def scan(current: Path, prefix: str) -> None:
+    def scan(
+        current: Path,
+        prefix: str,
+        expected_identity: int,
+    ) -> None:
         expected = trusted_root.joinpath(*prefix.split("/")) if prefix else trusted_root
-        with _open_windows_directory_lock(current, expected):
-            discovered: list[tuple[Path, str]] = []
+        with _open_windows_directory_lock(current, expected, expected_identity):
+            discovered: list[tuple[Path, str, int]] = []
             with os.scandir(current) as scanner:
                 for entry in sorted(scanner, key=lambda item: item.name):
                     relative = f"{prefix}/{entry.name}" if prefix else entry.name
@@ -338,7 +373,9 @@ def _scan_windows_workspace(
                     _reject_link_like(entry_path)
                     if stat.S_ISDIR(entry_stat.st_mode):
                         directories.append(normalized)
-                        discovered.append((entry_path, normalized))
+                        discovered.append(
+                            (entry_path, normalized, entry.inode())
+                        )
                     elif stat.S_ISREG(entry_stat.st_mode):
                         descriptor = _open_windows_workspace_fd(
                             root,
@@ -354,10 +391,10 @@ def _scan_windows_workspace(
                             f"workspace scan found a non-regular entry: {normalized}",
                             "unsafe_file_type",
                         )
-            for entry_path, relative in discovered:
-                scan(entry_path, relative)
+            for entry_path, relative, entry_identity in discovered:
+                scan(entry_path, relative, entry_identity)
 
-    scan(root, "")
+    scan(root, "", _stat_identity(root.lstat()))
     return sorted(directories), sorted(files)
 
 
@@ -620,7 +657,11 @@ def _validate_windows_final_path(
 
 
 @contextlib.contextmanager
-def _open_windows_directory_lock(path: Path, expected: Path) -> Iterator[None]:
+def _open_windows_directory_lock(
+    path: Path,
+    expected: Path,
+    expected_identity: int,
+) -> Iterator[None]:
     if os.name != "nt":
         raise RuntimeError("Windows directory handles are unavailable")
     _reject_link_like(path)
@@ -703,6 +744,11 @@ def _open_windows_directory_lock(path: Path, expected: Path) -> Iterator[None]:
                 "workspace scan path is not a directory",
                 "unsafe_file_type",
             )
+        if _windows_handle_identity(information) != expected_identity:
+            raise WorkspacePathError(
+                "workspace directory identity changed during scan",
+                "path_race",
+            )
         actual = _windows_final_path_from_handle(handle)
         actual_value = ntpath.normcase(ntpath.normpath(str(actual)))
         expected_value = ntpath.normcase(ntpath.normpath(str(expected)))
@@ -714,6 +760,14 @@ def _open_windows_directory_lock(path: Path, expected: Path) -> Iterator[None]:
         yield
     finally:
         close_handle(handle)
+
+
+def _stat_identity(file_stat: os.stat_result | Any) -> int:
+    return file_stat.st_ino
+
+
+def _windows_handle_identity(information: Any) -> int:
+    return (information.file_index_high << 32) | information.file_index_low
 
 
 def _windows_final_path(descriptor: int) -> Path:
