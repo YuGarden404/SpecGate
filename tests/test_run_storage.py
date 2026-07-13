@@ -74,6 +74,23 @@ class RunStorageTests(unittest.TestCase):
         self.assertTrue(contender.try_acquire())
         contender.release()
 
+    def test_run_publication_lock_is_exclusive_across_instances(self):
+        project = self.make_project()
+        first = run_storage.RunPublicationLock(project, 11)
+        second = run_storage.RunPublicationLock(project, 11)
+        self.assertEqual(first.path, project.runs / ".11.publish.lock")
+
+        first.acquire()
+        try:
+            self.assertFalse(second.try_acquire())
+            with self.assertRaisesRegex(run_storage.RunPublicationLockError, "publication lock"):
+                second.acquire()
+        finally:
+            first.release()
+
+        self.assertTrue(second.try_acquire())
+        second.release()
+
     def test_run_paths_are_immutable(self):
         run = web_run_paths(project_paths(Path("data"), 2, 7), 11)
 

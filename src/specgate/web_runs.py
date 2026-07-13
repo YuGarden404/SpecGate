@@ -5,6 +5,7 @@ import json
 import shutil
 import sqlite3
 import threading
+import zipfile
 from pathlib import Path
 
 from specgate.approvals import ApprovalQueue, GovernanceConfig
@@ -13,12 +14,14 @@ from specgate.llm import MockLLM
 from specgate.policy import WorkspacePolicy
 from specgate.run_storage import (
     RunInitializationLock,
+    RunPublicationLock,
     RunStorageOwnershipError,
     RunStorageTargetExists,
     cleanup_interrupted_run_storage,
     initialize_run_storage,
     promote_run_workspace,
     remove_run_storage,
+    validate_run_storage_ownership,
 )
 from specgate.runner import AgentRunner, RunResult
 from specgate.trace import redact
@@ -101,8 +104,14 @@ def recover_interrupted_run_publications(db_path: Path, data_root: Path) -> None
         run_id = int(run["id"])
         project = project_paths(data_root, int(run["user_id"]), int(run["project_id"]))
         paths = web_run_paths(project, run_id)
+        publication_lock = RunPublicationLock(project, run_id)
+        if not publication_lock.try_acquire():
+            continue
         try:
-            _validate_publication_storage(db_path, run, paths)
+            locked_run = _load_publishing_run(db_path, run_id)
+            if locked_run is None:
+                continue
+            _validate_publication_storage(db_path, locked_run, project, paths)
             promote_run_workspace(project, run_id)
             _finalize_run_publication(db_path, run_id)
         except Exception as exc:
@@ -110,6 +119,8 @@ def recover_interrupted_run_publications(db_path: Path, data_root: Path) -> None
                 _record_publication_error(db_path, run_id, _safe_error(exc))
             except Exception as diagnostic_error:
                 exc.add_note(f"publication recovery diagnostic update failed: {_safe_error(diagnostic_error)}")
+        finally:
+            publication_lock.release()
 
 
 def create_run(
@@ -212,6 +223,27 @@ def _run_is_still_initializing(db_path: Path, run_id: int) -> bool:
         run = conn.execute("select status from runs where id = ?", (run_id,)).fetchone()
         conn.commit()
         return run is not None and run["status"] == "initializing"
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _load_publishing_run(db_path: Path, run_id: int) -> sqlite3.Row | None:
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        run = conn.execute(
+            """
+            select id, project_id, user_id, index_artifact_path, zip_artifact_path
+            from runs
+            where id = ? and status = 'publishing'
+            """,
+            (run_id,),
+        ).fetchone()
+        conn.commit()
+        return run
     except Exception:
         conn.rollback()
         raise
@@ -410,6 +442,7 @@ def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
     run: sqlite3.Row | None = None
     publication_prepared = False
     workspace_promoted = False
+    publication_lock: RunPublicationLock | None = None
     try:
         run = _load_run(db_path, run_id)
         project = _load_project(db_path, run["project_id"], run["user_id"])
@@ -435,6 +468,9 @@ def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
             error_message = "Run did not produce index.html"
         trust_level = _trust_level(result, status)
         if status == "completed":
+            publication_lock = RunPublicationLock(project_storage, run_id)
+            publication_lock.acquire()
+            _write_and_validate_publication_manifest(project_storage, paths, run_id)
             _prepare_run_publication(
                 db_path,
                 run_id,
@@ -469,6 +505,9 @@ def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
             _mark_failed(db_path, run_id, _safe_error(exc))
             return
         raise
+    finally:
+        if publication_lock is not None:
+            publication_lock.release()
 
 
 def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -> sqlite3.Row | None:
@@ -486,6 +525,7 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
     running_run: sqlite3.Row | None = None
     publication_prepared = False
     workspace_promoted = False
+    publication_lock: RunPublicationLock | None = None
     try:
         running_run = _mark_resume_running(db_path, user_id, run_id)
         if running_run is None:
@@ -508,6 +548,9 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
             error_message = "Run did not produce index.html"
         trust_level = _trust_level(result, status)
         if status == "completed":
+            publication_lock = RunPublicationLock(project_storage, run_id)
+            publication_lock.acquire()
+            _write_and_validate_publication_manifest(project_storage, paths, run_id)
             _prepare_run_publication(
                 db_path,
                 run_id,
@@ -543,6 +586,9 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
             _mark_failed(db_path, run_id, _safe_error(exc))
             return get_run(db_path, user_id, run_id)
         raise
+    finally:
+        if publication_lock is not None:
+            publication_lock.release()
 
 
 def _run_mock_agent(paths: RunPaths, settings: dict) -> RunResult:
@@ -847,7 +893,12 @@ def _record_publication_error(db_path: Path, run_id: int, error_message: str) ->
         conn.close()
 
 
-def _validate_publication_storage(db_path: Path, run: sqlite3.Row, paths: RunPaths) -> None:
+def _validate_publication_storage(
+    db_path: Path,
+    run: sqlite3.Row,
+    project: ProjectPaths,
+    paths: RunPaths,
+) -> None:
     if not paths.workspace.is_dir():
         raise ValueError("run workspace is required for publication recovery")
     if not (paths.workspace / "index.html").is_file():
@@ -856,6 +907,8 @@ def _validate_publication_storage(db_path: Path, run: sqlite3.Row, paths: RunPat
         raise ValueError("index.html artifact is required for publication recovery")
     if run["zip_artifact_path"] != str(paths.zip_artifact) or not paths.zip_artifact.is_file():
         raise ValueError("result.zip artifact is required for publication recovery")
+
+    _validate_publication_manifest(project, paths, int(run["id"]))
 
     conn = connect_db(db_path)
     try:
@@ -870,6 +923,76 @@ def _validate_publication_storage(db_path: Path, run: sqlite3.Row, paths: RunPat
         ("zip", str(paths.zip_artifact)),
     ]:
         raise ValueError("artifact records are required for publication recovery")
+
+
+def _write_and_validate_publication_manifest(
+    project: ProjectPaths,
+    paths: RunPaths,
+    run_id: int,
+) -> None:
+    ownership = validate_run_storage_ownership(project, run_id)
+    zip_index = _read_publication_zip_index(paths.zip_artifact)
+    manifest = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "ownership": ownership,
+        "workspace_index_sha256": _sha256_file(paths.workspace / "index.html"),
+        "index_artifact_sha256": _sha256_file(paths.index_artifact),
+        "zip_artifact_sha256": _sha256_file(paths.zip_artifact),
+        "zip_index_sha256": hashlib.sha256(zip_index).hexdigest(),
+    }
+    manifest_path = paths.audit / "publication-manifest.json"
+    temporary_path = paths.audit / "publication-manifest.json.tmp"
+    try:
+        temporary_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        temporary_path.replace(manifest_path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
+    _validate_publication_manifest(project, paths, run_id)
+
+
+def _validate_publication_manifest(project: ProjectPaths, paths: RunPaths, run_id: int) -> None:
+    ownership = validate_run_storage_ownership(project, run_id)
+    manifest_path = paths.audit / "publication-manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("publication manifest is invalid") from exc
+    expected = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "ownership": ownership,
+        "workspace_index_sha256": _sha256_file(paths.workspace / "index.html"),
+        "index_artifact_sha256": _sha256_file(paths.index_artifact),
+        "zip_artifact_sha256": _sha256_file(paths.zip_artifact),
+        "zip_index_sha256": hashlib.sha256(_read_publication_zip_index(paths.zip_artifact)).hexdigest(),
+    }
+    if manifest != expected:
+        raise ValueError("publication manifest does not match run storage")
+    if expected["workspace_index_sha256"] != expected["index_artifact_sha256"]:
+        raise ValueError("workspace and index artifact do not match")
+    if expected["index_artifact_sha256"] != expected["zip_index_sha256"]:
+        raise ValueError("zip index.html does not match index artifact")
+
+
+def _sha256_file(path: Path) -> str:
+    if not path.is_file():
+        raise ValueError(f"{path.name} is required for publication")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _read_publication_zip_index(path: Path) -> bytes:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if archive.namelist() != ["index.html"]:
+                raise ValueError("publication zip must contain only index.html")
+            return archive.read("index.html")
+    except (OSError, zipfile.BadZipFile, KeyError) as exc:
+        raise ValueError("publication zip is invalid") from exc
 
 
 def _mark_failed(db_path: Path, run_id: int, error_message: str) -> None:

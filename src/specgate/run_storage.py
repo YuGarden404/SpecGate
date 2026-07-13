@@ -32,18 +32,31 @@ class RunInitializationLockError(RuntimeError):
     pass
 
 
+class RunPublicationLockError(RuntimeError):
+    pass
+
+
 _OWNERSHIP_MARKER = ".specgate-run-owner.json"
 _OWNERSHIP_SCHEMA_VERSION = 1
 
 
-class RunInitializationLock:
-    def __init__(self, project: ProjectPaths, run_id: int) -> None:
-        self.path = project.runs / f".{run_id}.init.lock"
+class _RunPhaseLock:
+    def __init__(
+        self,
+        project: ProjectPaths,
+        run_id: int,
+        phase: str,
+        description: str,
+        error_type: type[RuntimeError],
+    ) -> None:
+        self.path = project.runs / f".{run_id}.{phase}.lock"
+        self._description = description
+        self._error_type = error_type
         self._handle = None
 
     def acquire(self) -> None:
         if not self.try_acquire():
-            raise RunInitializationLockError(f"run initialization lock is already held: {self.path}")
+            raise self._error_type(f"run {self._description} lock is already held: {self.path}")
 
     def try_acquire(self) -> bool:
         if self._handle is not None:
@@ -77,13 +90,23 @@ class RunInitializationLock:
         finally:
             handle.close()
 
-    def __enter__(self) -> RunInitializationLock:
+    def __enter__(self) -> _RunPhaseLock:
         self.acquire()
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> bool:
         self.release()
         return False
+
+
+class RunInitializationLock(_RunPhaseLock):
+    def __init__(self, project: ProjectPaths, run_id: int) -> None:
+        super().__init__(project, run_id, "init", "initialization", RunInitializationLockError)
+
+
+class RunPublicationLock(_RunPhaseLock):
+    def __init__(self, project: ProjectPaths, run_id: int) -> None:
+        super().__init__(project, run_id, "publish", "publication", RunPublicationLockError)
 
 
 def initialize_run_storage(project: ProjectPaths, run_id: int) -> RunPaths:
@@ -138,6 +161,18 @@ def remove_run_storage(project: ProjectPaths, run_id: int) -> None:
     run = web_run_paths(project, run_id)
     if _path_exists(run.root):
         _remove_owned_tree(run.root, run_id, "run storage cleanup failed")
+
+
+def validate_run_storage_ownership(project: ProjectPaths, run_id: int) -> dict[str, int]:
+    run = web_run_paths(project, run_id)
+    try:
+        marker = json.loads((run.root / _OWNERSHIP_MARKER).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RunStorageOwnershipError("run storage ownership marker is invalid") from exc
+    expected = {"run_id": run_id, "schema_version": _OWNERSHIP_SCHEMA_VERSION}
+    if marker != expected:
+        raise RunStorageOwnershipError("run storage ownership marker does not match run")
+    return marker
 
 
 def cleanup_interrupted_run_storage(project: ProjectPaths, run_id: int) -> None:

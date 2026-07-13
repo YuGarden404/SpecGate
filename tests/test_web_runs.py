@@ -1,8 +1,10 @@
+import hashlib
 import json
 import sqlite3
 import tempfile
 import threading
 import unittest
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
@@ -704,6 +706,7 @@ class WebRunsTests(unittest.TestCase):
         self.assertTrue(latest_index.is_file())
         self.assertTrue(result_zip.is_file())
         self.assertIn("SpecGate Result", latest_index.read_text(encoding="utf-8"))
+        self.assertTrue((run_paths.audit / "publication-manifest.json").is_file())
         self.assertFalse((paths.artifacts / "latest-index.html").exists())
         self.assertFalse((paths.artifacts / "result.zip").exists())
         self.assertEqual((paths.workspace / "index.html").read_bytes(), latest_index.read_bytes())
@@ -749,6 +752,27 @@ class WebRunsTests(unittest.TestCase):
             [("index", str(run_paths.index_artifact)), ("zip", str(run_paths.zip_artifact))],
         )
         self.assertEqual(get_run(db_path, user["id"], run["id"])["status"], "completed")
+
+    def test_completed_run_holds_publication_lock_across_prepare_promote_finalize(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        project_storage = project_paths(data_root, user["id"], project["id"])
+        original_prepare = web_runs._prepare_run_publication
+        lock_observations = []
+
+        def inspect_then_prepare(*args, **kwargs):
+            contender = run_storage.RunPublicationLock(project_storage, run["id"])
+            lock_observations.append(contender.try_acquire())
+            contender.release()
+            return original_prepare(*args, **kwargs)
+
+        with patch("specgate.web_runs._prepare_run_publication", side_effect=inspect_then_prepare):
+            execute_run_once(db_path, data_root, run["id"])
+
+        self.assertEqual(lock_observations, [False])
+        contender = run_storage.RunPublicationLock(project_storage, run["id"])
+        self.assertTrue(contender.try_acquire())
+        contender.release()
 
     def test_execute_run_once_uses_user_governance_and_context_settings(self):
         db_path, data_root, user, project = self.make_context()
@@ -1009,6 +1033,95 @@ class WebRunsTests(unittest.TestCase):
         self.assertIsNone(recovered["error_message"])
         self.assertIn("SpecGate Result", (paths.workspace / "index.html").read_text(encoding="utf-8"))
 
+    def test_prepare_writes_atomic_publication_manifest_before_publishing(self):
+        db_path, data_root, user, project = self.make_context()
+        project_storage = project_paths(data_root, user["id"], project["id"])
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        run_paths = web_run_paths(project_storage, run["id"])
+
+        with patch("specgate.web_runs.promote_run_workspace", side_effect=KeyboardInterrupt("interrupted")):
+            with self.assertRaises(KeyboardInterrupt):
+                execute_run_once(db_path, data_root, run["id"])
+
+        manifest_path = run_paths.audit / "publication-manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        with zipfile.ZipFile(run_paths.zip_artifact) as archive:
+            zip_index = archive.read("index.html")
+        self.assertEqual(manifest["schema_version"], 1)
+        self.assertEqual(manifest["run_id"], run["id"])
+        self.assertEqual(manifest["ownership"], {"run_id": run["id"], "schema_version": 1})
+        self.assertEqual(
+            manifest["workspace_index_sha256"],
+            hashlib.sha256((run_paths.workspace / "index.html").read_bytes()).hexdigest(),
+        )
+        self.assertEqual(
+            manifest["index_artifact_sha256"],
+            hashlib.sha256(run_paths.index_artifact.read_bytes()).hexdigest(),
+        )
+        self.assertEqual(
+            manifest["zip_artifact_sha256"],
+            hashlib.sha256(run_paths.zip_artifact.read_bytes()).hexdigest(),
+        )
+        self.assertEqual(manifest["zip_index_sha256"], hashlib.sha256(zip_index).hexdigest())
+        self.assertFalse((run_paths.audit / "publication-manifest.json.tmp").exists())
+
+    def test_recover_publication_skips_held_lock_then_recovers_after_release(self):
+        db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        with patch("specgate.web_runs.promote_run_workspace", side_effect=KeyboardInterrupt("interrupted")):
+            with self.assertRaises(KeyboardInterrupt):
+                execute_run_once(db_path, data_root, run["id"])
+        publication_lock = run_storage.RunPublicationLock(paths, run["id"])
+        publication_lock.acquire()
+        try:
+            web_runs.recover_interrupted_run_publications(db_path, data_root)
+            self.assertEqual(get_run(db_path, user["id"], run["id"])["status"], "publishing")
+        finally:
+            publication_lock.release()
+
+        web_runs.recover_interrupted_run_publications(db_path, data_root)
+
+        self.assertEqual(get_run(db_path, user["id"], run["id"])["status"], "completed")
+
+    def test_recover_publication_rechecks_status_after_lock_acquisition(self):
+        db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        (paths.workspace / "index.html").write_text("old workspace", encoding="utf-8")
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        with patch("specgate.web_runs.promote_run_workspace", side_effect=KeyboardInterrupt("interrupted")):
+            with self.assertRaises(KeyboardInterrupt):
+                execute_run_once(db_path, data_root, run["id"])
+        acquisition_started = threading.Event()
+        allow_acquisition = threading.Event()
+        original_try_acquire = run_storage.RunPublicationLock.try_acquire
+
+        def delayed_try_acquire(lock):
+            acquisition_started.set()
+            if not allow_acquisition.wait(timeout=5):
+                raise TimeoutError("test did not allow publication lock acquisition")
+            return original_try_acquire(lock)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            with patch.object(
+                run_storage.RunPublicationLock,
+                "try_acquire",
+                autospec=True,
+                side_effect=delayed_try_acquire,
+            ):
+                recovery = executor.submit(web_runs.recover_interrupted_run_publications, db_path, data_root)
+                self.assertTrue(acquisition_started.wait(timeout=2))
+                with closing(connect_db(db_path)) as conn:
+                    conn.execute("update runs set status = 'completed' where id = ?", (run["id"],))
+                    conn.commit()
+                allow_acquisition.set()
+                recovery.result(timeout=2)
+
+        self.assertEqual((paths.workspace / "index.html").read_text(encoding="utf-8"), "old workspace")
+        contender = run_storage.RunPublicationLock(paths, run["id"])
+        self.assertTrue(contender.try_acquire())
+        contender.release()
+
     def test_recover_publication_after_promotion_finalizes_completed(self):
         db_path, data_root, user, project = self.make_context()
         paths = project_paths(data_root, user["id"], project["id"])
@@ -1056,6 +1169,55 @@ class WebRunsTests(unittest.TestCase):
         self.assertIn("result.zip", recovered["error_message"])
         with self.assertRaises(ActiveRunConflict):
             create_run(db_path, project["id"], user["id"], "Blocked run", data_root=data_root)
+
+    def test_recover_publication_rejects_tampered_storage_and_manifest(self):
+        tamper_cases = ("workspace", "artifact", "zip", "manifest", "marker")
+        for tamper_case in tamper_cases:
+            with self.subTest(tamper_case=tamper_case):
+                db_path, data_root, user, project = self.make_context()
+                project_storage = project_paths(data_root, user["id"], project["id"])
+                (project_storage.workspace / "index.html").write_text("old workspace", encoding="utf-8")
+                run = create_run(
+                    db_path,
+                    project["id"],
+                    user["id"],
+                    "Build the result",
+                    data_root=data_root,
+                )
+                run_paths = web_run_paths(project_storage, run["id"])
+                with patch(
+                    "specgate.web_runs.promote_run_workspace",
+                    side_effect=KeyboardInterrupt("interrupted"),
+                ):
+                    with self.assertRaises(KeyboardInterrupt):
+                        execute_run_once(db_path, data_root, run["id"])
+
+                if tamper_case == "workspace":
+                    (run_paths.workspace / "index.html").write_text("tampered", encoding="utf-8")
+                elif tamper_case == "artifact":
+                    run_paths.index_artifact.write_text("tampered", encoding="utf-8")
+                elif tamper_case == "zip":
+                    run_paths.zip_artifact.write_bytes(b"not a zip")
+                elif tamper_case == "manifest":
+                    manifest_path = run_paths.audit / "publication-manifest.json"
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    manifest["run_id"] = run["id"] + 1
+                    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                else:
+                    (run_paths.root / self.ownership_marker).write_text(
+                        json.dumps({"run_id": run["id"] + 1, "schema_version": 1}),
+                        encoding="utf-8",
+                    )
+
+                web_runs.recover_interrupted_run_publications(db_path, data_root)
+
+                recovered = get_run(db_path, user["id"], run["id"])
+                self.assertEqual(recovered["status"], "publishing")
+                self.assertIsNotNone(recovered["error_message"])
+                self.assertEqual(
+                    (project_storage.workspace / "index.html").read_text(encoding="utf-8"),
+                    "old workspace",
+                )
 
 
 if __name__ == "__main__":

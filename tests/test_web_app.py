@@ -168,8 +168,10 @@ class WebAppTests(unittest.TestCase):
         joined = []
 
         class RecordingThread:
-            def join(self):
-                joined.append(True)
+            daemon = True
+
+            def join(self, timeout=None):
+                joined.append(timeout)
 
         with TestClient(app) as lifespan_client:
             self.register(lifespan_client)
@@ -181,7 +183,30 @@ class WebAppTests(unittest.TestCase):
                 )
             self.assertEqual(response.status_code, 200, response.text)
 
-        self.assertEqual(joined, [True])
+        self.assertEqual(len(joined), 1)
+        self.assertGreater(joined[0], 0)
+        self.assertLessEqual(joined[0], 5)
+
+    def test_app_shutdown_uses_single_deadline_for_unfinished_run_threads(self):
+        _client, app = self.make_client()
+        join_timeouts = []
+
+        class UnfinishedThread:
+            daemon = True
+
+            def join(self, timeout=None):
+                join_timeouts.append(timeout)
+
+            def is_alive(self):
+                return True
+
+        threads = [UnfinishedThread(), UnfinishedThread()]
+        with patch("specgate.web_app.monotonic", side_effect=[100.0, 101.0, 104.5]):
+            with TestClient(app):
+                app.state.run_threads.extend(threads)
+
+        self.assertEqual(join_timeouts, [4.0, 0.5])
+        self.assertTrue(all(thread.daemon for thread in threads))
 
     def test_post_run_returns_409_for_active_run_without_starting_thread(self):
         client, _app = self.make_client()

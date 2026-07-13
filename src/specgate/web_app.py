@@ -5,6 +5,7 @@ import sqlite3
 import threading
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
@@ -37,6 +38,7 @@ from specgate.web_settings import clear_api_key, get_settings, update_settings, 
 
 SESSION_COOKIE_NAME = "specgate_session"
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+RUN_THREAD_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 RUN_CREATION_UNAVAILABLE_MESSAGE = "运行创建暂时不可用 / Run creation is temporarily unavailable"
 
 
@@ -103,11 +105,15 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         yield
+        deadline = monotonic() + RUN_THREAD_SHUTDOWN_TIMEOUT_SECONDS
         with app.state.run_threads_lock:
             threads = list(app.state.run_threads)
             app.state.run_threads.clear()
         for thread in threads:
-            thread.join()
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                break
+            thread.join(timeout=remaining)
 
     app = FastAPI(title="SpecGate Web", lifespan=lifespan)
     app.state.data_root = resolved_data_root
