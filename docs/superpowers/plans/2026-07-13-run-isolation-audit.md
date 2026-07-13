@@ -83,13 +83,17 @@ Run: `$env:PYTHONPATH='src'; python -m unittest tests.test_web_runs -v`
 
 - [ ] **Step 3: 实现事务与初始化**
 
-为 `create_run` 增加 `data_root` 参数；使用 `BEGIN IMMEDIATE`，检查
-`queued/running/needs_approval`，插入 run 后调用 `initialize_run_storage`，最后插入 message 并提交。
-定义 `ActiveRunConflict(ValueError)`，Web API 将其映射为 HTTP 409。
+为 `create_run` 增加必填 `data_root` 参数。第一个短 `BEGIN IMMEDIATE` 事务检查
+`initializing/queued/running/needs_approval` 并插入 `initializing` 占位行后提交；事务外调用
+`initialize_run_storage`；第二个短事务插入 message 并转为 `queued`。使用所有权标记确保只有
+初始化成功返回后的目录才可由失败清理删除。定义 `ActiveRunConflict(ValueError)`，Web API
+将其映射为 HTTP 409。
 
 - [ ] **Step 4: 增加不同项目可创建、初始化失败回滚测试**
 
-通过 patch `initialize_run_storage` 抛错，断言 runs/messages 均无残留。
+通过 patch `initialize_run_storage` 抛错，断言 runs/messages 均无残留；预建同 run id 目录时
+断言 sentinel 不被失败清理删除。使用 Event 阻塞一个项目的复制，验证另一项目可以完成创建，
+而同项目请求在 `initializing` 期间立即冲突。
 
 - [ ] **Step 5: 运行相关测试**
 
