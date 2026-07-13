@@ -679,6 +679,43 @@ class WorkspaceScanAndCopyTests(unittest.TestCase):
             self.assertEqual(len(sentinels), 1)
             self.assertEqual(sentinels[0].read_text(encoding="utf-8"), "existing sentinel")
 
+    def test_copy_never_unlinks_marker_replaced_after_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "source"
+            destination = base / "destination"
+            replacement_marker = base / "replacement-marker"
+            displaced_marker = base / "displaced-marker"
+            source.mkdir()
+            (source / "a.txt").write_text("a", encoding="utf-8")
+            replacement_marker.write_text("marker sentinel", encoding="utf-8")
+            real_unlink = Path.unlink
+
+            def replace_marker_before_unlink(path, missing_ok=False):
+                path = Path(path)
+                if ".owner-" in path.name:
+                    os.rename(path, displaced_marker)
+                    os.rename(replacement_marker, path)
+                return real_unlink(path, missing_ok=missing_ok)
+
+            with mock.patch.object(
+                Path,
+                "unlink",
+                autospec=True,
+                side_effect=replace_marker_before_unlink,
+            ) as unlink:
+                copy_workspace_tree(source, destination)
+
+            unlink.assert_not_called()
+            self.assertEqual(
+                replacement_marker.read_text(encoding="utf-8"),
+                "marker sentinel",
+            )
+            self.assertEqual(
+                (destination / "a.txt").read_text(encoding="utf-8"),
+                "a",
+            )
+
     def test_copy_destination_lstat_error_uses_stable_path_race_family(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

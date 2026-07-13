@@ -456,7 +456,7 @@ def _publish_workspace_tree(
             ownership.marker_path,
             ownership.token,
         )
-        _remove_ownership_marker(ownership)
+        _finalize_ownership_marker(ownership)
         _verify_tree_identity(destination, ownership.identity)
     except BaseException as publish_error:
         if renamed:
@@ -527,13 +527,15 @@ def _verify_published_tree(
     )
 
 
-def _remove_ownership_marker(ownership: _StagingOwnership) -> None:
+def _finalize_ownership_marker(ownership: _StagingOwnership) -> None:
     _verify_ownership_marker(
         ownership.marker_path,
         ownership.marker_identity,
         ownership.token,
     )
-    ownership.marker_path.unlink()
+    # POSIX has no portable unlink-by-handle primitive, so deleting this path
+    # after validation would reopen the same substitution race as tree cleanup.
+    # Retain the private marker as an ownership receipt instead.
 
 
 def _rename_staging_noreplace(staging: Path, destination: Path) -> None:
