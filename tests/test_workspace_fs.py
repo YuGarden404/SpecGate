@@ -554,6 +554,19 @@ class WorkspaceFileIOTests(unittest.TestCase):
 
 
 class WorkspaceScanAndCopyTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows root identity validation")
+    def test_windows_stat_and_handle_identity_match_for_same_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            expected = workspace_fs._stat_identity(root.lstat())
+
+            with workspace_fs._open_windows_directory_lock(
+                root,
+                root.resolve(),
+                expected,
+            ) as actual:
+                self.assertEqual(actual, expected)
+
     def test_publishes_workspace_bytes_atomically(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

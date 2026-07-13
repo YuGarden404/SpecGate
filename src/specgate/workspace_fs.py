@@ -1554,7 +1554,10 @@ def _stat_identity(file_stat: os.stat_result | Any) -> tuple[int, int]:
 
 def _windows_handle_identity(handle: int, information: Any) -> tuple[int, int]:
     file_index = (information.file_index_high << 32) | information.file_index_low
-    volume_serial = _windows_handle_volume_serial(handle) & 0xFFFFFFFF
+    volume_serial = _windows_handle_volume_serial(handle)
+    # Python 3.13 exposes the 64-bit serial in st_dev; older releases expose its low 32 bits.
+    if sys.version_info < (3, 13):
+        volume_serial &= 0xFFFFFFFF
     return volume_serial, file_index
 
 
