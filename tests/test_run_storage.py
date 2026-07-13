@@ -380,6 +380,47 @@ class RunStorageTests(unittest.TestCase):
         self.assertEqual(len(token), 64)
         int(token, 16)
 
+    def test_remove_run_storage_refuses_ninth_quarantine_and_preserves_tree(self):
+        project = self.make_project()
+        limit = workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT
+        for run_id in range(1, limit + 1):
+            run = initialize_run_storage(project, run_id)
+            (run.root / "sentinel.txt").write_text(str(run_id), encoding="utf-8")
+            remove_run_storage(project, run_id)
+
+        retained = initialize_run_storage(project, limit + 1)
+        sentinel = retained.root / "sentinel.txt"
+        sentinel.write_text("retain", encoding="utf-8")
+
+        with self.assertRaisesRegex(run_storage.RunStorageQuotaError, "quota exceeded"):
+            remove_run_storage(project, limit + 1)
+
+        binding = workspace_fs.bind_workspace_tree(project.runs)
+        self.assertIsNotNone(binding)
+        self.assertEqual(workspace_fs.count_quarantine_entries(binding), limit)
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "retain")
+
+    def test_successful_promotions_count_toward_quota_and_next_is_rejected_before_mutation(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v0", encoding="utf-8")
+        limit = workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT
+        for run_id in range(1, limit + 1):
+            run = initialize_run_storage(project, run_id)
+            (run.workspace / "index.html").write_text(f"v{run_id}", encoding="utf-8")
+            promote_run_workspace(project, run_id)
+
+        rejected = initialize_run_storage(project, limit + 1)
+        (rejected.workspace / "index.html").write_text("rejected", encoding="utf-8")
+
+        with self.assertRaisesRegex(run_storage.RunStorageQuotaError, "quota exceeded"):
+            promote_run_workspace(project, limit + 1)
+
+        binding = workspace_fs.bind_workspace_tree(project.root)
+        self.assertIsNotNone(binding)
+        self.assertEqual(workspace_fs.count_quarantine_entries(binding), limit)
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), f"v{limit}")
+        self.assertEqual((rejected.workspace / "index.html").read_text(encoding="utf-8"), "rejected")
+
     def test_remove_run_storage_rejects_tree_replaced_after_marker_read(self):
         project = self.make_project()
         run = initialize_run_storage(project, 11)

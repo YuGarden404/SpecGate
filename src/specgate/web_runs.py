@@ -20,6 +20,7 @@ from specgate.run_storage import (
     RunStoragePostRenameError,
     RunStorageTargetExists,
     cleanup_interrupted_run_storage,
+    ensure_run_quarantine_capacity,
     initialize_run_storage,
     promote_run_workspace,
     remove_run_storage,
@@ -203,6 +204,9 @@ def _reserve_initializing_run(
         if active_run is not None:
             raise ActiveRunConflict()
 
+        paths = project_paths(data_root, int(project["user_id"]), int(project["id"]))
+        ensure_run_quarantine_capacity(paths)
+
         now = utc_now().isoformat()
         cursor = conn.execute(
             """
@@ -212,7 +216,6 @@ def _reserve_initializing_run(
             (project_id, user_id, "initializing", run_prompt, now),
         )
         run_id = int(cursor.lastrowid)
-        paths = project_paths(data_root, int(project["user_id"]), int(project["id"]))
         initialization_lock = RunInitializationLock(paths, run_id)
         initialization_lock.acquire()
         conn.commit()

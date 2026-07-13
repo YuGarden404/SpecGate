@@ -179,7 +179,7 @@ class WebProjectsTests(unittest.TestCase):
             )
 
         paths = project_paths(data_root, user["id"], project["id"])
-        self.assertEqual(bind_tree.call_count, 1)
+        self.assertEqual(bind_tree.call_count, 2)
         self.assertEqual(extract.call_count, 1)
         copy_tree.assert_called_once()
         copied_source, copied_destination = copy_tree.call_args.args
@@ -612,10 +612,116 @@ class WebProjectsTests(unittest.TestCase):
                 create_project_from_zip(db_path, data_root, user["id"], "Failed", zip_content)
 
         projects_root = data_root / "users" / str(user["id"]) / "projects"
-        quarantines = list(projects_root.glob(".*.specgate-upload-quarantine-*"))
+        quarantines = list(projects_root.glob(f"*{workspace_fs.QUARANTINE_NAME_MARKER}*"))
         self.assertEqual(len(quarantines), 1)
         self.assertFalse(project_paths(data_root, user["id"], 1).root.exists())
         self.assert_no_projects_or_upload_residue(db_path, data_root, user["id"])
+
+    def test_failed_uploads_stop_at_quarantine_limit_before_staging_or_db_insert(self):
+        db_path, data_root, user = self.make_context()
+        zip_content = self.zip_bytes({"SPEC.md": "Spec", "CHECKLIST.md": "Checklist"})
+        projects_root = data_root / "users" / str(user["id"]) / "projects"
+        projects_root.mkdir(parents=True)
+        sentinel = projects_root / "sentinel.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+
+        def fail_write(root, _relative, _source, **_kwargs):
+            (Path(root).parent / "sentinel.txt").write_text("retained", encoding="utf-8")
+            raise WorkspacePathError("write failed", "path_race")
+
+        with mock.patch.object(web_projects, "write_workspace_stream", side_effect=fail_write):
+            for index in range(workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT):
+                with self.assertRaisesRegex(WorkspacePathError, "write failed"):
+                    create_project_from_zip(
+                        db_path,
+                        data_root,
+                        user["id"],
+                        f"Failed {index}",
+                        zip_content,
+                    )
+
+        binding = workspace_fs.bind_workspace_tree(projects_root)
+        self.assertIsNotNone(binding)
+        self.assertEqual(
+            workspace_fs.count_quarantine_entries(binding),
+            workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT,
+        )
+
+        with mock.patch.object(
+            web_projects.tempfile,
+            "mkdtemp",
+            side_effect=AssertionError("staging created"),
+        ):
+            with self.assertRaisesRegex(workspace_fs.QuarantineQuotaError, "quota exceeded"):
+                create_project_from_zip(
+                    db_path,
+                    data_root,
+                    user["id"],
+                    "Rejected",
+                    zip_content,
+                )
+
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from projects").fetchone()[0], 0)
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+
+    def test_concurrent_failed_uploads_cannot_overrun_last_quarantine_slot(self):
+        db_path, data_root, user = self.make_context()
+        zip_content = self.zip_bytes({"SPEC.md": "Spec", "CHECKLIST.md": "Checklist"})
+        projects_root = data_root / "users" / str(user["id"]) / "projects"
+        projects_root.mkdir(parents=True)
+        for index in range(workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT - 1):
+            (projects_root / workspace_fs.make_quarantine_name(f"old-{index}")).mkdir()
+
+        first_write = threading.Event()
+        second_started = threading.Event()
+        second_write = threading.Event()
+        release_first = threading.Event()
+        call_lock = threading.Lock()
+        write_calls = 0
+
+        def fail_write(_root, _relative, _source, **_kwargs):
+            nonlocal write_calls
+            with call_lock:
+                write_calls += 1
+                call_number = write_calls
+            if call_number == 1:
+                first_write.set()
+                if not release_first.wait(timeout=5):
+                    raise TimeoutError("test did not release first upload")
+            else:
+                second_write.set()
+            raise WorkspacePathError("write failed", "path_race")
+
+        def upload(name):
+            if name == "Second":
+                second_started.set()
+            try:
+                create_project_from_zip(db_path, data_root, user["id"], name, zip_content)
+            except Exception as exc:
+                return exc
+            return None
+
+        with mock.patch.object(web_projects, "write_workspace_stream", side_effect=fail_write):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                first = executor.submit(upload, "First")
+                self.assertTrue(first_write.wait(timeout=5))
+                second = executor.submit(upload, "Second")
+                self.assertTrue(second_started.wait(timeout=5))
+                self.assertFalse(second_write.wait(timeout=0.2))
+                release_first.set()
+                errors = (first.result(timeout=5), second.result(timeout=5))
+
+        self.assertEqual(sum(str(error) == "write failed" for error in errors), 1)
+        self.assertEqual(sum(isinstance(error, workspace_fs.QuarantineQuotaError) for error in errors), 1)
+        binding = workspace_fs.bind_workspace_tree(projects_root)
+        self.assertIsNotNone(binding)
+        self.assertEqual(
+            workspace_fs.count_quarantine_entries(binding),
+            workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT,
+        )
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from projects").fetchone()[0], 0)
 
     def test_cleanup_does_not_delete_staging_replacement(self):
         db_path, data_root, user = self.make_context()
@@ -684,7 +790,7 @@ class WebProjectsTests(unittest.TestCase):
                 create_project_from_zip(db_path, data_root, user["id"], "Finalize failure", zip_content)
 
         projects_root = data_root / "users" / str(user["id"]) / "projects"
-        quarantines = list(projects_root.glob(".1.specgate-upload-quarantine-*"))
+        quarantines = list(projects_root.glob(f"*{workspace_fs.QUARANTINE_NAME_MARKER}*"))
         self.assertEqual(len(quarantines), 1)
         self.assertEqual((quarantines[0] / "original" / "SPEC.md").read_text(encoding="utf-8"), "Spec")
         self.assertFalse(project_paths(data_root, user["id"], 1).root.exists())

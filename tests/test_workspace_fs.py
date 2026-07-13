@@ -42,6 +42,52 @@ class WorkspacePathErrorTests(unittest.TestCase):
         self.assertEqual(error.rule_family, "linked_path")
 
 
+class WorkspaceDirectChildTests(unittest.TestCase):
+    def make_bound_root(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name) / "root"
+        root.mkdir()
+        binding = workspace_fs.bind_workspace_tree(root)
+        self.assertIsNotNone(binding)
+        return root, binding
+
+    def test_quarantine_names_use_public_high_entropy_marker(self):
+        name = workspace_fs.make_quarantine_name("workspace")
+
+        self.assertIn(workspace_fs.QUARANTINE_NAME_MARKER, name)
+        token = name.rsplit(workspace_fs.QUARANTINE_NAME_MARKER, 1)[-1]
+        self.assertEqual(len(token), 64)
+        int(token, 16)
+        self.assertEqual(workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT, 8)
+
+    def test_lists_only_direct_child_names_without_path_scandir(self):
+        root, binding = self.make_bound_root()
+        (root / "file.txt").write_text("file", encoding="utf-8")
+        (root / "directory").mkdir()
+        (root / "directory" / "nested.txt").write_text("nested", encoding="utf-8")
+
+        with mock.patch("os.scandir", side_effect=AssertionError("path scandir used")):
+            names = workspace_fs.list_workspace_child_names(binding)
+
+        self.assertEqual(names, ("directory", "file.txt"))
+
+    def test_counts_only_well_formed_direct_quarantine_names(self):
+        root, binding = self.make_bound_root()
+        valid_names = [
+            workspace_fs.make_quarantine_name(f"tree-{index}")
+            for index in range(3)
+        ]
+        for name in valid_names:
+            (root / name).mkdir()
+        (root / "ordinary").mkdir()
+        (root / f"fake{workspace_fs.QUARANTINE_NAME_MARKER}short").mkdir()
+        nested = root / "ordinary" / workspace_fs.make_quarantine_name("nested")
+        nested.mkdir()
+
+        self.assertEqual(workspace_fs.count_quarantine_entries(binding), 3)
+
+
 class NormalizeWorkspaceRelativeTests(unittest.TestCase):
     def test_preserves_normal_nested_path(self):
         self.assertEqual(normalize_workspace_relative("docs/a.txt"), "docs/a.txt")
@@ -1017,7 +1063,18 @@ class WorkspaceScanAndCopyTests(unittest.TestCase):
                 parent_identity=binding.parent_identity,
             )
 
-            with mock.patch.object(workspace_fs, "bind_workspace_tree", return_value=mismatched):
+            real_bind = workspace_fs.bind_workspace_tree
+
+            def bind_mismatched_destination(path, **kwargs):
+                if Path(path) == destination:
+                    return mismatched
+                return real_bind(path, **kwargs)
+
+            with mock.patch.object(
+                workspace_fs,
+                "bind_workspace_tree",
+                side_effect=bind_mismatched_destination,
+            ):
                 with self.assertRaises(workspace_fs.WorkspaceTreeRenameError) as raised:
                     workspace_fs.rename_workspace_tree_noreplace(binding, destination)
 
@@ -1049,7 +1106,13 @@ class WorkspaceScanAndCopyTests(unittest.TestCase):
                 parent_identity=binding.parent_identity,
             )
             real_rename = workspace_fs._platform_rename_noreplace
+            real_bind = workspace_fs.bind_workspace_tree
             calls = 0
+
+            def bind_mismatched_destination(path, **kwargs):
+                if Path(path) == destination:
+                    return mismatched
+                return real_bind(path, **kwargs)
 
             def fail_quarantine(source_path, destination_path):
                 nonlocal calls
@@ -1059,7 +1122,11 @@ class WorkspaceScanAndCopyTests(unittest.TestCase):
                 return real_rename(source_path, destination_path)
 
             with (
-                mock.patch.object(workspace_fs, "bind_workspace_tree", return_value=mismatched),
+                mock.patch.object(
+                    workspace_fs,
+                    "bind_workspace_tree",
+                    side_effect=bind_mismatched_destination,
+                ),
                 mock.patch.object(
                     workspace_fs,
                     "_platform_rename_noreplace",

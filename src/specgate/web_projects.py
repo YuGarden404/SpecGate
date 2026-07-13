@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 import secrets
 import shutil
 import sqlite3
 import stat
 import tempfile
+import threading
 import unicodedata
 import zipfile
 from dataclasses import dataclass
@@ -18,7 +20,9 @@ from specgate.workspace_fs import (
     WorkspaceTreeBinding,
     bind_workspace_tree,
     copy_workspace_tree,
+    ensure_quarantine_capacity,
     ensure_workspace_directory,
+    make_quarantine_name,
     read_workspace_bytes,
     rename_workspace_tree_noreplace,
     verify_workspace_tree_binding,
@@ -45,6 +49,8 @@ SUPPORTED_ZIP_COMPRESSION = frozenset(
 )
 INVALID_ARCHIVE_MESSAGE = "zip archive is invalid or unsafe"
 ARCHIVE_LIMIT_MESSAGE = "zip archive exceeds safety limits"
+_UPLOAD_LOCKS_GUARD = threading.Lock()
+_UPLOAD_LOCKS: dict[tuple[str, int], threading.Lock] = {}
 _WINDOWS_RESERVED_NAMES = frozenset(
     {"CON", "PRN", "AUX", "NUL", "CLOCK$"}
     | {f"COM{number}" for number in range(1, 10)}
@@ -181,10 +187,16 @@ def create_project_from_zip(
         staging_binding: WorkspaceTreeBinding | None = None
         staging_identity: tuple[int, int] | None = None
         published_identity: tuple[int, int] | None = None
+        upload_lock = _upload_lock_for(data_root, user_id)
+        upload_lock.acquire()
         try:
             projects_relative = f"users/{user_id}/projects"
             ensure_workspace_directory(data_root, projects_relative)
             projects_root = data_root.joinpath(*projects_relative.split("/"))
+            projects_binding = bind_workspace_tree(projects_root)
+            if projects_binding is None:
+                raise WorkspacePathError("upload projects root is missing", "path_race")
+            ensure_quarantine_capacity(projects_binding)
             staging_root = Path(
                 tempfile.mkdtemp(
                     prefix=f".specgate-upload-{secrets.token_hex(16)}-",
@@ -254,6 +266,7 @@ def create_project_from_zip(
         finally:
             if conn is not None:
                 conn.close()
+            upload_lock.release()
 
 
 def package_result_zip(source: Path, zip_path: Path | None = None) -> Path:
@@ -500,9 +513,11 @@ def _quarantine_owned_upload_tree(
                 "upload cleanup root identity changed",
                 "path_race",
             )
-        quarantine = path.parent / (
-            f".{path.name.lstrip('.')}.specgate-upload-quarantine-{secrets.token_hex(16)}"
-        )
+        parent_binding = bind_workspace_tree(path.parent)
+        if parent_binding is None:
+            raise WorkspacePathError("upload quarantine parent is missing", "path_race")
+        ensure_quarantine_capacity(parent_binding)
+        quarantine = path.parent / make_quarantine_name(path.name)
         return rename_workspace_tree_noreplace(binding, quarantine).path
     except WorkspacePathError:
         raise
@@ -511,6 +526,16 @@ def _quarantine_owned_upload_tree(
             "upload cleanup could not be quarantined",
             "path_race",
         ) from exc
+
+
+def _upload_lock_for(data_root: Path, user_id: int) -> threading.Lock:
+    key = (os.path.normcase(os.path.abspath(data_root)), user_id)
+    with _UPLOAD_LOCKS_GUARD:
+        lock = _UPLOAD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _UPLOAD_LOCKS[key] = lock
+        return lock
 
 
 def _find_required_project_files(

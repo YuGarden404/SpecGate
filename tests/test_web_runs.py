@@ -311,6 +311,32 @@ class WebRunsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             create_run(db_path, project["id"], user["id"], "   ", data_root=data_root)
 
+    def test_create_run_rejects_full_quarantine_parent_before_db_or_storage_creation(self):
+        db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        sentinel = paths.root / "sentinel.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+        for index in range(workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT):
+            (paths.root / workspace_fs.make_quarantine_name(f"old-{index}")).mkdir()
+
+        with self.assertRaisesRegex(run_storage.RunStorageQuotaError, "quota exceeded"):
+            create_run(
+                db_path,
+                project["id"],
+                user["id"],
+                "Build the result",
+                data_root=data_root,
+            )
+
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
+            self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+        self.assertEqual(
+            [path.name for path in paths.runs.iterdir() if path.name.startswith(".1")],
+            [],
+        )
+
     def test_create_run_requires_data_root(self):
         db_path, _data_root, user, project = self.make_context()
 
@@ -599,7 +625,14 @@ class WebRunsTests(unittest.TestCase):
 
         with closing(connect_db(db_path)) as conn:
             self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
-        self.assertEqual(list(paths.runs.glob(".1.specgate-copy-*")), [])
+        self.assertEqual(
+            [
+                path
+                for path in paths.runs.glob(".1.specgate-copy-*")
+                if workspace_fs.QUARANTINE_NAME_MARKER not in path.name
+            ],
+            [],
+        )
 
     def test_slow_initialization_does_not_hold_write_lock_across_projects(self):
         db_path, data_root, user, first_project = self.make_context()

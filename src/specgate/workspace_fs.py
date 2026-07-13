@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any, BinaryIO, Collection, Iterator
 
 
+QUARANTINE_NAME_MARKER = ".specgate-quarantine-"
+MAX_QUARANTINE_ENTRIES_PER_PARENT = 8
+
+
 if os.name == "nt":
     import ctypes as _windows_ctypes
     from ctypes import wintypes as _windows_wintypes
@@ -63,6 +67,24 @@ if os.name == "nt":
         _fields_ = (
             ("volume_serial_number", _windows_ctypes.c_ulonglong),
             ("file_id", _WindowsFileId128),
+        )
+
+    class _WindowsFileIdBothDirectoryInformation(_windows_ctypes.Structure):
+        _fields_ = (
+            ("next_entry_offset", _windows_wintypes.DWORD),
+            ("file_index", _windows_wintypes.DWORD),
+            ("creation_time", _windows_ctypes.c_longlong),
+            ("last_access_time", _windows_ctypes.c_longlong),
+            ("last_write_time", _windows_ctypes.c_longlong),
+            ("change_time", _windows_ctypes.c_longlong),
+            ("end_of_file", _windows_ctypes.c_longlong),
+            ("allocation_size", _windows_ctypes.c_longlong),
+            ("file_attributes", _windows_wintypes.DWORD),
+            ("file_name_length", _windows_wintypes.DWORD),
+            ("ea_size", _windows_wintypes.DWORD),
+            ("short_name_length", _windows_ctypes.c_byte),
+            ("short_name", _windows_ctypes.c_wchar * 12),
+            ("file_id", _windows_ctypes.c_longlong),
         )
 
     _WINDOWS_CREATE_FILE_ARGTYPES = (
@@ -118,6 +140,11 @@ class WorkspacePathError(ValueError):
         self.message = message
         self.rule_family = rule_family
         self.missing_path = missing_path
+
+
+class QuarantineQuotaError(WorkspacePathError):
+    def __init__(self) -> None:
+        super().__init__("quarantine storage quota exceeded", "storage_quota")
 
 
 class WorkspaceTreeRenameError(WorkspacePathError):
@@ -191,6 +218,61 @@ class _WindowsDirectoryLock(tuple):
         instance = super().__new__(cls, identity)
         instance.handle = handle
         return instance
+
+
+def make_quarantine_name(original_name: str, *, token: str | None = None) -> str:
+    base_name = original_name.lstrip(".")
+    if not base_name or any(separator in base_name for separator in ("/", "\\", "\x00")):
+        raise WorkspacePathError("quarantine source name is invalid", "invalid_path")
+    quarantine_token = secrets.token_hex(32) if token is None else token
+    if not _is_high_entropy_quarantine_token(quarantine_token):
+        raise WorkspacePathError("quarantine token is invalid", "invalid_path")
+    return f".{base_name}{QUARANTINE_NAME_MARKER}{quarantine_token}"
+
+
+def list_workspace_child_names(binding: WorkspaceTreeBinding) -> tuple[str, ...]:
+    _verify_workspace_tree_binding(binding)
+    if os.name == "nt":
+        with _open_windows_directory_lock(
+            binding.path,
+            binding.trusted_path,
+            binding.identity,
+            list_directory=True,
+        ) as directory_lock:
+            names = _list_windows_directory_names(directory_lock.handle)
+    else:
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = _open_posix_root_fd(binding.path, flags, binding.identity)
+        try:
+            names = os.listdir(descriptor)
+        finally:
+            os.close(descriptor)
+    _verify_workspace_tree_binding(binding)
+    return tuple(sorted(names))
+
+
+def count_quarantine_entries(binding: WorkspaceTreeBinding) -> int:
+    return sum(_is_quarantine_name(name) for name in list_workspace_child_names(binding))
+
+
+def ensure_quarantine_capacity(binding: WorkspaceTreeBinding) -> None:
+    if count_quarantine_entries(binding) >= MAX_QUARANTINE_ENTRIES_PER_PARENT:
+        raise QuarantineQuotaError()
+
+
+def _is_high_entropy_quarantine_token(token: str) -> bool:
+    return (
+        isinstance(token, str)
+        and len(token) == 64
+        and all(character in "0123456789abcdef" for character in token)
+    )
+
+
+def _is_quarantine_name(name: str) -> bool:
+    prefix, marker, token = name.rpartition(QUARANTINE_NAME_MARKER)
+    return bool(marker and prefix.startswith(".") and len(prefix) > 1) and (
+        _is_high_entropy_quarantine_token(token)
+    )
 
 
 def normalize_workspace_relative(value: str) -> str:
@@ -1439,9 +1521,11 @@ def _quarantine_unknown_tree(destination: Path) -> Path | None:
         destination.lstat()
     except FileNotFoundError:
         return None
-    quarantine = destination.parent / (
-        f".{destination.name}.specgate-quarantine-{secrets.token_hex(16)}"
-    )
+    parent_binding = bind_workspace_tree(destination.parent)
+    if parent_binding is None:
+        raise WorkspacePathError("quarantine parent is missing", "path_race")
+    ensure_quarantine_capacity(parent_binding)
+    quarantine = destination.parent / make_quarantine_name(destination.name)
     try:
         _platform_rename_noreplace(destination, quarantine)
     except FileNotFoundError:
@@ -1818,6 +1902,7 @@ def _open_windows_directory_lock(
     *,
     parent_lock: _WindowsDirectoryLock | None = None,
     relative_name: str | None = None,
+    list_directory: bool = False,
 ) -> Iterator[_WindowsDirectoryLock]:
     if os.name != "nt":
         raise RuntimeError("Windows directory handles are unavailable")
@@ -1842,7 +1927,11 @@ def _open_windows_directory_lock(
     file_share_read = 0x00000001
     file_share_write = 0x00000002
     file_share_delete = 0x00000004
+    file_list_directory = 0x00000001
     file_read_attributes = 0x00000080
+    desired_access = file_read_attributes
+    if list_directory:
+        desired_access |= file_list_directory
     share_mode = file_share_read | file_share_write
     if _is_windows_anchor(path):
         share_mode |= file_share_delete
@@ -1852,7 +1941,7 @@ def _open_windows_directory_lock(
     if parent_lock is None:
         handle = create_file(
             str(path),
-            file_read_attributes,
+            desired_access,
             share_mode,
             None,
             open_existing,
@@ -1869,6 +1958,7 @@ def _open_windows_directory_lock(
             parent_lock.handle,
             relative_name,
             share_mode,
+            desired_access=desired_access,
         )
     if handle == ctypes.c_void_p(-1).value:
         raise WorkspacePathError(
@@ -1919,6 +2009,8 @@ def _open_windows_relative_directory(
     parent_handle: int,
     relative_name: str,
     share_mode: int,
+    *,
+    desired_access: int = 0x00000080,
 ) -> int:
     import ctypes
     from ctypes import wintypes
@@ -1927,7 +2019,6 @@ def _open_windows_relative_directory(
     nt_create_file.argtypes = _WINDOWS_NT_CREATE_FILE_ARGTYPES
     nt_create_file.restype = ctypes.c_long
 
-    file_read_attributes = 0x00000080
     file_open = 0x00000001
     file_directory_file = 0x00000001
     file_open_reparse_point = 0x00200000
@@ -1950,7 +2041,7 @@ def _open_windows_relative_directory(
     handle = wintypes.HANDLE()
     status = nt_create_file(
         ctypes.byref(handle),
-        file_read_attributes,
+        desired_access,
         ctypes.byref(attributes),
         ctypes.byref(io_status),
         None,
@@ -1967,6 +2058,51 @@ def _open_windows_relative_directory(
             "path_race",
         )
     return int(handle.value)
+
+
+def _list_windows_directory_names(handle: int) -> list[str]:
+    import ctypes
+    from ctypes import wintypes
+
+    get_information = ctypes.windll.kernel32.GetFileInformationByHandleEx
+    get_information.argtypes = _WINDOWS_GET_FILE_INFORMATION_EX_ARGTYPES
+    get_information.restype = wintypes.BOOL
+    get_last_error = ctypes.windll.kernel32.GetLastError
+    get_last_error.argtypes = ()
+    get_last_error.restype = wintypes.DWORD
+    file_id_both_directory_info = 10
+    file_id_both_directory_restart_info = 11
+    error_no_more_files = 18
+    buffer = ctypes.create_string_buffer(64 * 1024)
+    names: list[str] = []
+    information_class = file_id_both_directory_restart_info
+    file_name_offset = ctypes.sizeof(_WindowsFileIdBothDirectoryInformation)
+
+    while True:
+        if not get_information(
+            handle,
+            information_class,
+            buffer,
+            ctypes.sizeof(buffer),
+        ):
+            error = get_last_error()
+            if error == error_no_more_files:
+                break
+            raise ctypes.WinError(error)
+        information_class = file_id_both_directory_info
+        offset = 0
+        while True:
+            entry = _WindowsFileIdBothDirectoryInformation.from_buffer(buffer, offset)
+            name = ctypes.wstring_at(
+                ctypes.addressof(buffer) + offset + file_name_offset,
+                entry.file_name_length // ctypes.sizeof(ctypes.c_wchar),
+            )
+            if name not in {".", ".."}:
+                names.append(name)
+            if entry.next_entry_offset == 0:
+                break
+            offset += entry.next_entry_offset
+    return names
 
 
 def _is_windows_anchor(path: Path) -> bool:

@@ -15,9 +15,11 @@ else:
 
 from specgate.web_projects import ProjectPaths, RunPaths, web_run_paths
 from specgate.workspace_fs import (
+    QuarantineQuotaError,
     WorkspaceTreeBinding,
     WorkspacePathError,
     bind_workspace_tree,
+    ensure_quarantine_capacity,
     copy_workspace_tree,
     ensure_workspace_directory,
     open_workspace_file,
@@ -26,11 +28,16 @@ from specgate.workspace_fs import (
     read_optional_workspace_text,
     read_workspace_text,
     rename_workspace_tree_noreplace,
+    make_quarantine_name,
     verify_workspace_tree_binding,
 )
 
 
 class RunStorageCleanupError(RuntimeError):
+    pass
+
+
+class RunStorageQuotaError(RunStorageCleanupError):
     pass
 
 
@@ -237,6 +244,7 @@ def cleanup_interrupted_run_storage(project: ProjectPaths, run_id: int) -> None:
 
 def promote_run_workspace(project: ProjectPaths, run_id: int) -> None:
     validate_run_storage_ownership(project, run_id)
+    _require_quarantine_capacity(project.root)
     run = web_run_paths(project, run_id)
     token = _load_promotion_transaction(project.workspace, run_id)
     if token is None:
@@ -405,6 +413,7 @@ def _commit_workspace_promotion(
                     )
                 if next_state.binding is None:
                     raise RunStorageOwnershipError("workspace next cleanup path is missing")
+                _require_quarantine_capacity(next_state.path.parent)
                 quarantine = _promotion_quarantine_path(next_state.path, token)
                 rename_workspace_tree_noreplace(next_state.binding, quarantine)
             except BaseException as cleanup_error:
@@ -419,8 +428,11 @@ def _quarantine_published_workspace(path: Path, error: BaseException) -> None:
     try:
         observed_current = _optional_tree_binding(path, "published workspace")
         if observed_current is not None:
+            _require_quarantine_capacity(path.parent)
             quarantine = _random_promotion_quarantine_path(path)
             rename_workspace_tree_noreplace(observed_current, quarantine)
+    except RunStorageQuotaError:
+        raise
     except BaseException as quarantine_error:
         error.add_note(f"published workspace quarantine failed: {quarantine_error}")
 
@@ -519,8 +531,11 @@ def _quarantine_committed_phase(state: _PromotionPhaseState, token: str) -> bool
             raise RunStorageOwnershipError(
                 "workspace promotion cleanup ownership changed before quarantine"
             )
+        _require_quarantine_capacity(fresh_state.path.parent)
         quarantine = _promotion_quarantine_path(fresh_state.path, token)
         rename_workspace_tree_noreplace(fresh_state.binding, quarantine)
+    except RunStorageQuotaError:
+        raise
     except Exception as exc:
         warnings.warn(
             f"workspace promotion committed; {state.path.name} quarantine failed: {exc}",
@@ -594,11 +609,11 @@ def _write_promotion_transaction(current: Path, run_id: int, token: str) -> None
 
 
 def _promotion_quarantine_path(path: Path, token: str) -> Path:
-    return path.with_name(f".{path.name}.specgate-quarantine-{token}")
+    return path.with_name(make_quarantine_name(path.name, token=token))
 
 
 def _random_promotion_quarantine_path(path: Path) -> Path:
-    return path.with_name(f".{path.name}.specgate-quarantine-{secrets.token_hex(16)}")
+    return path.with_name(make_quarantine_name(path.name))
 
 
 def _write_promotion_marker(
@@ -761,14 +776,32 @@ def _remove_owned_tree(
     except (OSError, UnicodeError, json.JSONDecodeError, WorkspacePathError) as exc:
         raise RunStorageOwnershipError("unowned run storage retained") from exc
 
-    quarantine = path.with_name(
-        f".{path.name}.specgate-quarantine-{secrets.token_hex(32)}"
-    )
+    _require_quarantine_capacity(path.parent, binding=parent_binding)
+    quarantine = path.with_name(make_quarantine_name(path.name))
     try:
         rename_workspace_tree_noreplace(binding, quarantine)
     except Exception as exc:
         raise RunStorageCleanupError(f"{context}: {exc}") from exc
     return True
+
+
+def ensure_run_quarantine_capacity(project: ProjectPaths) -> None:
+    _require_quarantine_capacity(project.root)
+    _require_quarantine_capacity(project.runs)
+
+
+def _require_quarantine_capacity(
+    parent: Path,
+    *,
+    binding: WorkspaceTreeBinding | None = None,
+) -> None:
+    parent_binding = binding if binding is not None else _bind_cleanup_parent(parent)
+    if parent_binding is None:
+        raise RunStorageOwnershipError("quarantine parent is missing")
+    try:
+        ensure_quarantine_capacity(parent_binding)
+    except QuarantineQuotaError as exc:
+        raise RunStorageQuotaError(str(exc)) from exc
 
 
 def _add_owned_cleanup_failure_note(
