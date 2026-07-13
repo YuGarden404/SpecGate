@@ -93,7 +93,12 @@ AgentRunner 在 run workspace 上执行。trace、evidence 和审批队列写入
 执行完成后，artifact 从 run workspace 的 `index.html` 复制到 run artifacts，并在同一目录
 打包 zip。数据库 artifact 路径只指向 run artifacts。
 
-只有状态为 `completed` 的 run 才提升项目 workspace。提升采用同一父目录下可恢复的两阶段切换。
+成功 run 通过 `publishing` 中间状态协调数据库和文件系统：先在短事务中保存 artifact 与发布
+意图并转为 `publishing`，再提升项目 workspace，最后在第二个短事务中转为 `completed`。
+`publishing` 属于活动状态，会阻止同项目创建下一 run。若提升成功但最终数据库事务失败，run
+必须保留为 `publishing`，不得标记 failed；应用启动时幂等重做提升并完成数据库终态。
+
+workspace 提升采用同一父目录下可恢复的两阶段切换。
 跨平台文件系统无法原子替换一个已存在的非空目录，因此本设计不宣称整个目录切换严格原子，
 而是保证中断后可恢复，且不会为了清理旧备份而破坏已完整发布的新版本：
 
@@ -104,6 +109,10 @@ AgentRunner 在 run workspace 上执行。trace、evidence 和审批队列写入
 5. 每次提升前检查同 run 遗留的临时副本与备份，并根据 current 是否存在恢复上次中断状态。
 
 `needs_approval` 在恢复完成前不提升。`failed` 永不提升。
+
+Web 应用启动时还恢复 `publishing` run：验证 run workspace 与 artifact 后，幂等执行提升并转为
+completed。恢复失败保持 publishing 和安全诊断，不能开放下一 run，也不能在项目可能已经提升时
+宣称 failed。
 
 ## 7. 审批与恢复
 
@@ -128,6 +137,7 @@ Web approvals 表通过 `run_id` 定位 run，然后只读写该 run 的
 - artifact 发布失败：不写 artifact 数据库行，不提升 workspace。
 - workspace 发布前提升失败：恢复旧 workspace，run 标记 failed，并保留 run 自身证据。
 - workspace 已发布但备份清理失败：保留完整新 workspace，记录清理错误并允许后续恢复流程清理残留。
+- workspace 已发布但 completed 落库失败：保持 publishing，启动恢复幂等提升后完成落库。
 
 ## 10. 测试与验收
 

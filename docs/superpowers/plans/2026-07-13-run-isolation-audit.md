@@ -145,13 +145,17 @@ Run: `$env:PYTHONPATH='src'; python -m unittest tests.test_runner -v`
 - [ ] **Step 4: 改造 Web 执行与发布**
 
 `execute_run_once` 与 `resume_run_once` 构造 `RunPaths`，Agent 在 `run_paths.workspace` 执行；
-artifact 输出为 `run_paths.artifacts/index.html` 与 `result.zip`；completed 后调用
-`promote_run_workspace`，其他状态不提升。
+artifact 输出为 `run_paths.artifacts/index.html` 与 `result.zip`。成功执行先在短事务中转为
+`publishing` 并记录 artifact，再提升 workspace，最后短事务转 completed。提升失败标 failed；
+提升成功而最终落库失败则保持 publishing，其他状态不提升。
 
 - [ ] **Step 5: 写不可变回归测试**
 
 完成 run 1 后保存 artifact/trace 字节，创建并完成 run 2，断言 run 1 字节不变、数据库路径不同、
 run 2 初始 workspace 包含 run 1 成功内容。
+
+增加发布 saga 测试：prepare 后中断由启动恢复完成；提升成功但 completed 落库失败时保持
+publishing 并阻止下一 run，启动恢复后转 completed；提升失败时旧 workspace 不变且 run failed。
 
 - [ ] **Step 6: 改造审批测试夹具与恢复**
 
