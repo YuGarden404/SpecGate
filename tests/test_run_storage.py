@@ -861,6 +861,124 @@ class RunStorageTests(unittest.TestCase):
         self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
         self.assertEqual(self.workspace_swap_paths(project), [])
 
+    def test_current_missing_recovery_revalidates_marker_after_publish_rename(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        backup_workspace = None
+
+        def interrupt_after_backup(current_binding, _next_binding, backup, _run_id, _token):
+            nonlocal backup_workspace
+            backup_workspace = Path(backup)
+            run_storage.rename_workspace_tree_noreplace(current_binding, backup)
+            raise KeyboardInterrupt("interrupted after backup")
+
+        with patch(
+            "specgate.run_storage._commit_workspace_promotion",
+            side_effect=interrupt_after_backup,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                promote_run_workspace(project, 11)
+
+        next_workspace, _ = self.promotion_paths(project)
+        marker_path = run_storage._promotion_marker_path(next_workspace)
+        real_rename = run_storage.rename_workspace_tree_noreplace
+
+        def replace_marker_after_recovery_rename(binding, destination):
+            moved = real_rename(binding, destination)
+            if Path(destination) == project.workspace:
+                marker = json.loads(marker_path.read_text(encoding="utf-8"))
+                marker["transaction_token"] = "f" * 64
+                marker_path.unlink()
+                marker_path.write_text(json.dumps(marker), encoding="utf-8")
+            return moved
+
+        with patch(
+            "specgate.run_storage.rename_workspace_tree_noreplace",
+            side_effect=replace_marker_after_recovery_rename,
+        ):
+            with self.assertRaises(run_storage.RunStoragePostRenameError):
+                promote_run_workspace(project, 11)
+
+        self.assertFalse(project.workspace.exists())
+        self.assertEqual((backup_workspace / "index.html").read_text(encoding="utf-8"), "v1")
+        quarantines = list(project.root.glob(".workspace.specgate-quarantine-*"))
+        self.assertEqual(len(quarantines), 1)
+        self.assertEqual((quarantines[0] / "index.html").read_text(encoding="utf-8"), "v2")
+
+    def test_current_missing_recovery_rejects_each_marker_binding_mismatch(self):
+        mutations = {
+            "missing": None,
+            "run_id": lambda marker: marker.__setitem__("run_id", 12),
+            "phase": lambda marker: marker.__setitem__("phase", "backup"),
+            "directory_identity": lambda marker: marker.__setitem__(
+                "directory_identity", [-1, -1]
+            ),
+            "parent_identity": lambda marker: marker.__setitem__("parent_identity", [-1, -1]),
+        }
+        for description, mutate in mutations.items():
+            with self.subTest(description=description):
+                project = self.make_project()
+                (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+                run = initialize_run_storage(project, 11)
+                (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+                backup_workspace = None
+
+                def interrupt_after_backup(
+                    current_binding,
+                    _next_binding,
+                    backup,
+                    _run_id,
+                    _token,
+                ):
+                    nonlocal backup_workspace
+                    backup_workspace = Path(backup)
+                    run_storage.rename_workspace_tree_noreplace(current_binding, backup)
+                    raise KeyboardInterrupt("interrupted after backup")
+
+                with patch(
+                    "specgate.run_storage._commit_workspace_promotion",
+                    side_effect=interrupt_after_backup,
+                ):
+                    with self.assertRaises(KeyboardInterrupt):
+                        promote_run_workspace(project, 11)
+
+                next_workspace, _ = self.promotion_paths(project)
+                marker_path = run_storage._promotion_marker_path(next_workspace)
+                real_rename = run_storage.rename_workspace_tree_noreplace
+
+                def alter_marker_after_rename(binding, destination):
+                    moved = real_rename(binding, destination)
+                    if Path(destination) == project.workspace:
+                        if mutate is None:
+                            marker_path.unlink()
+                        else:
+                            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+                            mutate(marker)
+                            marker_path.unlink()
+                            marker_path.write_text(json.dumps(marker), encoding="utf-8")
+                    return moved
+
+                with patch(
+                    "specgate.run_storage.rename_workspace_tree_noreplace",
+                    side_effect=alter_marker_after_rename,
+                ):
+                    with self.assertRaises(run_storage.RunStoragePostRenameError):
+                        promote_run_workspace(project, 11)
+
+                self.assertFalse(project.workspace.exists())
+                self.assertEqual(
+                    (backup_workspace / "index.html").read_text(encoding="utf-8"),
+                    "v1",
+                )
+                quarantines = list(project.root.glob(".workspace.specgate-quarantine-*"))
+                self.assertEqual(len(quarantines), 1)
+                self.assertEqual(
+                    (quarantines[0] / "index.html").read_text(encoding="utf-8"),
+                    "v2",
+                )
+
     def test_promote_run_workspace_reports_next_cleanup_failure_after_restoring_current(self):
         project = self.make_project()
         (project.workspace / "index.html").write_text("v1", encoding="utf-8")

@@ -39,7 +39,7 @@ from specgate.web_runs import (
     start_run_background,
 )
 from specgate.web_settings import clear_api_key, get_settings, update_settings, upsert_api_key
-from specgate.workspace_fs import read_workspace_bytes
+from specgate.workspace_fs import WorkspacePathError, read_workspace_bytes, read_workspace_text
 
 
 SESSION_COOKIE_NAME = "specgate_session"
@@ -227,10 +227,25 @@ def create_app(
     @app.get("/api/projects/{project_id}/preview")
     def preview_project(project_id: int, user=Depends(current_user)):
         project = _load_project_or_404(app.state.db_path, int(user["id"]), project_id)
-        preview = project_paths(app.state.data_root, int(user["id"]), int(project["id"])).workspace / "index.html"
-        if not preview.is_file():
-            raise HTTPException(status_code=404, detail="preview not found")
-        return PlainTextResponse(preview.read_text(encoding="utf-8"))
+        paths = project_paths(app.state.data_root, int(user["id"]), int(project["id"]))
+        with closing(connect_db(app.state.db_path)) as conn:
+            conn.execute("BEGIN")
+            publishing = conn.execute(
+                """
+                select 1 from runs
+                where project_id = ? and user_id = ? and status = 'publishing'
+                limit 1
+                """,
+                (project_id, user["id"]),
+            ).fetchone()
+            if publishing is not None:
+                raise HTTPException(status_code=409, detail="project publication in progress")
+            try:
+                content = read_workspace_text(paths.workspace, "index.html")
+            except (OSError, UnicodeError, WorkspacePathError) as exc:
+                raise HTTPException(status_code=404, detail="preview not found") from exc
+            conn.commit()
+        return PlainTextResponse(content)
 
     @app.get("/api/projects/{project_id}/messages")
     def list_messages(project_id: int, user=Depends(current_user)) -> dict[str, Any]:

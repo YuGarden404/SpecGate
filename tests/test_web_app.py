@@ -16,6 +16,7 @@ warnings.filterwarnings(
 )
 
 from fastapi.testclient import TestClient
+import specgate.workspace_fs as workspace_fs
 from specgate.web_app import create_app
 from specgate.web_db import connect_db
 from specgate.web_projects import project_paths, web_run_paths
@@ -147,6 +148,69 @@ class WebAppTests(unittest.TestCase):
         self.assertTrue(response.headers["content-type"].startswith("text/plain"))
         self.assertIn("<!doctype html>", response.text)
         self.assertNotEqual(response.headers["content-type"].split(";")[0], "text/html")
+
+    def test_project_preview_rejects_publishing_before_workspace_read(self):
+        client, app = self.make_client()
+        self.register(client)
+        project = self.create_project(client)
+        with patch("specgate.web_app.start_run_background"):
+            created = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "Build the result"},
+            )
+        run = created.json()["run"]
+        with closing(connect_db(app.state.db_path)) as conn:
+            conn.execute("update runs set status = 'publishing' where id = ?", (run["id"],))
+            conn.commit()
+
+        with patch("specgate.web_app.read_workspace_text", create=True) as read_text:
+            response = client.get(f"/api/projects/{project['id']}/preview")
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json(), {"detail": "project publication in progress"})
+        read_text.assert_not_called()
+
+    def test_quarantine_failure_sentinel_is_not_returned_by_project_preview(self):
+        client, app = self.make_client()
+        registered = self.register(client)
+        project = self.create_project(client)
+        with patch("specgate.web_app.start_run_background"):
+            created = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "Build the result"},
+            )
+        run = created.json()["run"]
+        paths = project_paths(app.state.data_root, registered["user"]["id"], project["id"])
+        replacement = paths.root / "unknown-promotion-source"
+        replacement.mkdir()
+        (replacement / "sentinel.txt").write_text("external sentinel", encoding="utf-8")
+        displaced = paths.root / "displaced-owned-next"
+        real_rename = workspace_fs._platform_rename_noreplace
+
+        def replace_source_and_fail_quarantine(source, destination):
+            source = Path(source)
+            destination = Path(destination)
+            if destination == paths.workspace and source.name.startswith("workspace.next-"):
+                real_rename(source, displaced)
+                real_rename(replacement, source)
+            if destination.name.startswith(".workspace.specgate-quarantine-"):
+                raise OSError("quarantine denied")
+            return real_rename(source, destination)
+
+        with patch.object(
+            workspace_fs,
+            "_platform_rename_noreplace",
+            side_effect=replace_source_and_fail_quarantine,
+        ):
+            with self.assertRaises(workspace_fs.WorkspaceTreeRenameError):
+                execute_run_once(app.state.db_path, app.state.data_root, run["id"])
+
+        with patch("specgate.web_app.read_workspace_text") as read_text:
+            preview = client.get(f"/api/projects/{project['id']}/preview")
+
+        self.assertEqual(preview.status_code, 409, preview.text)
+        self.assertNotIn("external sentinel", preview.text)
+        read_text.assert_not_called()
 
     def test_post_run_returns_queued_and_run_can_be_read(self):
         client, app = self.make_client()

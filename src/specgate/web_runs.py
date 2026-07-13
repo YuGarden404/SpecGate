@@ -17,6 +17,7 @@ from specgate.run_storage import (
     RunInitializationLock,
     RunPublicationLock,
     RunStorageOwnershipError,
+    RunStoragePostRenameError,
     RunStorageTargetExists,
     cleanup_interrupted_run_storage,
     initialize_run_storage,
@@ -506,7 +507,8 @@ def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
     except Exception as exc:
         if run is not None:
             if publication_prepared and (
-                workspace_promoted or isinstance(exc, WorkspaceTreeRenameError)
+                workspace_promoted
+                or isinstance(exc, (RunStoragePostRenameError, WorkspaceTreeRenameError))
             ):
                 try:
                     _record_publication_error(db_path, run_id, _safe_error(exc))
@@ -589,7 +591,8 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
     except Exception as exc:
         if running_run is not None:
             if publication_prepared and (
-                workspace_promoted or isinstance(exc, WorkspaceTreeRenameError)
+                workspace_promoted
+                or isinstance(exc, (RunStoragePostRenameError, WorkspaceTreeRenameError))
             ):
                 try:
                     _record_publication_error(db_path, run_id, _safe_error(exc))

@@ -1106,6 +1106,61 @@ class WebRunsTests(unittest.TestCase):
         self.assertEqual(list(paths.root.glob(".workspace.specgate-quarantine-*")), [])
         self.assertTrue(displaced.is_dir())
 
+    def test_post_rename_ownership_validation_error_stays_publishing_and_redacted(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        secret = "sk-test-secret-1234567890"
+
+        with patch(
+            "specgate.run_storage._validate_published_workspace",
+            side_effect=run_storage.RunStorageOwnershipError(
+                f"published ownership mismatch {secret}"
+            ),
+        ):
+            with self.assertRaises(run_storage.RunStorageOwnershipError):
+                execute_run_once(db_path, data_root, run["id"])
+
+        updated = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(updated["status"], "publishing")
+        self.assertIn("published ownership mismatch", updated["error_message"])
+        self.assertNotIn(secret, updated["error_message"])
+        with patch("specgate.web_runs.initialize_run_storage") as initialize_storage:
+            with self.assertRaises(ActiveRunConflict):
+                create_run(
+                    db_path,
+                    project["id"],
+                    user["id"],
+                    "Conflicting run",
+                    data_root=data_root,
+                )
+        initialize_storage.assert_not_called()
+
+    def test_post_rename_marker_and_identity_errors_stay_publishing(self):
+        failures = (
+            run_storage.RunStorageOwnershipError("published marker mismatch"),
+            WorkspacePathError("published identity mismatch", "path_race"),
+        )
+        for failure in failures:
+            with self.subTest(failure=str(failure)):
+                db_path, data_root, user, project = self.make_context()
+                run = create_run(
+                    db_path,
+                    project["id"],
+                    user["id"],
+                    "Build the result",
+                    data_root=data_root,
+                )
+                with patch(
+                    "specgate.run_storage._validate_published_workspace",
+                    side_effect=failure,
+                ):
+                    with self.assertRaises(run_storage.RunStoragePostRenameError):
+                        execute_run_once(db_path, data_root, run["id"])
+
+                updated = get_run(db_path, user["id"], run["id"])
+                self.assertEqual(updated["status"], "publishing")
+                self.assertIn(str(failure), updated["error_message"])
+
     def test_finalize_failure_after_promotion_keeps_publishing_and_blocks_new_run(self):
         db_path, data_root, user, project = self.make_context()
         paths = project_paths(data_root, user["id"], project["id"])

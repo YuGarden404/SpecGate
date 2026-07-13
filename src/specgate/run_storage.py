@@ -36,6 +36,10 @@ class RunStorageOwnershipError(RunStorageCleanupError):
     pass
 
 
+class RunStoragePostRenameError(RunStorageOwnershipError):
+    pass
+
+
 class RunStorageTargetExists(FileExistsError):
     pass
 
@@ -301,8 +305,17 @@ def _recover_workspace_promotion(
         if backup_state.binding is None or next_state.binding is None:
             raise RunStorageOwnershipError("workspace promotion recovery paths are incomplete")
         moved_current = rename_workspace_tree_noreplace(next_state.binding, current)
-        if moved_current.identity != next_identity:
-            raise RunStorageOwnershipError("published workspace identity does not match next marker")
+        try:
+            _validate_published_workspace(
+                moved_current,
+                next_state.binding,
+                run_id,
+                transaction_token,
+            )
+        except Exception as exc:
+            error = RunStoragePostRenameError(str(exc))
+            _quarantine_published_workspace(moved_current.path, error)
+            raise error from exc
         _quarantine_committed_phase(backup_state, token)
         return
 
@@ -327,21 +340,13 @@ def _commit_workspace_promotion(
     moved_current = None
     try:
         moved_current = rename_workspace_tree_noreplace(next_binding, current_binding.path)
-        _validate_published_workspace(moved_current, next_binding, run_id, token)
+        try:
+            _validate_published_workspace(moved_current, next_binding, run_id, token)
+        except Exception as exc:
+            raise RunStoragePostRenameError(str(exc)) from exc
     except BaseException as publish_error:
         if moved_current is not None:
-            try:
-                observed_current = _optional_tree_binding(
-                    moved_current.path,
-                    "published workspace",
-                )
-                if observed_current is not None:
-                    quarantine = _random_promotion_quarantine_path(moved_current.path)
-                    rename_workspace_tree_noreplace(observed_current, quarantine)
-            except BaseException as quarantine_error:
-                publish_error.add_note(
-                    f"published workspace quarantine failed: {quarantine_error}"
-                )
+            _quarantine_published_workspace(moved_current.path, publish_error)
         try:
             rename_workspace_tree_noreplace(moved_backup, current_binding.path)
         except BaseException as rollback_error:
@@ -363,6 +368,16 @@ def _commit_workspace_promotion(
     backup_state = _load_promotion_phase(backup_workspace, run_id, "backup")
     if backup_state.binding is not None:
         _quarantine_committed_phase(backup_state, token)
+
+
+def _quarantine_published_workspace(path: Path, error: BaseException) -> None:
+    try:
+        observed_current = _optional_tree_binding(path, "published workspace")
+        if observed_current is not None:
+            quarantine = _random_promotion_quarantine_path(path)
+            rename_workspace_tree_noreplace(observed_current, quarantine)
+    except BaseException as quarantine_error:
+        error.add_note(f"published workspace quarantine failed: {quarantine_error}")
 
 
 def _validate_published_workspace(
