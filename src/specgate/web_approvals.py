@@ -3,10 +3,10 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from specgate.approvals import ApprovalQueue, approval_queue_path
+from specgate.approvals import ApprovalQueue
 from specgate.web_auth import utc_now
 from specgate.web_db import connect_db
-from specgate.web_projects import project_paths
+from specgate.web_projects import project_paths, web_run_paths
 
 
 def list_web_approvals(db_path: Path, user_id: int) -> list[sqlite3.Row]:
@@ -63,7 +63,7 @@ def _decide_web_approval(
             raise ValueError("approval is not pending")
 
         paths = project_paths(data_root, user_id, row["project_id"])
-        queue_path = approval_queue_path(paths.workspace)
+        queue_path = web_run_paths(paths, int(row["run_id"])).approval_queue
         decided_at = utc_now().isoformat()
 
         queue = ApprovalQueue.read(queue_path)

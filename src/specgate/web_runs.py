@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-from specgate.approvals import ApprovalQueue, GovernanceConfig, approval_queue_path
+from specgate.approvals import ApprovalQueue, GovernanceConfig
 from specgate.config import ContextConfig, WorkspaceConfig
 from specgate.llm import MockLLM
 from specgate.policy import WorkspacePolicy
@@ -17,13 +17,14 @@ from specgate.run_storage import (
     RunStorageTargetExists,
     cleanup_interrupted_run_storage,
     initialize_run_storage,
+    promote_run_workspace,
     remove_run_storage,
 )
 from specgate.runner import AgentRunner, RunResult
 from specgate.trace import redact
 from specgate.web_auth import utc_now
 from specgate.web_db import connect_db
-from specgate.web_projects import ProjectPaths, package_result_zip, project_paths
+from specgate.web_projects import ProjectPaths, RunPaths, package_result_zip, project_paths, web_run_paths
 from specgate.web_settings import get_settings
 
 
@@ -381,14 +382,15 @@ def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
     try:
         run = _load_run(db_path, run_id)
         project = _load_project(db_path, run["project_id"], run["user_id"])
-        paths = project_paths(data_root, run["user_id"], project["id"])
+        project_storage = project_paths(data_root, run["user_id"], project["id"])
+        paths = web_run_paths(project_storage, run_id)
         if not _mark_running(db_path, run_id):
             return
 
         index_before = _index_signature(paths.workspace / "index.html")
         settings = get_settings(db_path, int(run["user_id"]))
         result = _run_mock_agent(paths, settings)
-        queue = ApprovalQueue.read(approval_queue_path(paths.workspace))
+        queue = ApprovalQueue.read(paths.approval_queue)
         index_path: Path | None = None
         zip_path: Path | None = None
         index_after = _index_signature(paths.workspace / "index.html")
@@ -401,6 +403,8 @@ def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
         if status == "failed" and not produced_index:
             error_message = "Run did not produce index.html"
         trust_level = _trust_level(result, status)
+        if status == "completed":
+            promote_run_workspace(project_storage, run_id)
         _finish_run(
             db_path,
             run_id,
@@ -424,8 +428,9 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
         return None
 
     project = _load_project(db_path, run["project_id"], user_id)
-    paths = project_paths(data_root, user_id, project["id"])
-    queue = ApprovalQueue.read(approval_queue_path(paths.workspace))
+    project_storage = project_paths(data_root, user_id, project["id"])
+    paths = web_run_paths(project_storage, run_id)
+    queue = ApprovalQueue.read(paths.approval_queue)
     if queue.next_resume_candidate() is None:
         raise ValueError("no approved or denied approval to resume")
 
@@ -438,7 +443,7 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
         index_before = _index_signature(paths.workspace / "index.html")
         settings = get_settings(db_path, user_id)
         result = _run_resume_agent(paths, settings)
-        queue = ApprovalQueue.read(approval_queue_path(paths.workspace))
+        queue = ApprovalQueue.read(paths.approval_queue)
         index_path: Path | None = None
         zip_path: Path | None = None
         index_after = _index_signature(paths.workspace / "index.html")
@@ -451,6 +456,8 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
         if status == "failed" and not produced_index:
             error_message = "Run did not produce index.html"
         trust_level = _trust_level(result, status)
+        if status == "completed":
+            promote_run_workspace(project_storage, run_id)
         _finish_run(
             db_path,
             run_id,
@@ -469,7 +476,7 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
         raise
 
 
-def _run_mock_agent(paths: ProjectPaths, settings: dict) -> RunResult:
+def _run_mock_agent(paths: RunPaths, settings: dict) -> RunResult:
     governance = GovernanceConfig(profile=settings["governance_profile"])
     policy = WorkspacePolicy(
         root=paths.workspace,
@@ -506,11 +513,13 @@ def _run_mock_agent(paths: ProjectPaths, settings: dict) -> RunResult:
         max_steps=5,
         context_strategy=workspace_config.context.strategy,
         governance_config=workspace_config.governance,
+        audit_dir=paths.audit,
+        approval_queue_file=paths.approval_queue,
     )
     return runner.run()
 
 
-def _run_resume_agent(paths: ProjectPaths, settings: dict) -> RunResult:
+def _run_resume_agent(paths: RunPaths, settings: dict) -> RunResult:
     governance = GovernanceConfig(profile=settings["governance_profile"])
     policy = WorkspacePolicy(
         root=paths.workspace,
@@ -539,6 +548,9 @@ def _run_resume_agent(paths: ProjectPaths, settings: dict) -> RunResult:
         max_steps=5,
         context_strategy=workspace_config.context.strategy,
         governance_config=workspace_config.governance,
+        audit_dir=paths.audit,
+        approval_queue_file=paths.approval_queue,
+        reset_audit=False,
     )
     return runner.resume_from_approval()
 
@@ -713,14 +725,14 @@ def _mark_failed(db_path: Path, run_id: int, error_message: str) -> None:
         conn.close()
 
 
-def _publish_artifacts(paths: ProjectPaths) -> tuple[Path, Path]:
+def _publish_artifacts(paths: RunPaths) -> tuple[Path, Path]:
     source = paths.workspace / "index.html"
     if not source.is_file():
         raise ValueError("index.html was not produced")
     paths.artifacts.mkdir(parents=True, exist_ok=True)
-    index_path = paths.artifacts / "latest-index.html"
+    index_path = paths.index_artifact
     shutil.copy2(source, index_path)
-    zip_path = package_result_zip(paths.artifacts)
+    zip_path = package_result_zip(index_path, paths.zip_artifact)
     return index_path, zip_path
 
 

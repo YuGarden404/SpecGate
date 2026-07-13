@@ -690,8 +690,9 @@ class WebRunsTests(unittest.TestCase):
 
         updated = get_run(db_path, user["id"], run["id"])
         paths = project_paths(data_root, user["id"], project["id"])
-        latest_index = paths.artifacts / "latest-index.html"
-        result_zip = paths.artifacts / "result.zip"
+        run_paths = web_run_paths(paths, run["id"])
+        latest_index = run_paths.index_artifact
+        result_zip = run_paths.zip_artifact
 
         self.assertIn(updated["status"], {"completed", "failed", "needs_approval"})
         self.assertEqual(updated["status"], "completed")
@@ -700,6 +701,9 @@ class WebRunsTests(unittest.TestCase):
         self.assertTrue(latest_index.is_file())
         self.assertTrue(result_zip.is_file())
         self.assertIn("SpecGate Result", latest_index.read_text(encoding="utf-8"))
+        self.assertFalse((paths.artifacts / "latest-index.html").exists())
+        self.assertFalse((paths.artifacts / "result.zip").exists())
+        self.assertEqual((paths.workspace / "index.html").read_bytes(), latest_index.read_bytes())
 
         with closing(connect_db(db_path)) as conn:
             artifacts = conn.execute(
@@ -725,9 +729,11 @@ class WebRunsTests(unittest.TestCase):
         execute_run_once(db_path, data_root, run["id"])
 
         paths = project_paths(data_root, user["id"], project["id"])
-        trace_text = (paths.workspace / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+        run_paths = web_run_paths(paths, run["id"])
+        trace_text = (run_paths.audit / "trace.jsonl").read_text(encoding="utf-8")
         self.assertIn('"strategy": "rag-select"', trace_text)
         self.assertIn('"profile": "strict"', trace_text)
+        self.assertFalse((paths.workspace / "runs" / "latest").exists())
 
     def test_execute_run_once_failure_marks_run_failed_when_index_is_missing(self):
         db_path, data_root, user, project = self.make_context()
@@ -745,17 +751,19 @@ class WebRunsTests(unittest.TestCase):
 
         updated = get_run(db_path, user["id"], run["id"])
         paths = project_paths(data_root, user["id"], project["id"])
+        run_paths = web_run_paths(paths, run["id"])
 
         self.assertEqual(updated["status"], "failed")
         self.assertIsNotNone(updated["finished_at"])
         self.assertEqual(updated["error_message"], "Run did not produce index.html")
         self.assertIsNone(updated["index_artifact_path"])
-        self.assertFalse((paths.artifacts / "latest-index.html").exists())
+        self.assertFalse(run_paths.index_artifact.exists())
 
     def test_execute_run_once_does_not_publish_stale_index_from_previous_state(self):
         db_path, data_root, user, project = self.make_context()
         run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
         paths = project_paths(data_root, user["id"], project["id"])
+        run_paths = web_run_paths(paths, run["id"])
         old_html = """<!doctype html>
 <html lang="en">
 <head>
@@ -769,9 +777,9 @@ class WebRunsTests(unittest.TestCase):
 </body>
 </html>
         """
-        (paths.workspace / "index.html").write_text(old_html, encoding="utf-8")
-        stale_index_path = paths.artifacts / "old-index.html"
-        stale_zip_path = paths.artifacts / "old-result.zip"
+        (run_paths.workspace / "index.html").write_text(old_html, encoding="utf-8")
+        stale_index_path = run_paths.artifacts / "old-index.html"
+        stale_zip_path = run_paths.artifacts / "old-result.zip"
         with closing(connect_db(db_path)) as conn:
             conn.execute(
                 "update runs set index_artifact_path = ?, zip_artifact_path = ? where id = ?",
@@ -802,8 +810,8 @@ class WebRunsTests(unittest.TestCase):
         self.assertEqual(updated["error_message"], "Run did not produce index.html")
         self.assertIsNone(updated["index_artifact_path"])
         self.assertIsNone(updated["zip_artifact_path"])
-        self.assertFalse((paths.artifacts / "latest-index.html").exists())
-        self.assertFalse((paths.artifacts / "result.zip").exists())
+        self.assertFalse(run_paths.index_artifact.exists())
+        self.assertFalse(run_paths.zip_artifact.exists())
         with closing(connect_db(db_path)) as conn:
             artifact_count = conn.execute(
                 "select count(*) from artifacts where run_id = ?",
@@ -823,7 +831,8 @@ class WebRunsTests(unittest.TestCase):
         execute_run_once(db_path, data_root, completed_run["id"])
         completed_before = get_run(db_path, user["id"], completed_run["id"])
         paths = project_paths(data_root, user["id"], project["id"])
-        index_before = (paths.artifacts / "latest-index.html").read_text(encoding="utf-8")
+        completed_paths = web_run_paths(paths, completed_run["id"])
+        index_before = completed_paths.index_artifact.read_text(encoding="utf-8")
 
         running_run = create_run(
             db_path,
@@ -853,10 +862,54 @@ class WebRunsTests(unittest.TestCase):
         self.assertEqual(completed_after["status"], "completed")
         self.assertEqual(completed_after["index_artifact_path"], completed_before["index_artifact_path"])
         self.assertEqual(completed_after["zip_artifact_path"], completed_before["zip_artifact_path"])
-        self.assertEqual((paths.artifacts / "latest-index.html").read_text(encoding="utf-8"), index_before)
+        self.assertEqual(completed_paths.index_artifact.read_text(encoding="utf-8"), index_before)
         self.assertEqual(running_after["status"], "running")
         self.assertIsNone(running_after["index_artifact_path"])
         self.assertIsNone(running_after["zip_artifact_path"])
+
+    def test_completed_runs_keep_immutable_artifacts_and_audit(self):
+        db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        run1 = create_run(db_path, project["id"], user["id"], "First result", data_root=data_root)
+
+        execute_run_once(db_path, data_root, run1["id"])
+
+        run1_row = get_run(db_path, user["id"], run1["id"])
+        run1_paths = web_run_paths(paths, run1["id"])
+        run1_index = run1_paths.index_artifact.read_bytes()
+        run1_zip = run1_paths.zip_artifact.read_bytes()
+        run1_trace = (run1_paths.audit / "trace.jsonl").read_bytes()
+        run2 = create_run(db_path, project["id"], user["id"], "Second result", data_root=data_root)
+        run2_paths = web_run_paths(paths, run2["id"])
+        self.assertEqual((run2_paths.workspace / "index.html").read_bytes(), run1_index)
+
+        execute_run_once(db_path, data_root, run2["id"])
+
+        run2_row = get_run(db_path, user["id"], run2["id"])
+        self.assertEqual(run1_paths.index_artifact.read_bytes(), run1_index)
+        self.assertEqual(run1_paths.zip_artifact.read_bytes(), run1_zip)
+        self.assertEqual((run1_paths.audit / "trace.jsonl").read_bytes(), run1_trace)
+        self.assertEqual(run1_row["index_artifact_path"], str(run1_paths.index_artifact))
+        self.assertEqual(run2_row["index_artifact_path"], str(run2_paths.index_artifact))
+        self.assertNotEqual(run1_row["index_artifact_path"], run2_row["index_artifact_path"])
+
+    def test_workspace_promotion_failure_marks_run_failed_without_completed_record(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+
+        with patch("specgate.web_runs.promote_run_workspace", side_effect=RuntimeError("promotion failed")):
+            execute_run_once(db_path, data_root, run["id"])
+
+        updated = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(updated["status"], "failed")
+        self.assertIn("promotion failed", updated["error_message"])
+        self.assertIsNone(updated["index_artifact_path"])
+        self.assertIsNone(updated["zip_artifact_path"])
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(
+                conn.execute("select count(*) from artifacts where run_id = ?", (run["id"],)).fetchone()[0],
+                0,
+            )
 
 
 if __name__ == "__main__":

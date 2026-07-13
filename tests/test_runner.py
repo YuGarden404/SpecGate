@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from specgate.llm import MockLLM
+from specgate.metrics import RunMetrics
 from specgate.policy import WorkspacePolicy
 from specgate.runner import AgentRunner
 from specgate.approvals import ApprovalQueue, GovernanceConfig, PendingApproval, approval_queue_path
@@ -87,6 +88,77 @@ class ApprovalFeedbackLLM:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_runner_uses_explicit_audit_and_approval_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            audit_dir = Path(tmp) / "audit"
+            queue_file = Path(tmp) / "approvals" / "queue.json"
+            root.mkdir()
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("original", encoding="utf-8")
+            policy = WorkspacePolicy(root, {"replace_file"}, {"TASK_SPEC.md"}, {"README.md"})
+            governance = GovernanceConfig(
+                profile="review",
+                review_actions={"replace_file"},
+                review_paths={"README.md"},
+            )
+
+            runner = AgentRunner(
+                root,
+                MockLLM(
+                    [
+                        {
+                            "schema_version": "1",
+                            "action": "replace_file",
+                            "args": {"path": "README.md", "content": "changed"},
+                        }
+                    ]
+                ),
+                policy,
+                max_steps=1,
+                governance_config=governance,
+                audit_dir=audit_dir,
+                approval_queue_file=queue_file,
+            )
+            runner.run()
+            runner._record_retrieval(RunMetrics(), {"retrieval": {}})
+            runner._record_compression(RunMetrics(), {"compression": {}})
+            runner._record_isolation(RunMetrics(), {"isolation": {}})
+
+            self.assertTrue((audit_dir / "trace.jsonl").is_file())
+            self.assertTrue((audit_dir / "retrieval.json").is_file())
+            self.assertTrue((audit_dir / "compression.json").is_file())
+            self.assertTrue((audit_dir / "isolation.json").is_file())
+            self.assertTrue(queue_file.is_file())
+            self.assertFalse((root / "runs" / "latest").exists())
+            self.assertFalse(approval_queue_path(root).exists())
+
+    def test_runner_reset_audit_false_preserves_existing_trace_and_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            audit_dir = Path(tmp) / "audit"
+            root.mkdir()
+            audit_dir.mkdir()
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            for name in ("retrieval.json", "compression.json", "isolation.json"):
+                (audit_dir / name).write_bytes(f"existing-{name}".encode())
+            trace_bytes = b'{"event_type":"approval_requested"}\n'
+            (audit_dir / "trace.jsonl").write_bytes(trace_bytes)
+            policy = WorkspacePolicy(root, {"finish"}, {"TASK_SPEC.md"}, set())
+
+            AgentRunner(
+                root,
+                MockLLM([]),
+                policy,
+                audit_dir=audit_dir,
+                reset_audit=False,
+            )
+
+            self.assertEqual((audit_dir / "trace.jsonl").read_bytes(), trace_bytes)
+            for name in ("retrieval.json", "compression.json", "isolation.json"):
+                self.assertEqual((audit_dir / name).read_bytes(), f"existing-{name}".encode())
+
     def test_multi_agent_isolated_runs_planner_implementer_reviewer_in_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

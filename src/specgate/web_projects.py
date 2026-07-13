@@ -153,12 +153,15 @@ def create_project_from_zip(
             conn.close()
 
 
-def package_result_zip(artifact_dir: Path) -> Path:
-    source = artifact_dir / "latest-index.html"
+def package_result_zip(source: Path, zip_path: Path | None = None) -> Path:
+    if zip_path is None:
+        artifact_dir = source
+        source = artifact_dir / "latest-index.html"
+        zip_path = artifact_dir / "result.zip"
     if not source.is_file():
-        raise ValueError("latest-index.html is required")
+        raise ValueError(f"{source.name} is required")
 
-    zip_path = artifact_dir / "result.zip"
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.write(source, "index.html")
     return zip_path

@@ -67,6 +67,9 @@ class AgentRunner:
         context_strategy: str = "baseline",
         governance_profile: str | None = None,
         governance_config: GovernanceConfig | None = None,
+        audit_dir: Path | None = None,
+        approval_queue_file: Path | None = None,
+        reset_audit: bool = True,
     ):
         self.root = root
         self.llm = llm
@@ -77,9 +80,11 @@ class AgentRunner:
         self.governance_profile = governance_profile if governance_profile is not None else self.governance_config.profile
         snapshot = FileSnapshot.capture(root, policy.allowed_write_paths)
         self.dispatcher = ToolDispatcher(policy, snapshot)
-        self.run_dir = root / "runs" / "latest"
-        self.trace = TraceStore(self.run_dir / "trace.jsonl", reset=True)
-        self._reset_run_artifacts()
+        self.run_dir = audit_dir or root / "runs" / "latest"
+        self.approval_queue_file = approval_queue_file or approval_queue_path(root)
+        self.trace = TraceStore(self.run_dir / "trace.jsonl", reset=reset_audit)
+        if reset_audit:
+            self._reset_run_artifacts()
 
     def run(self) -> RunResult:
         if self.context_strategy == "multi-agent-isolated":
@@ -93,7 +98,7 @@ class AgentRunner:
                 path.unlink()
 
     def _reset_approval_queue(self) -> None:
-        queue_path = approval_queue_path(self.root)
+        queue_path = self.approval_queue_file
         if queue_path.exists():
             queue_path.unlink()
 
@@ -348,7 +353,7 @@ class AgentRunner:
         action_path_value = action.args.get("path")
         action_path = action_path_value if isinstance(action_path_value, str) else None
         risk = classify_action_risk(action, self.policy, self.governance_config)
-        queue_path = approval_queue_path(self.root)
+        queue_path = self.approval_queue_file
         if risk.level == "review" and self.governance_profile == "review":
             queue = ApprovalQueue.read(queue_path)
             approval = PendingApproval(
@@ -635,7 +640,7 @@ class AgentRunner:
         initial_permission_decisions: list[PermissionDecision] | None = None,
         latest_gate: GateResult | None = None,
     ) -> RunResult:
-        queue_path = approval_queue_path(self.root)
+        queue_path = self.approval_queue_file
         if reset_queue:
             self._reset_approval_queue()
 
@@ -790,7 +795,7 @@ class AgentRunner:
         return self._finish_result(self.max_steps, latest_gate, metrics, permission_decisions)
 
     def resume_from_approval(self) -> RunResult:
-        queue_path = approval_queue_path(self.root)
+        queue_path = self.approval_queue_file
         queue = ApprovalQueue.read(queue_path)
         approval = queue.next_resume_candidate()
         if approval is None:
