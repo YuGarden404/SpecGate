@@ -7,6 +7,8 @@ import ntpath
 import os
 import shutil
 import stat
+import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator
@@ -78,7 +80,7 @@ def open_workspace_file(
     descriptor = -1
     try:
         try:
-            root_path, trusted_root = _validate_root(Path(root))
+            root_path, trusted_root, root_identity = _validate_root(Path(root))
             parts = normalized.split("/")
             if os.name == "nt":
                 descriptor = _open_windows_workspace_fd(
@@ -89,7 +91,13 @@ def open_workspace_file(
                     create,
                 )
             else:
-                descriptor = _open_posix_workspace_fd(root_path, parts, access, create)
+                descriptor = _open_posix_workspace_fd(
+                    root_path,
+                    root_identity,
+                    parts,
+                    access,
+                    create,
+                )
 
             _validate_regular_file(descriptor, normalized)
             if access == "write":
@@ -196,7 +204,8 @@ def copy_workspace_tree(
     directories, files = _scan_workspace(source_path)
 
     destination_path = Path(os.path.abspath(destination))
-    destination_created = False
+    staging_path: Path | None = None
+    staging_identity: tuple[int, int] | None = None
     try:
         try:
             destination_path.lstat()
@@ -208,21 +217,27 @@ def copy_workspace_tree(
                 "workspace copy destination already exists",
                 "path_race",
             )
-        destination_path.mkdir()
-        destination_created = True
+        staging_path = _create_private_staging(destination_path)
+        staging_identity = _stat_identity(staging_path.lstat())
 
         for relative in directories:
-            _ensure_workspace_directory(destination_path, relative)
+            _ensure_workspace_directory(staging_path, relative)
         for relative in files:
             write_workspace_bytes(
-                destination_path,
+                staging_path,
                 relative,
                 read_workspace_bytes(source_path, relative),
             )
+        _publish_workspace_tree(
+            staging_path,
+            destination_path,
+            staging_identity,
+        )
+        staging_path = None
     except BaseException as copy_error:
-        if destination_created:
+        if staging_path is not None and staging_identity is not None:
             try:
-                _remove_created_destination(destination_path)
+                _remove_created_destination(staging_path, staging_identity)
             except OSError as cleanup_error:
                 raise WorkspacePathError(
                     "workspace copy failed and destination cleanup was incomplete",
@@ -240,10 +255,10 @@ def copy_workspace_tree(
 
 def _scan_workspace(root: Path) -> tuple[list[str], list[str]]:
     try:
-        root_path, trusted_root = _validate_root(root)
+        root_path, trusted_root, root_identity = _validate_root(root)
         if os.name == "nt":
-            return _scan_windows_workspace(root_path, trusted_root)
-        return _scan_posix_workspace(root_path)
+            return _scan_windows_workspace(root_path, trusted_root, root_identity)
+        return _scan_posix_workspace(root_path, root_identity)
     except WorkspacePathError:
         raise
     except OSError as exc:
@@ -253,7 +268,10 @@ def _scan_workspace(root: Path) -> tuple[list[str], list[str]]:
         ) from exc
 
 
-def _scan_posix_workspace(root: Path) -> tuple[list[str], list[str]]:
+def _scan_posix_workspace(
+    root: Path,
+    root_identity: tuple[int, int],
+) -> tuple[list[str], list[str]]:
     required = (
         hasattr(os, "O_NOFOLLOW")
         and hasattr(os, "O_DIRECTORY")
@@ -270,8 +288,7 @@ def _scan_posix_workspace(root: Path) -> tuple[list[str], list[str]]:
     files: list[str] = []
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     directory_flags |= getattr(os, "O_CLOEXEC", 0)
-    root_before = root.lstat()
-    root_fd = os.open(root, directory_flags)
+    root_fd = _open_posix_root_fd(root, directory_flags, root_identity)
 
     def scan(current_fd: int, prefix: str) -> None:
         with os.scandir(current_fd) as scanner:
@@ -325,7 +342,6 @@ def _scan_posix_workspace(root: Path) -> tuple[list[str], list[str]]:
                     )
 
     try:
-        _verify_same_object(root_before, os.fstat(root_fd))
         scan(root_fd, "")
         return sorted(directories), sorted(files)
     finally:
@@ -335,6 +351,7 @@ def _scan_posix_workspace(root: Path) -> tuple[list[str], list[str]]:
 def _scan_windows_workspace(
     root: Path,
     trusted_root: Path,
+    root_identity: tuple[int, int],
 ) -> tuple[list[str], list[str]]:
     directories: list[str] = []
     files: list[str] = []
@@ -342,11 +359,15 @@ def _scan_windows_workspace(
     def scan(
         current: Path,
         prefix: str,
-        expected_identity: int,
+        expected_identity: tuple[int, int],
     ) -> None:
         expected = trusted_root.joinpath(*prefix.split("/")) if prefix else trusted_root
-        with _open_windows_directory_lock(current, expected, expected_identity):
-            discovered: list[tuple[Path, str, int]] = []
+        with _open_windows_directory_lock(
+            current,
+            expected,
+            expected_identity,
+        ) as current_identity:
+            discovered: list[tuple[Path, str, tuple[int, int]]] = []
             with os.scandir(current) as scanner:
                 for entry in sorted(scanner, key=lambda item: item.name):
                     relative = f"{prefix}/{entry.name}" if prefix else entry.name
@@ -374,7 +395,11 @@ def _scan_windows_workspace(
                     if stat.S_ISDIR(entry_stat.st_mode):
                         directories.append(normalized)
                         discovered.append(
-                            (entry_path, normalized, entry.inode())
+                            (
+                                entry_path,
+                                normalized,
+                                (current_identity[0], entry.inode()),
+                            )
                         )
                     elif stat.S_ISREG(entry_stat.st_mode):
                         descriptor = _open_windows_workspace_fd(
@@ -394,27 +419,111 @@ def _scan_windows_workspace(
             for entry_path, relative, entry_identity in discovered:
                 scan(entry_path, relative, entry_identity)
 
-    scan(root, "", _stat_identity(root.lstat()))
+    scan(root, "", root_identity)
     return sorted(directories), sorted(files)
 
 
-def _remove_created_destination(destination: Path) -> None:
+def _create_private_staging(destination: Path) -> Path:
+    prefix = f".{destination.name}.specgate-copy-"
+    return Path(tempfile.mkdtemp(prefix=prefix, dir=destination.parent))
+
+
+def _publish_workspace_tree(
+    staging: Path,
+    destination: Path,
+    expected_identity: tuple[int, int],
+) -> None:
+    staging_stat = staging.lstat()
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if (
+        stat.S_ISLNK(staging_stat.st_mode)
+        or getattr(staging_stat, "st_file_attributes", 0) & reparse_flag
+        or _stat_identity(staging_stat) != expected_identity
+    ):
+        raise WorkspacePathError(
+            "workspace copy staging directory was replaced before publication",
+            "path_race",
+        )
+    if os.name == "nt":
+        os.rename(staging, destination)
+        return
+
+    try:
+        import ctypes
+    except ImportError as exc:
+        raise WorkspacePathError(
+            "atomic no-replace directory publication is unavailable",
+            "path_race",
+        ) from exc
+
+    library = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin" and hasattr(library, "renamex_np"):
+        rename_exclusive = 0x00000004
+        renamex_np = library.renamex_np
+        renamex_np.argtypes = (
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        renamex_np.restype = ctypes.c_int
+        result = renamex_np(
+            os.fsencode(staging),
+            os.fsencode(destination),
+            rename_exclusive,
+        )
+    elif hasattr(library, "renameat2"):
+        at_fdcwd = -100
+        rename_noreplace = 1
+        renameat2 = library.renameat2
+        renameat2.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        renameat2.restype = ctypes.c_int
+        result = renameat2(
+            at_fdcwd,
+            os.fsencode(staging),
+            at_fdcwd,
+            os.fsencode(destination),
+            rename_noreplace,
+        )
+    else:
+        raise WorkspacePathError(
+            "atomic no-replace directory publication is unavailable",
+            "path_race",
+        )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), destination)
+
+
+def _remove_created_destination(
+    destination: Path,
+    expected_identity: tuple[int, int],
+) -> None:
     try:
         file_stat = destination.lstat()
     except FileNotFoundError:
         return
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    if stat.S_ISLNK(file_stat.st_mode):
-        destination.unlink()
-    elif getattr(file_stat, "st_file_attributes", 0) & reparse_flag:
-        destination.rmdir()
-    else:
-        shutil.rmtree(destination)
+    if (
+        stat.S_ISLNK(file_stat.st_mode)
+        or getattr(file_stat, "st_file_attributes", 0) & reparse_flag
+        or _stat_identity(file_stat) != expected_identity
+    ):
+        raise WorkspacePathError(
+            "workspace copy staging directory was replaced",
+            "path_race",
+        )
+    shutil.rmtree(destination)
 
 
 def _ensure_workspace_directory(root: Path, relative: str) -> None:
     parts = normalize_workspace_relative(relative).split("/")
-    root_path, trusted_root = _validate_root(root)
+    root_path, trusted_root, root_identity = _validate_root(root)
     if os.name == "nt":
         current = root_path
         for part in parts:
@@ -447,10 +556,14 @@ def _ensure_workspace_directory(root: Path, relative: str) -> None:
                 "path_race",
             )
         return
-    _ensure_posix_workspace_directory(root_path, parts)
+    _ensure_posix_workspace_directory(root_path, root_identity, parts)
 
 
-def _ensure_posix_workspace_directory(root: Path, parts: list[str]) -> None:
+def _ensure_posix_workspace_directory(
+    root: Path,
+    root_identity: tuple[int, int],
+    parts: list[str],
+) -> None:
     required = (
         hasattr(os, "O_NOFOLLOW")
         and hasattr(os, "O_DIRECTORY")
@@ -465,7 +578,7 @@ def _ensure_posix_workspace_directory(root: Path, parts: list[str]) -> None:
         )
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     flags |= getattr(os, "O_CLOEXEC", 0)
-    current_fd = os.open(root, flags)
+    current_fd = _open_posix_root_fd(root, flags, root_identity)
     try:
         for part in parts:
             try:
@@ -502,7 +615,7 @@ def _ensure_posix_workspace_directory(root: Path, parts: list[str]) -> None:
         os.close(current_fd)
 
 
-def _validate_root(root: Path) -> tuple[Path, Path]:
+def _validate_root(root: Path) -> tuple[Path, Path, tuple[int, int]]:
     root_path = Path(os.path.abspath(root))
     try:
         root_stat = root_path.lstat()
@@ -515,7 +628,7 @@ def _validate_root(root: Path) -> tuple[Path, Path]:
         trusted_root = root_path.resolve(strict=True)
     except OSError as exc:
         raise WorkspacePathError("workspace root cannot be resolved", "path_race") from exc
-    return root_path, trusted_root
+    return root_path, trusted_root, _stat_identity(root_stat)
 
 
 def _reject_link_like(path: Path) -> None:
@@ -660,8 +773,8 @@ def _validate_windows_final_path(
 def _open_windows_directory_lock(
     path: Path,
     expected: Path,
-    expected_identity: int,
-) -> Iterator[None]:
+    expected_identity: tuple[int, int],
+) -> Iterator[tuple[int, int]]:
     if os.name != "nt":
         raise RuntimeError("Windows directory handles are unavailable")
     _reject_link_like(path)
@@ -685,10 +798,6 @@ def _open_windows_directory_lock(
         wintypes.HANDLE,
     )
     create_file.restype = wintypes.HANDLE
-    close_handle = ctypes.windll.kernel32.CloseHandle
-    close_handle.argtypes = (wintypes.HANDLE,)
-    close_handle.restype = wintypes.BOOL
-
     class ByHandleFileInformation(ctypes.Structure):
         _fields_ = (
             ("file_attributes", wintypes.DWORD),
@@ -744,7 +853,8 @@ def _open_windows_directory_lock(
                 "workspace scan path is not a directory",
                 "unsafe_file_type",
             )
-        if _windows_handle_identity(information) != expected_identity:
+        actual_identity = _windows_handle_identity(handle, information)
+        if actual_identity != expected_identity:
             raise WorkspacePathError(
                 "workspace directory identity changed during scan",
                 "path_race",
@@ -757,17 +867,65 @@ def _open_windows_directory_lock(
                 "workspace directory changed location during scan",
                 "path_race",
             )
-        yield
+        yield actual_identity
     finally:
-        close_handle(handle)
+        if not _windows_close_handle(handle):
+            raise WorkspacePathError(
+                "Windows directory handle could not be closed",
+                "path_race",
+            )
 
 
-def _stat_identity(file_stat: os.stat_result | Any) -> int:
-    return file_stat.st_ino
+def _stat_identity(file_stat: os.stat_result | Any) -> tuple[int, int]:
+    return file_stat.st_dev, file_stat.st_ino
 
 
-def _windows_handle_identity(information: Any) -> int:
-    return (information.file_index_high << 32) | information.file_index_low
+def _windows_handle_identity(handle: int, information: Any) -> tuple[int, int]:
+    file_index = (information.file_index_high << 32) | information.file_index_low
+    return _windows_handle_volume_serial(handle), file_index
+
+
+def _windows_handle_volume_serial(handle: int) -> int:
+    import ctypes
+    from ctypes import wintypes
+
+    class FileId128(ctypes.Structure):
+        _fields_ = (("identifier", ctypes.c_ubyte * 16),)
+
+    class FileIdInfo(ctypes.Structure):
+        _fields_ = (
+            ("volume_serial_number", ctypes.c_ulonglong),
+            ("file_id", FileId128),
+        )
+
+    get_information = ctypes.windll.kernel32.GetFileInformationByHandleEx
+    get_information.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    )
+    get_information.restype = wintypes.BOOL
+    file_id_info_class = 18
+    information = FileIdInfo()
+    if not get_information(
+        handle,
+        file_id_info_class,
+        ctypes.byref(information),
+        ctypes.sizeof(information),
+    ):
+        raise ctypes.WinError()
+    return information.volume_serial_number
+
+
+def _windows_close_handle(handle: int) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    close_handle = ctypes.windll.kernel32.CloseHandle
+    close_handle.argtypes = (wintypes.HANDLE,)
+    close_handle.restype = wintypes.BOOL
+    return bool(close_handle(handle))
 
 
 def _windows_final_path(descriptor: int) -> Path:
@@ -814,6 +972,7 @@ def _windows_final_path_from_handle(handle: int) -> Path:
 
 def _open_posix_workspace_fd(
     root: Path,
+    root_identity: tuple[int, int],
     parts: list[str],
     access: str,
     create: bool,
@@ -831,12 +990,10 @@ def _open_posix_workspace_fd(
             "path_race",
         )
 
-    root_before = root.lstat()
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     directory_flags |= getattr(os, "O_CLOEXEC", 0)
-    current_fd = os.open(root, directory_flags)
+    current_fd = _open_posix_root_fd(root, directory_flags, root_identity)
     try:
-        _verify_same_object(root_before, os.fstat(current_fd))
         current_path = root
         for part in parts[:-1]:
             current_path /= part
@@ -913,6 +1070,54 @@ def _open_posix_workspace_fd(
         return descriptor
     finally:
         os.close(current_fd)
+
+
+def _open_posix_root_fd(
+    root: Path,
+    flags: int,
+    expected_identity: tuple[int, int],
+) -> int:
+    if not root.is_absolute():
+        raise WorkspacePathError("workspace root must be absolute", "path_race")
+
+    current_fd = os.open(root.anchor, flags)
+    try:
+        for part in root.parts[1:]:
+            before = os.stat(part, dir_fd=current_fd, follow_symlinks=False)
+            if stat.S_ISLNK(before.st_mode):
+                raise WorkspacePathError(
+                    "workspace root ancestor is a symbolic link",
+                    "linked_path",
+                )
+            if not stat.S_ISDIR(before.st_mode):
+                raise WorkspacePathError(
+                    "workspace root ancestor is not a directory",
+                    "unsafe_file_type",
+                )
+            try:
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+            except OSError as exc:
+                _raise_posix_link_error(exc, current_fd, part)
+                raise
+            try:
+                _verify_same_object(before, os.fstat(next_fd))
+            except BaseException:
+                os.close(next_fd)
+                raise
+            os.close(current_fd)
+            current_fd = next_fd
+
+        if _stat_identity(os.fstat(current_fd)) != expected_identity:
+            raise WorkspacePathError(
+                "workspace root identity changed while opening",
+                "path_race",
+            )
+        descriptor = current_fd
+        current_fd = -1
+        return descriptor
+    finally:
+        if current_fd >= 0:
+            os.close(current_fd)
 
 
 def _verify_same_object(before: os.stat_result, after: os.stat_result) -> None:

@@ -455,6 +455,112 @@ class WorkspaceScanAndCopyTests(unittest.TestCase):
             self.assertEqual(raised.exception.rule_family, "path_race")
             self.assertFalse(destination.exists())
 
+    def test_copy_cleanup_does_not_delete_replacement_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "source"
+            destination = base / "destination"
+            replacement = base / "replacement"
+            displaced = base / "displaced-copy"
+            source.mkdir()
+            replacement.mkdir()
+            (source / "a.txt").write_text("a", encoding="utf-8")
+            (replacement / "sentinel.txt").write_text("existing sentinel", encoding="utf-8")
+            real_write = workspace_fs.write_workspace_bytes
+            copy_root = None
+
+            def replace_copy_root(root, relative, content):
+                nonlocal copy_root
+                real_write(root, relative, content)
+                copy_root = Path(root)
+                copy_root.rename(displaced)
+                replacement.rename(copy_root)
+                raise OSError("copy interrupted after replacement")
+
+            with mock.patch.object(
+                workspace_fs,
+                "write_workspace_bytes",
+                side_effect=replace_copy_root,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    copy_workspace_tree(source, destination)
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertIsNotNone(copy_root)
+            self.assertEqual(
+                (copy_root / "sentinel.txt").read_text(encoding="utf-8"),
+                "existing sentinel",
+            )
+
+    def test_copy_publish_does_not_overwrite_destination_created_during_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "source"
+            destination = base / "destination"
+            source.mkdir()
+            (source / "a.txt").write_text("a", encoding="utf-8")
+            real_write = workspace_fs.write_workspace_bytes
+
+            def create_destination_before_publish(root, relative, content):
+                real_write(root, relative, content)
+                if Path(root) != destination and not destination.exists():
+                    destination.mkdir()
+                    (destination / "sentinel.txt").write_text(
+                        "existing sentinel",
+                        encoding="utf-8",
+                    )
+
+            with mock.patch.object(
+                workspace_fs,
+                "write_workspace_bytes",
+                side_effect=create_destination_before_publish,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    copy_workspace_tree(source, destination)
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertEqual(
+                (destination / "sentinel.txt").read_text(encoding="utf-8"),
+                "existing sentinel",
+            )
+
+    def test_copy_publish_rejects_replaced_staging_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "source"
+            destination = base / "destination"
+            replacement = base / "replacement"
+            displaced = base / "displaced-copy"
+            source.mkdir()
+            replacement.mkdir()
+            (source / "a.txt").write_text("a", encoding="utf-8")
+            (replacement / "sentinel.txt").write_text("existing sentinel", encoding="utf-8")
+            real_write = workspace_fs.write_workspace_bytes
+            copy_root = None
+
+            def replace_staging_before_publish(root, relative, content):
+                nonlocal copy_root
+                real_write(root, relative, content)
+                copy_root = Path(root)
+                copy_root.rename(displaced)
+                replacement.rename(copy_root)
+
+            with mock.patch.object(
+                workspace_fs,
+                "write_workspace_bytes",
+                side_effect=replace_staging_before_publish,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    copy_workspace_tree(source, destination)
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertIsNotNone(copy_root)
+            self.assertEqual(
+                (copy_root / "sentinel.txt").read_text(encoding="utf-8"),
+                "existing sentinel",
+            )
+            self.assertFalse(destination.exists())
+
     def test_copy_destination_lstat_error_uses_stable_path_race_family(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -475,20 +581,19 @@ class WorkspaceScanAndCopyTests(unittest.TestCase):
             self.assertEqual(raised.exception.rule_family, "path_race")
             self.assertFalse(destination.exists())
 
-    def test_copy_destination_mkdir_error_uses_stable_path_race_family(self):
+    def test_copy_staging_mkdir_error_uses_stable_path_race_family(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             source = base / "source"
             destination = base / "destination"
             source.mkdir()
-            real_mkdir = Path.mkdir
 
-            def deny_destination(path, *args, **kwargs):
-                if path == destination:
-                    raise PermissionError("mkdir denied")
-                return real_mkdir(path, *args, **kwargs)
-
-            with mock.patch.object(Path, "mkdir", autospec=True, side_effect=deny_destination):
+            with mock.patch.object(
+                workspace_fs,
+                "_create_private_staging",
+                create=True,
+                side_effect=PermissionError("mkdir denied"),
+            ):
                 with self.assertRaises(WorkspacePathError) as raised:
                     copy_workspace_tree(source, destination)
 
@@ -531,8 +636,8 @@ class WorkspaceScanAndCopyTests(unittest.TestCase):
             root_stat = root.stat()
             outside_stat = external.stat()
             identities = (
-                root_stat.st_ino,
-                outside_stat.st_ino,
+                (root_stat.st_dev, root_stat.st_ino),
+                (outside_stat.st_dev, outside_stat.st_ino),
             )
             real_scandir = os.scandir
 
@@ -564,6 +669,86 @@ class WorkspaceScanAndCopyTests(unittest.TestCase):
 
             self.assertEqual(raised.exception.rule_family, "path_race")
             open_file.assert_not_called()
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
+
+    @unittest.skipUnless(os.name == "nt", "Windows volume identity validation")
+    def test_iter_rejects_different_volume_with_same_file_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            nested = root / "nested"
+            nested.mkdir()
+            (nested / "inside.txt").write_text("inside", encoding="utf-8")
+            root_volume = root.stat().st_dev
+
+            with mock.patch.object(
+                workspace_fs,
+                "_windows_handle_volume_serial",
+                create=True,
+                side_effect=(root_volume, root_volume + 1),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    list(iter_workspace_files(root))
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+
+    @unittest.skipUnless(os.name == "nt", "Windows handle close validation")
+    def test_iter_maps_directory_close_handle_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real_close_handle = getattr(workspace_fs, "_windows_close_handle", None)
+
+            def close_then_report_failure(handle):
+                if real_close_handle is not None:
+                    real_close_handle(handle)
+                return False
+
+            with mock.patch.object(
+                workspace_fs,
+                "_windows_close_handle",
+                create=True,
+                side_effect=close_then_report_failure,
+            ) as close_handle:
+                with self.assertRaises(WorkspacePathError) as raised:
+                    list(iter_workspace_files(root))
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            close_handle.assert_called_once()
+
+    @unittest.skipIf(os.name == "nt", "POSIX root descriptor validation")
+    def test_posix_scan_rejects_root_ancestor_replaced_after_validation(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            base = Path(tmp)
+            replaceable = base / "replaceable"
+            saved = base / "saved"
+            root = replaceable / "workspace"
+            root.mkdir(parents=True)
+            (root / "inside.txt").write_text("inside", encoding="utf-8")
+            external_parent = Path(outside)
+            external_root = external_parent / "workspace"
+            external_root.mkdir()
+            sentinel = external_root / "sentinel.txt"
+            sentinel.write_text("external sentinel", encoding="utf-8")
+            real_validate_root = workspace_fs._validate_root
+            replaced = False
+
+            def validate_then_replace(path):
+                nonlocal replaced
+                result = real_validate_root(path)
+                if not replaced:
+                    replaceable.rename(saved)
+                    os.symlink(external_parent, replaceable, target_is_directory=True)
+                    replaced = True
+                return result
+
+            with mock.patch.object(
+                workspace_fs,
+                "_validate_root",
+                side_effect=validate_then_replace,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    list(iter_workspace_files(root))
+
+            self.assertIn(raised.exception.rule_family, {"linked_path", "path_race"})
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
 
     def test_iter_permission_error_uses_stable_path_race_family(self):
