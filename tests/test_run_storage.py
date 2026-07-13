@@ -657,6 +657,38 @@ class RunStorageTests(unittest.TestCase):
         self.assertEqual(len(quarantines), 1)
         self.assertEqual((quarantines[0] / "new.txt").read_text(encoding="utf-8"), "new")
 
+    def test_promote_reports_uncertain_state_when_publish_and_rollback_rename_fail(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        original_rename = run_storage.rename_workspace_tree_noreplace
+        rename_calls = []
+
+        def fail_publish_and_rollback(binding, target):
+            rename_calls.append((binding.path, Path(target)))
+            if len(rename_calls) == 2:
+                raise OSError("publish rename failed")
+            if len(rename_calls) == 3:
+                raise OSError("rollback rename failed")
+            return original_rename(binding, target)
+
+        with patch(
+            "specgate.run_storage.rename_workspace_tree_noreplace",
+            side_effect=fail_publish_and_rollback,
+        ):
+            with self.assertRaises(run_storage.RunStoragePostRenameError) as raised:
+                promote_run_workspace(project, 11)
+
+        self.assertIn("promotion state is uncertain", str(raised.exception))
+        self.assertIn("publish rename failed", str(raised.exception))
+        self.assertIn("rollback rename failed", str(raised.exception))
+        self.assertFalse(project.workspace.exists())
+        backup_workspace = rename_calls[0][1]
+        next_workspace = rename_calls[1][0]
+        self.assertEqual((backup_workspace / "index.html").read_text(encoding="utf-8"), "v1")
+        self.assertEqual((next_workspace / "index.html").read_text(encoding="utf-8"), "v2")
+
     def test_promote_run_workspace_keeps_committed_current_when_backup_cleanup_partially_fails(self):
         project = self.make_project()
         (project.workspace / "index.html").write_text("v1", encoding="utf-8")
@@ -1068,6 +1100,78 @@ class RunStorageTests(unittest.TestCase):
             self.read_promotion_marker(backup_workspace)["transaction_token"],
             "wrong-token",
         )
+        self.assertTrue(displaced_marker.is_file())
+
+    def test_backup_cleanup_rejects_directory_and_marker_replaced_with_same_token(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        replacement = project.root.parent / "replacement-backup-with-marker"
+        replacement.mkdir()
+        sentinel = replacement / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+        displaced = project.root.parent / "displaced-owned-backup-with-marker"
+        displaced_marker = project.root.parent / "displaced-owned-backup-marker.json"
+        real_cleanup = run_storage._quarantine_committed_phase
+        backup_workspace = None
+
+        def replace_directory_and_marker(state, token):
+            nonlocal backup_workspace
+            backup_workspace = state.path
+            state.path.rename(displaced)
+            replacement.rename(state.path)
+            replacement_binding = workspace_fs.bind_workspace_tree(state.path)
+            marker = dict(state.marker)
+            marker["directory_identity"] = list(replacement_binding.identity)
+            marker["parent_identity"] = list(replacement_binding.parent_identity)
+            state.marker_path.rename(displaced_marker)
+            state.marker_path.write_text(json.dumps(marker), encoding="utf-8")
+            return real_cleanup(state, token)
+
+        with patch(
+            "specgate.run_storage._quarantine_committed_phase",
+            side_effect=replace_directory_and_marker,
+        ):
+            with self.assertWarnsRegex(RuntimeWarning, "backup.*quarantine failed"):
+                promote_run_workspace(project, 11)
+
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
+        self.assertEqual(
+            (backup_workspace / "sentinel.txt").read_text(encoding="utf-8"),
+            "external sentinel",
+        )
+        self.assertEqual((displaced / "index.html").read_text(encoding="utf-8"), "v1")
+        self.assertTrue(displaced_marker.is_file())
+        quarantines = list(project.root.glob(".workspace.backup-*.specgate-quarantine-*"))
+        self.assertEqual(quarantines, [])
+
+    def test_backup_cleanup_rejects_replaced_marker_when_directory_disappears(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        displaced = project.root.parent / "displaced-backup-before-cleanup"
+        displaced_marker = project.root.parent / "displaced-backup-marker-before-cleanup.json"
+        real_cleanup = run_storage._quarantine_committed_phase
+
+        def remove_directory_and_replace_marker(state, token):
+            state.path.rename(displaced)
+            marker = dict(state.marker)
+            marker["directory_identity"] = [-1, -1]
+            state.marker_path.rename(displaced_marker)
+            state.marker_path.write_text(json.dumps(marker), encoding="utf-8")
+            return real_cleanup(state, token)
+
+        with patch(
+            "specgate.run_storage._quarantine_committed_phase",
+            side_effect=remove_directory_and_replace_marker,
+        ):
+            with self.assertWarnsRegex(RuntimeWarning, "backup.*quarantine failed"):
+                promote_run_workspace(project, 11)
+
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
+        self.assertEqual((displaced / "index.html").read_text(encoding="utf-8"), "v1")
         self.assertTrue(displaced_marker.is_file())
 
     def workspace_swap_paths(self, project):

@@ -8,7 +8,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import specgate.web_runs as web_runs
 import specgate.run_storage as run_storage
@@ -1092,12 +1092,13 @@ class WebRunsTests(unittest.TestCase):
             "_platform_rename_noreplace",
             side_effect=replace_source_and_fail_quarantine,
         ):
-            with self.assertRaises(workspace_fs.WorkspaceTreeRenameError) as raised:
+            with self.assertRaises(run_storage.RunStoragePostRenameError) as raised:
                 execute_run_once(db_path, data_root, run["id"])
 
-        self.assertFalse(raised.exception.quarantined)
+        self.assertIn("promotion state is uncertain", str(raised.exception))
         updated = get_run(db_path, user["id"], run["id"])
         self.assertEqual(updated["status"], "publishing")
+        self.assertIn("promotion state is uncertain", updated["error_message"])
         self.assertIn("could not be quarantined", updated["error_message"])
         self.assertEqual(
             (paths.workspace / "sentinel.txt").read_text(encoding="utf-8"),
@@ -1160,6 +1161,94 @@ class WebRunsTests(unittest.TestCase):
                 updated = get_run(db_path, user["id"], run["id"])
                 self.assertEqual(updated["status"], "publishing")
                 self.assertIn(str(failure), updated["error_message"])
+
+    def test_publish_and_rollback_rename_failure_keeps_publishing_and_blocks_new_run(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        real_rename = run_storage.rename_workspace_tree_noreplace
+        secret = "sk-double-failure-secret-1234567890"
+        calls = 0
+
+        def fail_publish_and_rollback(binding, destination):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError(f"publish rename failed {secret}")
+            if calls == 3:
+                raise OSError("rollback rename failed")
+            return real_rename(binding, destination)
+
+        with patch(
+            "specgate.run_storage.rename_workspace_tree_noreplace",
+            side_effect=fail_publish_and_rollback,
+        ):
+            with self.assertRaises(run_storage.RunStoragePostRenameError):
+                execute_run_once(db_path, data_root, run["id"])
+
+        updated = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(updated["status"], "publishing")
+        self.assertIn("promotion state is uncertain", updated["error_message"])
+        self.assertNotIn(secret, updated["error_message"])
+        with patch("specgate.web_runs.initialize_run_storage") as initialize_storage:
+            with self.assertRaises(ActiveRunConflict):
+                create_run(
+                    db_path,
+                    project["id"],
+                    user["id"],
+                    "Conflicting run",
+                    data_root=data_root,
+                )
+        initialize_storage.assert_not_called()
+
+    def test_resume_uncertain_promotion_error_keeps_publishing_and_redacted(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        project_storage = project_paths(data_root, user["id"], project["id"])
+        paths = web_run_paths(project_storage, run["id"])
+        with closing(connect_db(db_path)) as conn:
+            conn.execute("update runs set status = 'needs_approval' where id = ?", (run["id"],))
+            conn.commit()
+        queue = Mock()
+        queue.next_resume_candidate.return_value = object()
+        secret = "sk-resume-secret-1234567890"
+        real_rename = run_storage.rename_workspace_tree_noreplace
+        rename_calls = 0
+
+        def prepare_publishing(*_args, **_kwargs):
+            with closing(connect_db(db_path)) as conn:
+                conn.execute("update runs set status = 'publishing' where id = ?", (run["id"],))
+                conn.commit()
+
+        def fail_publish_and_rollback(binding, destination):
+            nonlocal rename_calls
+            rename_calls += 1
+            if rename_calls == 2:
+                raise OSError(f"publish rename failed {secret}")
+            if rename_calls == 3:
+                raise OSError("rollback rename failed")
+            return real_rename(binding, destination)
+
+        with (
+            patch("specgate.web_runs.ApprovalQueue.read", return_value=queue),
+            patch("specgate.web_runs._index_signature", side_effect=[None, "changed"]),
+            patch("specgate.web_runs._run_resume_agent", return_value=object()),
+            patch("specgate.web_runs._publish_artifacts", return_value=(paths.index_artifact, paths.zip_artifact)),
+            patch("specgate.web_runs._status_for_result", return_value="completed"),
+            patch("specgate.web_runs._trust_level", return_value="trusted"),
+            patch("specgate.web_runs._write_and_validate_publication_manifest"),
+            patch("specgate.web_runs._prepare_run_publication", side_effect=prepare_publishing),
+            patch(
+                "specgate.run_storage.rename_workspace_tree_noreplace",
+                side_effect=fail_publish_and_rollback,
+            ),
+        ):
+            with self.assertRaises(run_storage.RunStoragePostRenameError):
+                web_runs.resume_run_once(db_path, data_root, user["id"], run["id"])
+
+        updated = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(updated["status"], "publishing")
+        self.assertIn("promotion state is uncertain", updated["error_message"])
+        self.assertNotIn(secret, updated["error_message"])
 
     def test_finalize_failure_after_promotion_keeps_publishing_and_blocks_new_run(self):
         db_path, data_root, user, project = self.make_context()

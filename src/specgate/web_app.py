@@ -45,6 +45,7 @@ from specgate.workspace_fs import WorkspacePathError, read_workspace_bytes, read
 SESSION_COOKIE_NAME = "specgate_session"
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 RUN_THREAD_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+PREVIEW_UNAVAILABLE_MESSAGE = "Project preview is temporarily unavailable"
 RUN_CREATION_UNAVAILABLE_MESSAGE = "运行创建暂时不可用 / Run creation is temporarily unavailable"
 
 
@@ -229,22 +230,30 @@ def create_app(
         project = _load_project_or_404(app.state.db_path, int(user["id"]), project_id)
         paths = project_paths(app.state.data_root, int(user["id"]), int(project["id"]))
         with closing(connect_db(app.state.db_path)) as conn:
-            conn.execute("BEGIN")
-            publishing = conn.execute(
-                """
-                select 1 from runs
-                where project_id = ? and user_id = ? and status = 'publishing'
-                limit 1
-                """,
-                (project_id, user["id"]),
-            ).fetchone()
-            if publishing is not None:
-                raise HTTPException(status_code=409, detail="project publication in progress")
             try:
+                conn.execute("BEGIN IMMEDIATE")
+                publishing = conn.execute(
+                    """
+                    select 1 from runs
+                    where project_id = ? and user_id = ? and status = 'publishing'
+                    limit 1
+                    """,
+                    (project_id, user["id"]),
+                ).fetchone()
+                if publishing is not None:
+                    raise HTTPException(status_code=409, detail="project publication in progress")
                 content = read_workspace_text(paths.workspace, "index.html")
+                conn.commit()
+            except sqlite3.OperationalError as exc:
+                conn.rollback()
+                if _is_sqlite_lock_error(exc):
+                    raise HTTPException(
+                        status_code=503,
+                        detail=PREVIEW_UNAVAILABLE_MESSAGE,
+                    ) from exc
+                raise
             except (OSError, UnicodeError, WorkspacePathError) as exc:
                 raise HTTPException(status_code=404, detail="preview not found") from exc
-            conn.commit()
         return PlainTextResponse(content)
 
     @app.get("/api/projects/{project_id}/messages")

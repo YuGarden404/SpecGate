@@ -1,5 +1,7 @@
 import os
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from io import BytesIO
 import tempfile
@@ -17,6 +19,7 @@ warnings.filterwarnings(
 
 from fastapi.testclient import TestClient
 import specgate.workspace_fs as workspace_fs
+import specgate.web_runs as web_runs
 from specgate.web_app import create_app
 from specgate.web_db import connect_db
 from specgate.web_projects import project_paths, web_run_paths
@@ -202,7 +205,7 @@ class WebAppTests(unittest.TestCase):
             "_platform_rename_noreplace",
             side_effect=replace_source_and_fail_quarantine,
         ):
-            with self.assertRaises(workspace_fs.WorkspaceTreeRenameError):
+            with self.assertRaises(web_runs.RunStoragePostRenameError):
                 execute_run_once(app.state.db_path, app.state.data_root, run["id"])
 
         with patch("specgate.web_app.read_workspace_text") as read_text:
@@ -210,6 +213,144 @@ class WebAppTests(unittest.TestCase):
 
         self.assertEqual(preview.status_code, 409, preview.text)
         self.assertNotIn("external sentinel", preview.text)
+        read_text.assert_not_called()
+
+    def test_preview_holds_writer_slot_until_workspace_read_finishes(self):
+        for journal_mode in ("delete", "wal"):
+            with self.subTest(journal_mode=journal_mode):
+                client, app = self.make_client()
+                registered = self.register(client)
+                project = self.create_project(client)
+                with patch("specgate.web_app.start_run_background"):
+                    created = client.post(
+                        f"/api/projects/{project['id']}/runs",
+                        json={"prompt": "Build the result"},
+                    )
+                run = created.json()["run"]
+                paths = web_run_paths(
+                    project_paths(
+                        app.state.data_root,
+                        registered["user"]["id"],
+                        project["id"],
+                    ),
+                    run["id"],
+                )
+                with closing(connect_db(app.state.db_path)) as conn:
+                    selected_mode = conn.execute(
+                        f"pragma journal_mode = {journal_mode}"
+                    ).fetchone()[0]
+                    self.assertEqual(selected_mode.lower(), journal_mode)
+                    conn.execute("update runs set status = 'running' where id = ?", (run["id"],))
+                    conn.commit()
+
+                read_started = threading.Event()
+                allow_read = threading.Event()
+                prepare_started = threading.Event()
+                prepare_finished = threading.Event()
+
+                def blocking_read(root, relative):
+                    read_started.set()
+                    if not allow_read.wait(timeout=5):
+                        raise AssertionError("preview read was not released")
+                    return workspace_fs.read_workspace_text(root, relative)
+
+                def prepare_publication():
+                    prepare_started.set()
+                    web_runs._prepare_run_publication(
+                        app.state.db_path,
+                        run["id"],
+                        trust_level="trusted",
+                        index_artifact_path=paths.index_artifact,
+                        zip_artifact_path=paths.zip_artifact,
+                        queue=type("Queue", (), {"approvals": []})(),
+                    )
+                    prepare_finished.set()
+
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    with patch("specgate.web_app.read_workspace_text", side_effect=blocking_read):
+                        preview_future = executor.submit(
+                            client.get,
+                            f"/api/projects/{project['id']}/preview",
+                        )
+                        self.assertTrue(read_started.wait(timeout=3))
+                        prepare_future = executor.submit(prepare_publication)
+                        self.assertTrue(prepare_started.wait(timeout=3))
+                        prepare_completed_while_preview_held = prepare_finished.wait(timeout=0.3)
+                        allow_read.set()
+                        preview = preview_future.result(timeout=5)
+                        prepare_future.result(timeout=5)
+
+                self.assertFalse(prepare_completed_while_preview_held)
+                self.assertEqual(preview.status_code, 200, preview.text)
+                with patch("specgate.web_app.read_workspace_text") as read_text:
+                    rejected = client.get(f"/api/projects/{project['id']}/preview")
+                self.assertEqual(rejected.status_code, 409, rejected.text)
+                read_text.assert_not_called()
+
+    def test_preview_busy_error_is_redacted_and_does_not_read_workspace(self):
+        client, app = self.make_client(raise_server_exceptions=False)
+        self.register(client)
+        project = self.create_project(client)
+        holder = connect_db(app.state.db_path)
+        self.addCleanup(holder.close)
+        holder.execute("BEGIN IMMEDIATE")
+
+        def short_timeout_connection(db_path):
+            conn = connect_db(db_path)
+            conn.execute("pragma busy_timeout = 1")
+            return conn
+
+        try:
+            with (
+                patch("specgate.web_app.connect_db", side_effect=short_timeout_connection),
+                patch("specgate.web_app.read_workspace_text") as read_text,
+            ):
+                response = client.get(f"/api/projects/{project['id']}/preview")
+        finally:
+            holder.rollback()
+
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertEqual(
+            response.json(),
+            {"detail": "Project preview is temporarily unavailable"},
+        )
+        self.assertNotIn("locked", response.text.lower())
+        self.assertNotIn("busy", response.text.lower())
+        read_text.assert_not_called()
+
+    def test_uncertain_double_rename_failure_blocks_project_preview(self):
+        client, app = self.make_client()
+        self.register(client)
+        project = self.create_project(client)
+        with patch("specgate.web_app.start_run_background"):
+            created = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "Build the result"},
+            )
+        run = created.json()["run"]
+        real_rename = workspace_fs.rename_workspace_tree_noreplace
+        calls = 0
+
+        def fail_publish_and_rollback(binding, destination):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("publish rename failed")
+            if calls == 3:
+                raise OSError("rollback rename failed")
+            return real_rename(binding, destination)
+
+        with patch(
+            "specgate.run_storage.rename_workspace_tree_noreplace",
+            side_effect=fail_publish_and_rollback,
+        ):
+            with self.assertRaises(web_runs.RunStoragePostRenameError):
+                execute_run_once(app.state.db_path, app.state.data_root, run["id"])
+
+        self.assertEqual(client.get(f"/api/runs/{run['id']}").json()["run"]["status"], "publishing")
+        with patch("specgate.web_app.read_workspace_text") as read_text:
+            preview = client.get(f"/api/projects/{project['id']}/preview")
+        self.assertEqual(preview.status_code, 409, preview.text)
         read_text.assert_not_called()
 
     def test_post_run_returns_queued_and_run_can_be_read(self):

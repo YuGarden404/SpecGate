@@ -351,6 +351,14 @@ def _commit_workspace_promotion(
             rename_workspace_tree_noreplace(moved_backup, current_binding.path)
         except BaseException as rollback_error:
             publish_error.add_note(f"workspace promotion rollback failed: {rollback_error}")
+            if isinstance(publish_error, Exception) and isinstance(rollback_error, Exception):
+                uncertain = RunStoragePostRenameError(
+                    "workspace promotion state is uncertain; "
+                    f"publish rename failed: {publish_error}; "
+                    f"rollback rename failed: {rollback_error}"
+                )
+                uncertain.add_note(f"workspace promotion rollback failed: {rollback_error}")
+                raise uncertain from publish_error
         else:
             try:
                 next_state = _load_promotion_phase(next_binding.path, run_id, "next")
@@ -446,13 +454,34 @@ def _quarantine_committed_phase(state: _PromotionPhaseState, token: str) -> bool
         marker_phase = state.marker.get("phase")
         if not isinstance(marker_run_id, int) or not isinstance(marker_phase, str):
             raise RunStorageOwnershipError("workspace promotion cleanup marker is invalid")
+        original_identity = _promotion_marker_identity(state.marker)
+        original_parent_identity = _promotion_marker_parent_identity(state.marker)
         fresh_state = _load_promotion_phase(state.path, marker_run_id, marker_phase)
         if _promotion_marker_token(fresh_state.marker) != token:
             raise RunStorageOwnershipError(
                 "workspace promotion cleanup transaction token does not match"
             )
+        if (
+            _promotion_marker_identity(fresh_state.marker) != original_identity
+            or _promotion_marker_parent_identity(fresh_state.marker)
+            != original_parent_identity
+        ):
+            raise RunStorageOwnershipError(
+                "workspace promotion cleanup marker ownership changed before quarantine"
+            )
         if fresh_state.binding is None:
             return True
+        if state.binding is None:
+            raise RunStorageOwnershipError("workspace promotion cleanup path unexpectedly appeared")
+        if (
+            fresh_state.binding.identity != state.binding.identity
+            or fresh_state.binding.parent_identity != state.binding.parent_identity
+            or fresh_state.binding.identity != original_identity
+            or fresh_state.binding.parent_identity != original_parent_identity
+        ):
+            raise RunStorageOwnershipError(
+                "workspace promotion cleanup ownership changed before quarantine"
+            )
         quarantine = _promotion_quarantine_path(fresh_state.path, token)
         rename_workspace_tree_noreplace(fresh_state.binding, quarantine)
     except Exception as exc:
