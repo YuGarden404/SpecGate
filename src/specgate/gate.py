@@ -73,7 +73,7 @@ def _read_gate_file(path: Path) -> str | None:
     try:
         return workspace_fs.read_workspace_text(root, relative, encoding="utf-8-sig")
     except workspace_fs.WorkspacePathError as exc:
-        if exc.missing_path == relative:
+        if exc.rule_family == "path_race" and exc.missing_path == relative:
             return None
         raise
 

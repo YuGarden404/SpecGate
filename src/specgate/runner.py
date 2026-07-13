@@ -33,6 +33,10 @@ def _utc_now_for_runner() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _permission_rule_family(rule_family: str | None, message: str) -> str:
+    return rule_family or classify_rule_family(message)
+
+
 def _unique_approval_id(queue: ApprovalQueue, step: int) -> str:
     base = f"approval-step-{step}"
     existing = {approval.id for approval in queue.approvals}
@@ -246,7 +250,7 @@ class AgentRunner:
             blocked=blocked,
             reason=message,
             profile=self.governance_profile,
-            rule_family=rule_family if rule_family is not None else classify_rule_family(message),
+            rule_family=_permission_rule_family(rule_family, message),
         )
         permission_decisions.append(decision)
         self.trace.append("permission_decision", decision.to_dict())
@@ -915,7 +919,7 @@ class AgentRunner:
                 blocked=True,
                 reason=risk.reason,
                 profile=self.governance_profile,
-                rule_family=risk.rule_family,
+                rule_family=_permission_rule_family(risk.rule_family, risk.reason),
             )
             permission_decisions.append(decision)
             self.trace.append("permission_decision", decision.to_dict())
@@ -966,10 +970,9 @@ class AgentRunner:
             blocked=tool_result.blocked,
             reason=tool_result.message,
             profile=self.governance_profile,
-            rule_family=(
-                tool_result.rule_family
-                if hasattr(tool_result, "rule_family")
-                else classify_rule_family(tool_result.message)
+            rule_family=_permission_rule_family(
+                getattr(tool_result, "rule_family", None),
+                tool_result.message,
             ),
         )
         permission_decisions.append(decision)

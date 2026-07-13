@@ -1237,6 +1237,176 @@ class RunnerTests(unittest.TestCase):
                 trace = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
                 self.assertIn(f'"rule_family": "{family}"', trace)
 
+    def test_multi_agent_empty_action_risk_rule_family_falls_back_to_message(self):
+        for empty_family in ("", None):
+            with self.subTest(empty_family=empty_family), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "TASK_SPEC.md").write_text("Read the task.", encoding="utf-8")
+                (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+                (root / "index.html").write_text(FIXED_HTML, encoding="utf-8")
+                llm = MockLLM(
+                    [
+                        {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
+                        {"schema_version": "1", "action": "read_file", "args": {"path": "TASK_SPEC.md"}},
+                        {"schema_version": "1", "action": "finish", "args": {"summary": "review complete"}},
+                    ]
+                )
+                policy = WorkspacePolicy(
+                    root,
+                    {"read_file", "finish"},
+                    {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                    set(),
+                )
+
+                with mock.patch(
+                    "specgate.runner.classify_action_risk",
+                    return_value=ActionRisk(
+                        "blocked",
+                        "read path not allowed: TASK_SPEC.md",
+                        empty_family,
+                    ),
+                ):
+                    result = AgentRunner(
+                        root,
+                        llm,
+                        policy,
+                        max_steps=5,
+                        context_strategy="multi-agent-isolated",
+                    ).run()
+
+                self.assertEqual(result.permission_decisions[0].rule_family, "allowlist")
+                permission_events = [
+                    json.loads(line)["payload"]
+                    for line in (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+                    if json.loads(line)["event_type"] == "permission_decision"
+                ]
+                self.assertTrue(all(event["rule_family"] is not None for event in permission_events))
+
+    def test_resume_empty_action_risk_rule_family_falls_back_to_message(self):
+        for empty_family in ("", None):
+            with self.subTest(empty_family=empty_family), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+                (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+                (root / "README.md").write_text("original", encoding="utf-8")
+                (root / "index.html").write_text(FIXED_HTML, encoding="utf-8")
+                policy = WorkspacePolicy(
+                    root,
+                    {"write_file", "finish"},
+                    {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                    {"README.md"},
+                )
+                runner = AgentRunner(
+                    root,
+                    MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}]),
+                    policy,
+                    max_steps=1,
+                )
+                ApprovalQueue(
+                    [
+                        PendingApproval(
+                            id="approval-step-1",
+                            step=1,
+                            action="write_file",
+                            path="README.md",
+                            risk_level="review",
+                            reason="review requested",
+                            profile="review",
+                            status="approved",
+                            action_payload={
+                                "schema_version": "1",
+                                "action": "write_file",
+                                "args": {"path": "README.md", "content": "changed"},
+                            },
+                        )
+                    ]
+                ).write(approval_queue_path(root))
+
+                def classify_resume_action(action, *_args):
+                    if action.action == "write_file":
+                        return ActionRisk(
+                            "blocked",
+                            "write path not allowed: README.md",
+                            empty_family,
+                        )
+                    return ActionRisk("safe", "safe action")
+
+                with mock.patch(
+                    "specgate.runner.classify_action_risk",
+                    side_effect=classify_resume_action,
+                ):
+                    result = runner.resume_from_approval()
+
+                self.assertEqual(result.permission_decisions[0].rule_family, "allowlist")
+                permission_events = [
+                    json.loads(line)["payload"]
+                    for line in (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+                    if json.loads(line)["event_type"] == "permission_decision"
+                ]
+                self.assertTrue(all(event["rule_family"] is not None for event in permission_events))
+
+    def test_resume_empty_tool_result_rule_family_falls_back_to_message(self):
+        for empty_family in ("", None):
+            with self.subTest(empty_family=empty_family), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+                (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+                (root / "index.html").write_text(FIXED_HTML, encoding="utf-8")
+                policy = WorkspacePolicy(
+                    root,
+                    {"read_file", "finish"},
+                    {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                    set(),
+                )
+                runner = AgentRunner(
+                    root,
+                    MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}]),
+                    policy,
+                    max_steps=1,
+                )
+                ApprovalQueue(
+                    [
+                        PendingApproval(
+                            id="approval-step-1",
+                            step=1,
+                            action="read_file",
+                            path="TASK_SPEC.md",
+                            risk_level="review",
+                            reason="review requested",
+                            profile="review",
+                            status="approved",
+                            action_payload={
+                                "schema_version": "1",
+                                "action": "read_file",
+                                "args": {"path": "TASK_SPEC.md"},
+                            },
+                        )
+                    ]
+                ).write(approval_queue_path(root))
+
+                def dispatch_resume_action(action):
+                    if action.action == "read_file":
+                        return ToolResult(
+                            False,
+                            "read_file",
+                            "unknown tool: legacy reader",
+                            blocked=True,
+                            rule_family=empty_family,
+                        )
+                    return ToolResult(True, "finish", "finish requested")
+
+                runner.dispatcher.dispatch = mock.Mock(side_effect=dispatch_resume_action)
+
+                result = runner.resume_from_approval()
+
+                self.assertEqual(result.permission_decisions[0].rule_family, "tool")
+                permission_events = [
+                    json.loads(line)["payload"]
+                    for line in (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+                    if json.loads(line)["event_type"] == "permission_decision"
+                ]
+                self.assertTrue(all(event["rule_family"] is not None for event in permission_events))
+
     def test_max_step_exhaustion_marks_metrics_and_failed_trust(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

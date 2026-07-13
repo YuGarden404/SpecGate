@@ -352,5 +352,54 @@ class HtmlGateTests(unittest.TestCase):
             self.assertTrue(result.passed)
             state_mock.assert_not_called()
 
+    def test_non_race_missing_metadata_for_index_fails_closed(self):
+        sentinel = "EXTERNAL_INDEX_ERROR_SENTINEL"
+        for family in ("linked_path", "reparse_point"):
+            with self.subTest(family=family), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+                error = workspace_fs.WorkspacePathError(
+                    f"unsafe index: {sentinel}",
+                    family,
+                    missing_path="index.html",
+                )
+
+                with mock.patch.object(workspace_fs, "read_workspace_text", side_effect=error):
+                    result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
+
+                self.assertFalse(result.passed)
+                self.assertTrue(any(issue.code == "unsafe_artifact" for issue in result.issues))
+                self.assertTrue(any(issue.evidence == family for issue in result.issues))
+                self.assertNotIn(sentinel, repr(result))
+
+    def test_non_race_missing_metadata_for_checklist_fails_closed(self):
+        sentinel = "EXTERNAL_CHECKLIST_ERROR_SENTINEL"
+        for family in ("linked_path", "reparse_point"):
+            with self.subTest(family=family), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "index.html").write_text(VALID_HTML, encoding="utf-8")
+                real_read = workspace_fs.read_workspace_text
+
+                def reject_checklist(read_root, relative, **kwargs):
+                    if relative == "CHECKLIST.md":
+                        raise workspace_fs.WorkspacePathError(
+                            f"unsafe checklist: {sentinel}",
+                            family,
+                            missing_path="CHECKLIST.md",
+                        )
+                    return real_read(read_root, relative, **kwargs)
+
+                with mock.patch.object(
+                    workspace_fs,
+                    "read_workspace_text",
+                    side_effect=reject_checklist,
+                ):
+                    result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
+
+                self.assertFalse(result.passed)
+                self.assertTrue(any(issue.code == "unsafe_checklist" for issue in result.issues))
+                self.assertTrue(any(issue.evidence == family for issue in result.issues))
+                self.assertNotIn(sentinel, repr(result))
+
 if __name__ == "__main__":
     unittest.main()
