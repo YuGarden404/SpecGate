@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from specgate.context import (
     build_context_pack,
@@ -9,9 +10,16 @@ from specgate.context import (
     build_role_context_pack_with_metadata,
 )
 from specgate.gate import GateResult
+from specgate.workspace_fs import WorkspacePathError
 
 
 class ContextStrategyTests(unittest.TestCase):
+    def _symlink_or_skip(self, link: Path, target: Path) -> None:
+        try:
+            link.symlink_to(target)
+        except OSError as exc:
+            self.skipTest(f"symlink creation unavailable: {exc}")
+
     def _workspace(self) -> tempfile.TemporaryDirectory:
         tmp = tempfile.TemporaryDirectory()
         root = Path(tmp.name)
@@ -34,6 +42,40 @@ class ContextStrategyTests(unittest.TestCase):
         self.assertIn("## Selected Files", context)
         self.assertIn("## Runtime Feedback", context)
         self.assertNotIn("<untrusted_data", context)
+
+    def test_baseline_context_records_link_rejection_without_external_content(self):
+        with self._workspace() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            sentinel = "EXTERNAL_CONTEXT_SENTINEL"
+            external = Path(outside) / "notes.md"
+            external.write_text(sentinel, encoding="utf-8")
+            self._symlink_or_skip(root / "linked-notes.md", external)
+
+            context = build_context_pack(root, None, [], strategy="baseline")
+
+        self.assertIn("linked_path", context)
+        self.assertNotIn(sentinel, context)
+
+    def test_baseline_context_records_scan_path_race(self):
+        with self._workspace() as tmp:
+            with mock.patch(
+                "specgate.workspace_fs.iter_workspace_files",
+                side_effect=WorkspacePathError("ancestor replaced", "path_race"),
+            ):
+                context = build_context_pack(Path(tmp), None, [], strategy="baseline")
+
+        self.assertIn("path_race", context)
+
+    def test_baseline_context_records_linked_scan_rejection(self):
+        with self._workspace() as tmp:
+            with mock.patch(
+                "specgate.workspace_fs.iter_workspace_files",
+                side_effect=WorkspacePathError("linked entry", "linked_path"),
+            ):
+                context = build_context_pack(Path(tmp), None, [], strategy="baseline")
+
+        self.assertIn("linked_path", context)
+        self.assertNotIn("linked entry content", context)
 
     def test_compressed_strategy_keeps_gate_feedback_but_truncates_large_tool_data(self):
         large_html = "<html>" + ("x" * 5000) + "</html>"

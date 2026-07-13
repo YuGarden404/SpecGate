@@ -1,12 +1,20 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from specgate.context_selector import select_context_files
-from specgate.retrieval import build_query_terms, chunk_text, retrieve_chunks
+from specgate.retrieval import RetrievalConfig, build_query_terms, chunk_text, retrieve_chunks
+from specgate.workspace_fs import WorkspacePathError
 
 
 class RetrievalTests(unittest.TestCase):
+    def _symlink_or_skip(self, link: Path, target: Path) -> None:
+        try:
+            link.symlink_to(target)
+        except OSError as exc:
+            self.skipTest(f"symlink creation unavailable: {exc}")
+
     def test_chunk_text_uses_overlapping_line_windows(self):
         text = "\n".join(f"line {number}" for number in range(1, 8))
 
@@ -52,6 +60,24 @@ class RetrievalTests(unittest.TestCase):
             self.assertGreater(notes_chunk.score, 0)
             self.assertIn("python", notes_chunk.matched_terms)
 
+    def test_retrieval_preserves_path_tiebreak_and_character_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            content = "python gate search"
+            (root / "b.md").write_text(content, encoding="utf-8")
+            (root / "a.md").write_text(content, encoding="utf-8")
+            config = RetrievalConfig(top_k=2, budget_chars=len(content))
+
+            result = retrieve_chunks(
+                root,
+                ["python", "gate", "search"],
+                config,
+            )
+
+            self.assertEqual([chunk.path for chunk in result.selected_chunks], ["a.md"])
+            self.assertEqual(result.used_chars, len(content))
+            self.assertTrue(any("b.md:1: budget exceeded" in reason for reason in result.dropped_reasons))
+
     def test_context_selector_skips_eval_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -64,6 +90,50 @@ class RetrievalTests(unittest.TestCase):
 
             self.assertEqual(statuses["TASK_SPEC.md"], "selected")
             self.assertEqual(statuses["eval-runs/latest.json"], "skipped")
+
+    def test_retrieval_rejects_external_link_and_records_rule_family(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            sentinel = "EXTERNAL_RETRIEVAL_SENTINEL python gate search"
+            external = Path(outside) / "notes.md"
+            external.write_text(sentinel, encoding="utf-8")
+            self._symlink_or_skip(root / "linked-notes.md", external)
+
+            result = retrieve_chunks(root, ["python", "gate", "search"])
+
+            self.assertEqual(result.selected_chunks, [])
+            self.assertTrue(any("linked_path" in reason for reason in result.dropped_reasons))
+            self.assertNotIn(sentinel, str(result))
+
+    def test_retrieval_records_scan_path_race_without_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "notes.md").write_text("python gate search", encoding="utf-8")
+
+            with mock.patch(
+                "specgate.workspace_fs.iter_workspace_files",
+                side_effect=WorkspacePathError("ancestor replaced", "path_race"),
+            ):
+                result = retrieve_chunks(root, ["python", "gate", "search"])
+
+            self.assertEqual(result.candidate_count, 0)
+            self.assertEqual(result.selected_chunks, [])
+            self.assertTrue(any("path_race" in reason for reason in result.dropped_reasons))
+
+    def test_retrieval_records_linked_scan_rejection_without_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "notes.md").write_text("python gate search", encoding="utf-8")
+
+            with mock.patch(
+                "specgate.workspace_fs.iter_workspace_files",
+                side_effect=WorkspacePathError("linked entry", "linked_path"),
+            ):
+                result = retrieve_chunks(root, ["python", "gate", "search"])
+
+            self.assertEqual(result.candidate_count, 0)
+            self.assertEqual(result.selected_chunks, [])
+            self.assertTrue(any("linked_path" in reason for reason in result.dropped_reasons))
 
 
 if __name__ == "__main__":

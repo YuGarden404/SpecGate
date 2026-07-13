@@ -2,19 +2,29 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from specgate.actions import Action
 from specgate.approvals import (
     ApprovalQueue,
     GovernanceConfig,
     PendingApproval,
+    capture_target_state,
     classify_action_risk,
     preview_args,
+    target_state_matches,
 )
 from specgate.policy import WorkspacePolicy
+from specgate.workspace_fs import WorkspacePathError
 
 
 class ApprovalTests(unittest.TestCase):
+    def _symlink_or_skip(self, link: Path, target: Path, *, directory: bool = False) -> None:
+        try:
+            link.symlink_to(target, target_is_directory=directory)
+        except OSError as exc:
+            self.skipTest(f"symlink creation unavailable: {exc}")
+
     def test_allowed_write_to_normal_artifact_is_safe(self):
         policy = WorkspacePolicy(Path("."), {"write_file"}, set(), {"index.html"})
         config = GovernanceConfig(profile="review")
@@ -68,6 +78,57 @@ class ApprovalTests(unittest.TestCase):
 
         self.assertEqual(risk.level, "blocked")
         self.assertIn("path escapes workspace", risk.reason)
+
+    def test_target_state_capture_rejects_external_link(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            external = Path(outside) / "outside.txt"
+            external.write_text("EXTERNAL_APPROVAL_SENTINEL", encoding="utf-8")
+            self._symlink_or_skip(root / "README.md", external)
+
+            with self.assertRaises(WorkspacePathError) as raised:
+                capture_target_state(root, "README.md")
+
+            self.assertEqual(raised.exception.rule_family, "linked_path")
+
+    def test_target_state_capture_propagates_safe_state_link_rejection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch(
+                "specgate.workspace_fs.workspace_file_state",
+                side_effect=WorkspacePathError("linked target", "linked_path"),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    capture_target_state(Path(tmp), "README.md")
+
+            self.assertEqual(raised.exception.rule_family, "linked_path")
+
+    def test_target_state_path_race_is_a_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("safe", encoding="utf-8")
+            target_state = capture_target_state(root, "README.md")
+
+            with mock.patch(
+                "specgate.workspace_fs.workspace_file_state",
+                side_effect=WorkspacePathError("ancestor replaced", "path_race"),
+            ):
+                matches = target_state_matches(root, target_state)
+
+            self.assertFalse(matches)
+
+    def test_target_state_mismatch_on_ancestor_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            nested = root / "nested"
+            nested.mkdir()
+            (nested / "README.md").write_text("same bytes", encoding="utf-8")
+            target_state = capture_target_state(root, "nested/README.md")
+            external = Path(outside)
+            (external / "README.md").write_text("same bytes", encoding="utf-8")
+            nested.rename(root / "original-nested")
+            self._symlink_or_skip(root / "nested", external, directory=True)
+
+            self.assertFalse(target_state_matches(root, target_state))
 
     def test_queue_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase
-import hashlib
 import json
 from pathlib import Path
 import re
 from typing import Any
 
+import specgate.workspace_fs as workspace_fs
 from specgate.actions import Action
 from specgate.policy import WorkspacePolicy, check_action
 from specgate.security import SECRET_PATTERNS
@@ -281,14 +281,12 @@ def capture_target_state(root: Path, relative_path: str | None) -> dict[str, Any
     if relative_path is None:
         return None
 
-    normalized_path = relative_path.replace("\\", "/")
-    path = root / normalized_path
-    if not path.exists():
-        return {"path": normalized_path, "exists": False, "sha256": None}
+    normalized_path = workspace_fs.normalize_workspace_relative(relative_path)
+    state = workspace_fs.workspace_file_state(root, normalized_path)
     return {
         "path": normalized_path,
-        "exists": True,
-        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "exists": state.exists,
+        "sha256": state.sha256,
     }
 
 
@@ -298,7 +296,7 @@ def target_state_matches(root: Path, target_state: dict[str, Any] | None) -> boo
     _validate_target_state(target_state)
     try:
         current = capture_target_state(root, target_state["path"])
-    except OSError:
+    except (OSError, workspace_fs.WorkspacePathError):
         return False
     return current == target_state
 
