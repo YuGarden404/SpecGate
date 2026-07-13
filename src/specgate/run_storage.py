@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import shutil
-import tempfile
+import warnings
 from pathlib import Path
 
 from specgate.web_projects import ProjectPaths, RunPaths, web_run_paths
+
+
+class RunStorageCleanupError(RuntimeError):
+    pass
 
 
 def initialize_run_storage(project: ProjectPaths, run_id: int) -> RunPaths:
@@ -13,15 +17,18 @@ def initialize_run_storage(project: ProjectPaths, run_id: int) -> RunPaths:
     if run.root.exists():
         raise FileExistsError(f"run storage already exists: {run.root}")
 
-    temporary_root = Path(tempfile.mkdtemp(prefix=f".{run_id}.tmp-", dir=project.runs))
+    temporary_root = project.runs / f".{run_id}.tmp"
+    if temporary_root.exists():
+        _remove_tree_required(temporary_root, "stale run initialization cleanup failed")
     try:
+        temporary_root.mkdir()
         shutil.copytree(project.workspace, temporary_root / "workspace")
         (temporary_root / "audit").mkdir()
         (temporary_root / "approvals").mkdir()
         (temporary_root / "artifacts").mkdir()
         temporary_root.rename(run.root)
-    except Exception:
-        shutil.rmtree(temporary_root, ignore_errors=True)
+    except Exception as exc:
+        _add_cleanup_failure_note(exc, temporary_root, "run initialization cleanup failed")
         raise
     return run
 
@@ -37,9 +44,8 @@ def promote_run_workspace(project: ProjectPaths, run_id: int) -> None:
     next_workspace = project.workspace.with_name(f"workspace.next-{run_id}")
     backup_workspace = project.workspace.with_name(f"workspace.backup-{run_id}")
 
-    for path in (next_workspace, backup_workspace):
-        if path.exists():
-            raise FileExistsError(f"workspace promotion path already exists: {path}")
+    if _recover_workspace_promotion(project.workspace, next_workspace, backup_workspace):
+        return
 
     try:
         shutil.copytree(run.workspace, next_workspace)
@@ -49,14 +55,57 @@ def promote_run_workspace(project: ProjectPaths, run_id: int) -> None:
         except Exception:
             backup_workspace.rename(project.workspace)
             raise
-        try:
-            shutil.rmtree(backup_workspace)
-        except Exception:
-            project.workspace.rename(next_workspace)
-            backup_workspace.rename(project.workspace)
-            shutil.rmtree(next_workspace)
-            raise
-    except Exception:
-        if next_workspace.exists():
-            shutil.rmtree(next_workspace, ignore_errors=True)
+        _cleanup_committed_path(backup_workspace)
+    except Exception as exc:
+        _add_cleanup_failure_note(exc, next_workspace, "workspace promotion cleanup failed")
         raise
+
+
+def _recover_workspace_promotion(current: Path, next_workspace: Path, backup_workspace: Path) -> bool:
+    if backup_workspace.exists():
+        if current.exists():
+            if _cleanup_committed_path(next_workspace):
+                _cleanup_committed_path(backup_workspace)
+            return True
+
+        backup_workspace.rename(current)
+        if next_workspace.exists():
+            _remove_tree_required(next_workspace, "workspace promotion recovery cleanup failed")
+        return False
+
+    if next_workspace.exists():
+        if not current.exists():
+            raise RuntimeError("workspace promotion cannot recover without current or backup workspace")
+        _remove_tree_required(next_workspace, "workspace promotion recovery cleanup failed")
+    return False
+
+
+def _cleanup_committed_path(path: Path) -> bool:
+    if not path.exists():
+        return True
+    try:
+        shutil.rmtree(path)
+    except Exception as exc:
+        warnings.warn(
+            f"workspace promotion committed; {path.name} cleanup failed: {exc}",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        return False
+    return True
+
+
+def _remove_tree_required(path: Path, context: str) -> None:
+    try:
+        shutil.rmtree(path)
+    except Exception as exc:
+        raise RunStorageCleanupError(f"{context}: {exc}") from exc
+
+
+def _add_cleanup_failure_note(error: Exception, path: Path, context: str) -> None:
+    if not path.exists():
+        return
+    try:
+        shutil.rmtree(path)
+    except Exception as cleanup_error:
+        error.add_note(f"{context}: {cleanup_error}")

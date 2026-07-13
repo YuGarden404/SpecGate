@@ -5,7 +5,12 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import patch
 
-from specgate.run_storage import initialize_run_storage, promote_run_workspace, remove_run_storage
+from specgate.run_storage import (
+    RunStorageCleanupError,
+    initialize_run_storage,
+    promote_run_workspace,
+    remove_run_storage,
+)
 from specgate.web_projects import RunPaths, project_paths, web_run_paths
 
 
@@ -85,6 +90,40 @@ class RunStorageTests(unittest.TestCase):
 
         self.assertEqual(list(project.runs.iterdir()), [])
 
+    def test_initialize_run_storage_preserves_copy_error_when_temporary_cleanup_fails(self):
+        project = self.make_project()
+
+        def fail_after_partial_copy(source, destination):
+            destination.mkdir()
+            (destination / "partial.txt").write_text("partial", encoding="utf-8")
+            raise OSError("copy failed")
+
+        with (
+            patch("specgate.run_storage.shutil.copytree", side_effect=fail_after_partial_copy),
+            patch("specgate.run_storage.shutil.rmtree", side_effect=OSError("temporary cleanup failed")),
+        ):
+            try:
+                initialize_run_storage(project, 11)
+            except Exception as exc:
+                error = exc
+            else:
+                self.fail("initialize_run_storage did not fail")
+
+        self.assertEqual(str(error), "copy failed")
+        self.assertTrue(
+            any("temporary cleanup failed" in note for note in getattr(error, "__notes__", ()))
+        )
+
+    def test_initialize_run_storage_cleans_stale_same_run_temporary_directory(self):
+        project = self.make_project()
+        temporary_root = project.runs / ".11.tmp"
+        temporary_root.mkdir()
+        (temporary_root / "partial.txt").write_text("partial", encoding="utf-8")
+
+        run = initialize_run_storage(project, 11)
+
+        self.assertEqual(list(project.runs.iterdir()), [run.root])
+
     def test_remove_run_storage_removes_run_root(self):
         project = self.make_project()
         run = initialize_run_storage(project, 11)
@@ -139,7 +178,7 @@ class RunStorageTests(unittest.TestCase):
         self.assertEqual((run.workspace / "index.html").read_text(encoding="utf-8"), "v2")
         self.assertEqual(self.workspace_swap_paths(project), [])
 
-    def test_promote_run_workspace_restores_project_workspace_when_backup_cleanup_fails(self):
+    def test_promote_run_workspace_keeps_committed_current_when_backup_cleanup_partially_fails(self):
         project = self.make_project()
         (project.workspace / "index.html").write_text("v1", encoding="utf-8")
         (project.workspace / "old.txt").write_text("old", encoding="utf-8")
@@ -156,18 +195,119 @@ class RunStorageTests(unittest.TestCase):
             if Path(path) == backup_workspace:
                 backup_cleanup_attempts += 1
                 if backup_cleanup_attempts == 1:
+                    (Path(path) / "old.txt").unlink()
                     raise OSError("backup cleanup failed")
             return original_rmtree(path, *args, **kwargs)
 
         with patch("specgate.run_storage.shutil.rmtree", side_effect=fail_first_backup_cleanup):
-            with self.assertRaisesRegex(OSError, "backup cleanup failed"):
+            with self.assertWarnsRegex(RuntimeWarning, "backup cleanup failed"):
                 promote_run_workspace(project, 11)
 
         self.assertEqual(backup_cleanup_attempts, 1)
-        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v1")
-        self.assertEqual((project.workspace / "old.txt").read_text(encoding="utf-8"), "old")
-        self.assertFalse((project.workspace / "new.txt").exists())
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
+        self.assertEqual((project.workspace / "new.txt").read_text(encoding="utf-8"), "new")
+        self.assertTrue(backup_workspace.is_dir())
+        self.assertFalse((backup_workspace / "old.txt").exists())
         self.assertEqual((run.workspace / "index.html").read_text(encoding="utf-8"), "v2")
+
+        promote_run_workspace(project, 11)
+
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
+        self.assertEqual((project.workspace / "new.txt").read_text(encoding="utf-8"), "new")
+        self.assertEqual(self.workspace_swap_paths(project), [])
+
+    def test_promote_run_workspace_keeps_backup_marker_when_committed_next_cleanup_fails(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        next_workspace = project.workspace.with_name("workspace.next-11")
+        backup_workspace = project.workspace.with_name("workspace.backup-11")
+        project.workspace.rename(backup_workspace)
+        shutil.copytree(run.workspace, project.workspace)
+        shutil.copytree(run.workspace, next_workspace)
+
+        original_rmtree = shutil.rmtree
+
+        def partially_fail_next_cleanup(path, *args, **kwargs):
+            if Path(path) == next_workspace:
+                (Path(path) / "index.html").unlink()
+                raise OSError("next cleanup failed")
+            return original_rmtree(path, *args, **kwargs)
+
+        with patch("specgate.run_storage.shutil.rmtree", side_effect=partially_fail_next_cleanup):
+            with self.assertWarnsRegex(RuntimeWarning, "next cleanup failed"):
+                promote_run_workspace(project, 11)
+
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
+        self.assertTrue(next_workspace.is_dir())
+        self.assertTrue(backup_workspace.is_dir())
+
+        promote_run_workspace(project, 11)
+
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
+        self.assertEqual(self.workspace_swap_paths(project), [])
+
+    def test_promote_run_workspace_recovers_stale_next_before_retry(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        next_workspace = project.workspace.with_name("workspace.next-11")
+        shutil.copytree(run.workspace, next_workspace)
+        (next_workspace / "stale.txt").write_text("stale", encoding="utf-8")
+
+        promote_run_workspace(project, 11)
+
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
+        self.assertFalse((project.workspace / "stale.txt").exists())
+        self.assertEqual(self.workspace_swap_paths(project), [])
+
+    def test_promote_run_workspace_recovers_backup_when_current_is_missing(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        next_workspace = project.workspace.with_name("workspace.next-11")
+        backup_workspace = project.workspace.with_name("workspace.backup-11")
+        shutil.copytree(run.workspace, next_workspace)
+        project.workspace.rename(backup_workspace)
+
+        promote_run_workspace(project, 11)
+
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
+        self.assertEqual(self.workspace_swap_paths(project), [])
+
+    def test_promote_run_workspace_reports_next_cleanup_failure_after_restoring_current(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        next_workspace = project.workspace.with_name("workspace.next-11")
+        backup_workspace = project.workspace.with_name("workspace.backup-11")
+        shutil.copytree(run.workspace, next_workspace)
+        project.workspace.rename(backup_workspace)
+
+        with patch(
+            "specgate.run_storage.shutil.rmtree",
+            side_effect=OSError("recovery cleanup failed"),
+        ):
+            try:
+                promote_run_workspace(project, 11)
+            except Exception as exc:
+                error = exc
+            else:
+                self.fail("promote_run_workspace did not report cleanup failure")
+
+        self.assertIsInstance(error, RunStorageCleanupError)
+        self.assertIn("recovery cleanup failed", str(error))
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v1")
+        self.assertTrue(next_workspace.is_dir())
+        self.assertFalse(backup_workspace.exists())
+
+        promote_run_workspace(project, 11)
+
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
         self.assertEqual(self.workspace_swap_paths(project), [])
 
     def workspace_swap_paths(self, project):
