@@ -98,6 +98,10 @@ Run: `$env:PYTHONPATH='src'; python -m unittest tests.test_web_runs -v`
 增加启动恢复测试：遗留 `initializing` 与 run 目录在 app 初始化时被清理，清理失败时行转为
 `failed` 且不再阻塞；queued/running/needs_approval 不受此恢复函数影响。
 
+run root 与实际 `.<run_id>.tmp-*` 临时目录写入绑定 run id 的 ownership marker；恢复只删除
+marker 匹配的路径。测试真实临时目录残留被清理、无 marker 的预存 sentinel 保留、错误 marker
+不被删除，并断言 marker 不进入 workspace/artifact。
+
 - [ ] **Step 5: 运行相关测试**
 
 Run: `$env:PYTHONPATH='src'; python -m unittest tests.test_web_runs tests.test_web_app -v`

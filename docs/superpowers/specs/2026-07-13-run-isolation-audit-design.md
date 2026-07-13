@@ -77,6 +77,11 @@ Web 应用启动时执行一次 `initializing` 恢复。上个进程遗留且可
 未发布目录删除；目录清理失败则把该 run 标为 `failed` 并保留诊断，避免项目永久被活动状态
 锁住。恢复函数不得在普通请求中按超时猜测，以免误杀仍在复制 workspace 的有效 run。
 
+run 存储根目录和 `.<run_id>.tmp-*` 初始化临时目录必须包含绑定 run id 的内部 ownership
+marker。启动恢复与失败清理只能删除 marker 匹配的目录；预存目录、缺失 marker 或 marker
+不匹配的目录必须保留并报告，不能用数据库占位行推断文件系统所有权。marker 位于 run 根目录，
+不得复制进 workspace 或 artifact。
+
 ## 6. 执行与提升
 
 AgentRunner 在 run workspace 上执行。trace、evidence 和审批队列写入 run 自己的路径。
