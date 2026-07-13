@@ -82,6 +82,11 @@ marker。启动恢复与失败清理只能删除 marker 匹配的目录；预存
 不匹配的目录必须保留并报告，不能用数据库占位行推断文件系统所有权。marker 位于 run 根目录，
 不得复制进 workspace 或 artifact。
 
+每个 `initializing` run 还持有 `runs/.<run_id>.init.lock` 跨进程文件锁。锁在占位行提交前获取，
+跨越 workspace 复制和第二个 queued 事务，最后释放。操作系统在进程退出时自动释放锁。启动恢复
+必须先非阻塞取得该锁并在事务内重新确认状态仍为 `initializing`，否则说明其他进程仍在初始化或
+已经完成转换，恢复函数不得修改其数据库行或目录。
+
 ## 6. 执行与提升
 
 AgentRunner 在 run workspace 上执行。trace、evidence 和审批队列写入 run 自己的路径。

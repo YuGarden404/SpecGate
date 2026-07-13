@@ -102,6 +102,10 @@ run root 与实际 `.<run_id>.tmp-*` 临时目录写入绑定 run id 的 ownersh
 marker 匹配的路径。测试真实临时目录残留被清理、无 marker 的预存 sentinel 保留、错误 marker
 不被删除，并断言 marker 不进入 workspace/artifact。
 
+增加跨进程初始化锁：占位事务提交前取得 `.<run_id>.init.lock`，持锁完成复制和 queued 转换；
+启动恢复只有非阻塞取得锁并重新确认 status 后才能清理。测试锁被另一实例持有时恢复跳过，释放
+后恢复成功，以及状态并发转为 queued 时不被删除。
+
 - [ ] **Step 5: 运行相关测试**
 
 Run: `$env:PYTHONPATH='src'; python -m unittest tests.test_web_runs tests.test_web_app -v`
