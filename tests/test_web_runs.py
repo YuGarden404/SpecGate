@@ -10,7 +10,10 @@ from unittest.mock import patch
 
 import specgate.web_runs as web_runs
 import specgate.run_storage as run_storage
-from specgate.run_storage import initialize_run_storage as initialize_run_storage_real
+from specgate.run_storage import (
+    initialize_run_storage as initialize_run_storage_real,
+    promote_run_workspace as promote_run_workspace_real,
+)
 from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
 from specgate.web_projects import create_manual_project, project_paths, web_run_paths
@@ -311,7 +314,7 @@ class WebRunsTests(unittest.TestCase):
             create_run(db_path, project["id"], user["id"], "Build the result")
 
     def test_create_run_rejects_active_statuses_without_side_effects(self):
-        for status in ("initializing", "queued", "running", "needs_approval"):
+        for status in ("initializing", "queued", "running", "needs_approval", "publishing"):
             with self.subTest(status=status):
                 db_path, data_root, user, project = self.make_context()
                 first = create_run(
@@ -716,6 +719,37 @@ class WebRunsTests(unittest.TestCase):
             [("index", str(latest_index)), ("zip", str(result_zip))],
         )
 
+    def test_completed_run_is_prepared_as_publishing_before_workspace_promotion(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        observed = {}
+
+        def inspect_then_promote(project_storage, run_id):
+            with closing(connect_db(db_path)) as conn:
+                row = conn.execute("select * from runs where id = ?", (run_id,)).fetchone()
+                artifacts = conn.execute(
+                    "select kind, path from artifacts where run_id = ? order by kind",
+                    (run_id,),
+                ).fetchall()
+            observed["status"] = row["status"]
+            observed["finished_at"] = row["finished_at"]
+            observed["error_message"] = row["error_message"]
+            observed["artifacts"] = [(item["kind"], item["path"]) for item in artifacts]
+            promote_run_workspace_real(project_storage, run_id)
+
+        with patch("specgate.web_runs.promote_run_workspace", side_effect=inspect_then_promote):
+            execute_run_once(db_path, data_root, run["id"])
+
+        run_paths = web_run_paths(project_paths(data_root, user["id"], project["id"]), run["id"])
+        self.assertEqual(observed["status"], "publishing")
+        self.assertIsNone(observed["finished_at"])
+        self.assertIsNone(observed["error_message"])
+        self.assertEqual(
+            observed["artifacts"],
+            [("index", str(run_paths.index_artifact)), ("zip", str(run_paths.zip_artifact))],
+        )
+        self.assertEqual(get_run(db_path, user["id"], run["id"])["status"], "completed")
+
     def test_execute_run_once_uses_user_governance_and_context_settings(self):
         db_path, data_root, user, project = self.make_context()
         update_settings(
@@ -895,6 +929,8 @@ class WebRunsTests(unittest.TestCase):
 
     def test_workspace_promotion_failure_marks_run_failed_without_completed_record(self):
         db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        (paths.workspace / "index.html").write_text("old workspace", encoding="utf-8")
         run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
 
         with patch("specgate.web_runs.promote_run_workspace", side_effect=RuntimeError("promotion failed")):
@@ -905,11 +941,121 @@ class WebRunsTests(unittest.TestCase):
         self.assertIn("promotion failed", updated["error_message"])
         self.assertIsNone(updated["index_artifact_path"])
         self.assertIsNone(updated["zip_artifact_path"])
+        self.assertEqual((paths.workspace / "index.html").read_text(encoding="utf-8"), "old workspace")
         with closing(connect_db(db_path)) as conn:
             self.assertEqual(
                 conn.execute("select count(*) from artifacts where run_id = ?", (run["id"],)).fetchone()[0],
                 0,
             )
+
+    def test_finalize_failure_after_promotion_keeps_publishing_and_blocks_new_run(self):
+        db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        (paths.workspace / "index.html").write_text("old workspace", encoding="utf-8")
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                """
+                create trigger reject_completed_run before update of status on runs
+                when new.status = 'completed'
+                begin
+                    select raise(abort, 'finalize failed');
+                end
+                """
+            )
+            conn.commit()
+
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "finalize failed"):
+            execute_run_once(db_path, data_root, run["id"])
+
+        updated = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(updated["status"], "publishing")
+        self.assertIn("finalize failed", updated["error_message"])
+        self.assertIn("SpecGate Result", (paths.workspace / "index.html").read_text(encoding="utf-8"))
+        self.assertIsNotNone(updated["index_artifact_path"])
+        self.assertIsNotNone(updated["zip_artifact_path"])
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(
+                conn.execute("select count(*) from artifacts where run_id = ?", (run["id"],)).fetchone()[0],
+                2,
+            )
+        with self.assertRaises(ActiveRunConflict):
+            create_run(
+                db_path,
+                project["id"],
+                user["id"],
+                "Conflicting run",
+                data_root=data_root,
+            )
+
+    def test_recover_publication_after_prepare_promotes_and_completes(self):
+        db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        (paths.workspace / "index.html").write_text("old workspace", encoding="utf-8")
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+
+        with patch("specgate.web_runs.promote_run_workspace", side_effect=KeyboardInterrupt("interrupted")):
+            with self.assertRaisesRegex(KeyboardInterrupt, "interrupted"):
+                execute_run_once(db_path, data_root, run["id"])
+
+        self.assertEqual(get_run(db_path, user["id"], run["id"])["status"], "publishing")
+        self.assertEqual((paths.workspace / "index.html").read_text(encoding="utf-8"), "old workspace")
+
+        web_runs.recover_interrupted_run_publications(db_path, data_root)
+
+        recovered = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(recovered["status"], "completed")
+        self.assertIsNotNone(recovered["finished_at"])
+        self.assertIsNone(recovered["error_message"])
+        self.assertIn("SpecGate Result", (paths.workspace / "index.html").read_text(encoding="utf-8"))
+
+    def test_recover_publication_after_promotion_finalizes_completed(self):
+        db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        (paths.workspace / "index.html").write_text("old workspace", encoding="utf-8")
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                """
+                create trigger reject_completed_run before update of status on runs
+                when new.status = 'completed'
+                begin
+                    select raise(abort, 'finalize failed');
+                end
+                """
+            )
+            conn.commit()
+
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "finalize failed"):
+            execute_run_once(db_path, data_root, run["id"])
+        with closing(connect_db(db_path)) as conn:
+            conn.execute("drop trigger reject_completed_run")
+            conn.commit()
+
+        web_runs.recover_interrupted_run_publications(db_path, data_root)
+
+        recovered = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(recovered["status"], "completed")
+        self.assertIsNone(recovered["error_message"])
+        self.assertIn("SpecGate Result", (paths.workspace / "index.html").read_text(encoding="utf-8"))
+
+    def test_recover_publication_error_stays_active_with_safe_diagnostic(self):
+        db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+
+        with patch("specgate.web_runs.promote_run_workspace", side_effect=KeyboardInterrupt("interrupted")):
+            with self.assertRaises(KeyboardInterrupt):
+                execute_run_once(db_path, data_root, run["id"])
+        web_run_paths(paths, run["id"]).zip_artifact.unlink()
+
+        web_runs.recover_interrupted_run_publications(db_path, data_root)
+
+        recovered = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(recovered["status"], "publishing")
+        self.assertIn("result.zip", recovered["error_message"])
+        with self.assertRaises(ActiveRunConflict):
+            create_run(db_path, project["id"], user["id"], "Blocked run", data_root=data_root)
 
 
 if __name__ == "__main__":

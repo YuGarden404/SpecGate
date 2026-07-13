@@ -99,8 +99,14 @@ def initialize_run_storage(project: ProjectPaths, run_id: int) -> RunPaths:
         (temporary_root / "audit").mkdir()
         (temporary_root / "approvals").mkdir()
         (temporary_root / "artifacts").mkdir()
-        temporary_root.rename(run.root)
+        _publish_initialized_storage(temporary_root, run.root, run_id)
     except Exception as exc:
+        _add_owned_cleanup_failure_note(
+            exc,
+            run.root,
+            run_id,
+            "run initialization cleanup failed",
+        )
         _add_owned_cleanup_failure_note(
             exc,
             temporary_root,
@@ -109,6 +115,23 @@ def initialize_run_storage(project: ProjectPaths, run_id: int) -> RunPaths:
         )
         raise
     return run
+
+
+def _publish_initialized_storage(temporary_root: Path, target_root: Path, run_id: int) -> None:
+    try:
+        temporary_root.rename(target_root)
+        return
+    except PermissionError as exc:
+        if os.name != "nt" or getattr(exc, "winerror", None) != 5:
+            raise
+
+    if _path_exists(target_root):
+        raise RunStorageTargetExists(f"run storage already exists: {target_root}")
+
+    target_root.mkdir()
+    _write_ownership_marker(target_root, run_id)
+    shutil.copytree(temporary_root, target_root, dirs_exist_ok=True)
+    _remove_owned_tree(temporary_root, run_id, "run storage fallback cleanup failed")
 
 
 def remove_run_storage(project: ProjectPaths, run_id: int) -> None:

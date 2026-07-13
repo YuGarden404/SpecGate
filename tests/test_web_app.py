@@ -38,7 +38,9 @@ class WebAppTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         base = Path(tmp.name)
         app = create_app(data_root=base / "data", db_path=base / "web.sqlite3", **app_kwargs)
-        return TestClient(app, raise_server_exceptions=raise_server_exceptions), app
+        client = TestClient(app, raise_server_exceptions=raise_server_exceptions)
+        self.addCleanup(client.close)
+        return client, app
 
     def register(self, client, username="alice", password="correct-password"):
         response = client.post(
@@ -160,6 +162,26 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(fetched.json()["run"]["status"], "queued")
         self.assertNotIn("index_artifact_path", fetched.json()["run"])
         self.assertNotIn("zip_artifact_path", fetched.json()["run"])
+
+    def test_app_shutdown_joins_started_run_threads(self):
+        _client, app = self.make_client()
+        joined = []
+
+        class RecordingThread:
+            def join(self):
+                joined.append(True)
+
+        with TestClient(app) as lifespan_client:
+            self.register(lifespan_client)
+            project = self.create_project(lifespan_client)
+            with patch("specgate.web_app.start_run_background", return_value=RecordingThread()):
+                response = lifespan_client.post(
+                    f"/api/projects/{project['id']}/runs",
+                    json={"prompt": "Build the result"},
+                )
+            self.assertEqual(response.status_code, 200, response.text)
+
+        self.assertEqual(joined, [True])
 
     def test_post_run_returns_409_for_active_run_without_starting_thread(self):
         client, _app = self.make_client()
@@ -370,10 +392,14 @@ class WebAppTests(unittest.TestCase):
             base = Path(tmp)
             data_root = base / "data"
             db_path = base / "web.sqlite3"
-            with patch("specgate.web_app.recover_interrupted_run_initializations") as recover:
+            with (
+                patch("specgate.web_app.recover_interrupted_run_initializations") as recover_initializations,
+                patch("specgate.web_app.recover_interrupted_run_publications") as recover_publications,
+            ):
                 app = create_app(data_root=data_root, db_path=db_path)
 
-        recover.assert_called_once_with(app.state.db_path, app.state.data_root)
+        recover_initializations.assert_called_once_with(app.state.db_path, app.state.data_root)
+        recover_publications.assert_called_once_with(app.state.db_path, app.state.data_root)
 
     def test_upload_rejects_files_over_limit(self):
         client, _app = self.make_client()
@@ -404,6 +430,7 @@ class WebAppTests(unittest.TestCase):
             ).json()["run"]
 
         client_b = TestClient(app)
+        self.addCleanup(client_b.close)
         self.register(client_b, "bob", "correct-password")
 
         self.assertEqual(client_b.get(f"/api/projects/{project['id']}").status_code, 404)

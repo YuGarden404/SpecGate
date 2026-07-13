@@ -83,6 +83,35 @@ def recover_interrupted_run_initializations(db_path: Path, data_root: Path) -> N
             initialization_lock.release()
 
 
+def recover_interrupted_run_publications(db_path: Path, data_root: Path) -> None:
+    conn = connect_db(db_path)
+    try:
+        publishing_runs = conn.execute(
+            """
+            select id, project_id, user_id, index_artifact_path, zip_artifact_path
+            from runs
+            where status = 'publishing'
+            order by id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    for run in publishing_runs:
+        run_id = int(run["id"])
+        project = project_paths(data_root, int(run["user_id"]), int(run["project_id"]))
+        paths = web_run_paths(project, run_id)
+        try:
+            _validate_publication_storage(db_path, run, paths)
+            promote_run_workspace(project, run_id)
+            _finalize_run_publication(db_path, run_id)
+        except Exception as exc:
+            try:
+                _record_publication_error(db_path, run_id, _safe_error(exc))
+            except Exception as diagnostic_error:
+                exc.add_note(f"publication recovery diagnostic update failed: {_safe_error(diagnostic_error)}")
+
+
 def create_run(
     db_path: Path,
     project_id: int,
@@ -145,7 +174,7 @@ def _reserve_initializing_run(
         active_run = conn.execute(
             """
             select id from runs
-            where project_id = ? and status in ('initializing', 'queued', 'running', 'needs_approval')
+            where project_id = ? and status in ('initializing', 'queued', 'running', 'needs_approval', 'publishing')
             limit 1
             """,
             (project_id,),
@@ -379,6 +408,8 @@ def start_run_background(db_path: Path, data_root: Path, run_id: int) -> threadi
 
 def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
     run: sqlite3.Row | None = None
+    publication_prepared = False
+    workspace_promoted = False
     try:
         run = _load_run(db_path, run_id)
         project = _load_project(db_path, run["project_id"], run["user_id"])
@@ -404,19 +435,37 @@ def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
             error_message = "Run did not produce index.html"
         trust_level = _trust_level(result, status)
         if status == "completed":
+            _prepare_run_publication(
+                db_path,
+                run_id,
+                trust_level=trust_level,
+                index_artifact_path=index_path,
+                zip_artifact_path=zip_path,
+                queue=queue,
+            )
+            publication_prepared = True
             promote_run_workspace(project_storage, run_id)
-        _finish_run(
-            db_path,
-            run_id,
-            status=status,
-            trust_level=trust_level,
-            error_message=error_message,
-            index_artifact_path=index_path,
-            zip_artifact_path=zip_path,
-            queue=queue,
-        )
+            workspace_promoted = True
+            _finalize_run_publication(db_path, run_id)
+        else:
+            _finish_run(
+                db_path,
+                run_id,
+                status=status,
+                trust_level=trust_level,
+                error_message=error_message,
+                index_artifact_path=index_path,
+                zip_artifact_path=zip_path,
+                queue=queue,
+            )
     except Exception as exc:
         if run is not None:
+            if publication_prepared and workspace_promoted:
+                try:
+                    _record_publication_error(db_path, run_id, _safe_error(exc))
+                except Exception as diagnostic_error:
+                    exc.add_note(f"publication diagnostic update failed: {_safe_error(diagnostic_error)}")
+                raise
             _mark_failed(db_path, run_id, _safe_error(exc))
             return
         raise
@@ -435,6 +484,8 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
         raise ValueError("no approved or denied approval to resume")
 
     running_run: sqlite3.Row | None = None
+    publication_prepared = False
+    workspace_promoted = False
     try:
         running_run = _mark_resume_running(db_path, user_id, run_id)
         if running_run is None:
@@ -457,20 +508,38 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
             error_message = "Run did not produce index.html"
         trust_level = _trust_level(result, status)
         if status == "completed":
+            _prepare_run_publication(
+                db_path,
+                run_id,
+                trust_level=trust_level,
+                index_artifact_path=index_path,
+                zip_artifact_path=zip_path,
+                queue=queue,
+            )
+            publication_prepared = True
             promote_run_workspace(project_storage, run_id)
-        _finish_run(
-            db_path,
-            run_id,
-            status=status,
-            trust_level=trust_level,
-            error_message=error_message,
-            index_artifact_path=index_path,
-            zip_artifact_path=zip_path,
-            queue=queue,
-        )
+            workspace_promoted = True
+            _finalize_run_publication(db_path, run_id)
+        else:
+            _finish_run(
+                db_path,
+                run_id,
+                status=status,
+                trust_level=trust_level,
+                error_message=error_message,
+                index_artifact_path=index_path,
+                zip_artifact_path=zip_path,
+                queue=queue,
+            )
         return get_run(db_path, user_id, run_id)
     except Exception as exc:
         if running_run is not None:
+            if publication_prepared and workspace_promoted:
+                try:
+                    _record_publication_error(db_path, run_id, _safe_error(exc))
+                except Exception as diagnostic_error:
+                    exc.add_note(f"publication diagnostic update failed: {_safe_error(diagnostic_error)}")
+                raise
             _mark_failed(db_path, run_id, _safe_error(exc))
             return get_run(db_path, user_id, run_id)
         raise
@@ -692,6 +761,115 @@ def _finish_run(
         raise
     finally:
         conn.close()
+
+
+def _prepare_run_publication(
+    db_path: Path,
+    run_id: int,
+    *,
+    trust_level: str,
+    index_artifact_path: Path,
+    zip_artifact_path: Path,
+    queue: ApprovalQueue,
+) -> None:
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            """
+            update runs
+            set status = 'publishing',
+                trust_level = ?,
+                index_artifact_path = ?,
+                zip_artifact_path = ?,
+                error_message = null,
+                finished_at = null
+            where id = ? and status = 'running'
+            """,
+            (trust_level, str(index_artifact_path), str(zip_artifact_path), run_id),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("run is not ready for publication")
+        _record_artifacts(conn, run_id, index_artifact_path, zip_artifact_path)
+        _sync_approvals(conn, run_id, queue)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _finalize_run_publication(db_path: Path, run_id: int) -> None:
+    now = utc_now().isoformat()
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            """
+            update runs
+            set status = 'completed', error_message = null, finished_at = ?
+            where id = ? and status = 'publishing'
+            """,
+            (now, run_id),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("run is not publishing")
+        conn.execute(
+            """
+            update projects
+            set last_run_status = 'completed', updated_at = ?
+            where id = (select project_id from runs where id = ?)
+            """,
+            (now, run_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _record_publication_error(db_path: Path, run_id: int, error_message: str) -> None:
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "update runs set error_message = ? where id = ? and status = 'publishing'",
+            (error_message, run_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _validate_publication_storage(db_path: Path, run: sqlite3.Row, paths: RunPaths) -> None:
+    if not paths.workspace.is_dir():
+        raise ValueError("run workspace is required for publication recovery")
+    if not (paths.workspace / "index.html").is_file():
+        raise ValueError("workspace index.html is required for publication recovery")
+    if run["index_artifact_path"] != str(paths.index_artifact) or not paths.index_artifact.is_file():
+        raise ValueError("index.html artifact is required for publication recovery")
+    if run["zip_artifact_path"] != str(paths.zip_artifact) or not paths.zip_artifact.is_file():
+        raise ValueError("result.zip artifact is required for publication recovery")
+
+    conn = connect_db(db_path)
+    try:
+        records = conn.execute(
+            "select kind, path from artifacts where run_id = ? order by kind",
+            (run["id"],),
+        ).fetchall()
+    finally:
+        conn.close()
+    if [(record["kind"], record["path"]) for record in records] != [
+        ("index", str(paths.index_artifact)),
+        ("zip", str(paths.zip_artifact)),
+    ]:
+        raise ValueError("artifact records are required for publication recovery")
 
 
 def _mark_failed(db_path: Path, run_id: int, error_message: str) -> None:

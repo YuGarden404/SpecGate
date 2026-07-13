@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from contextlib import closing
+import threading
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from specgate.web_runs import (
     create_run,
     get_run,
     recover_interrupted_run_initializations,
+    recover_interrupted_run_publications,
     resume_run_once,
     start_run_background,
 )
@@ -91,18 +93,30 @@ def create_app(
     resolved_data_root.mkdir(parents=True, exist_ok=True)
     init_db(resolved_db_path)
     recover_interrupted_run_initializations(resolved_db_path, resolved_data_root)
+    recover_interrupted_run_publications(resolved_db_path, resolved_data_root)
     resolved_secure_cookies = (
         os.environ.get("SPECGATE_WEB_SECURE_COOKIES") == "1"
         if secure_cookies is None
         else secure_cookies
     )
 
-    app = FastAPI(title="SpecGate Web")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+        with app.state.run_threads_lock:
+            threads = list(app.state.run_threads)
+            app.state.run_threads.clear()
+        for thread in threads:
+            thread.join()
+
+    app = FastAPI(title="SpecGate Web", lifespan=lifespan)
     app.state.data_root = resolved_data_root
     app.state.db_path = resolved_db_path
     app.state.api_key_encryption_secret = os.environ.get("SPECGATE_WEB_SECRET") or os.environ.get(
         "SPECGATE_WEB_API_KEY_SECRET"
     )
+    app.state.run_threads = []
+    app.state.run_threads_lock = threading.Lock()
 
     @app.post("/api/auth/register")
     def register(payload: AuthRequest, response: Response) -> dict[str, Any]:
@@ -266,7 +280,9 @@ def create_app(
             raise
         except ValueError as exc:
             raise _http_error_for_value_error(exc) from exc
-        start_run_background(app.state.db_path, app.state.data_root, int(run["id"]))
+        thread = start_run_background(app.state.db_path, app.state.data_root, int(run["id"]))
+        with app.state.run_threads_lock:
+            app.state.run_threads.append(thread)
         return {"run": _run_dict(run)}
 
     @app.get("/api/runs/{run_id}")

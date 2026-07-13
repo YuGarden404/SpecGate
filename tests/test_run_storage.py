@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -100,6 +101,24 @@ class RunStorageTests(unittest.TestCase):
         )
         self.assertFalse((run.workspace / self.ownership_marker).exists())
         self.assertFalse((run.artifacts / self.ownership_marker).exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows fallback")
+    def test_initialize_run_storage_falls_back_to_owned_copy_when_windows_rename_is_denied(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        denied = PermissionError(13, "rename denied")
+        denied.winerror = 5
+
+        with patch.object(Path, "rename", autospec=True, side_effect=denied) as rename:
+            run = initialize_run_storage(project, 11)
+
+        self.assertEqual(rename.call_count, 1)
+        self.assertEqual((run.workspace / "index.html").read_text(encoding="utf-8"), "v1")
+        self.assertEqual(
+            json.loads((run.root / self.ownership_marker).read_text(encoding="utf-8")),
+            {"run_id": 11, "schema_version": 1},
+        )
+        self.assertEqual(list(project.runs.glob(".11.tmp-*")), [])
 
     def test_initialize_run_storage_rejects_existing_target(self):
         project = self.make_project()
