@@ -54,6 +54,16 @@ class WorkspaceScanResult:
 
 
 @dataclass(frozen=True)
+class WorkspaceTreeBinding:
+    path: Path
+    trusted_path: Path
+    identity: tuple[int, int]
+    parent_path: Path
+    trusted_parent: Path
+    parent_identity: tuple[int, int]
+
+
+@dataclass(frozen=True)
 class _StagingOwnership:
     path: Path
     identity: tuple[int, int]
@@ -360,6 +370,103 @@ def copy_workspace_tree(
                 "path_race",
             ) from copy_error
         raise
+
+
+def bind_workspace_tree(
+    path: str | os.PathLike[str],
+    *,
+    missing_ok: bool = False,
+) -> WorkspaceTreeBinding | None:
+    tree_path = Path(os.path.abspath(path))
+    parent_path, trusted_parent, parent_identity = _validate_root(tree_path.parent)
+    try:
+        root_path, trusted_path, identity = _validate_root(tree_path)
+    except FileNotFoundError:
+        _verify_bound_root(parent_path, trusted_parent, parent_identity)
+        if missing_ok:
+            return None
+        raise WorkspacePathError(
+            "workspace tree does not exist",
+            "path_race",
+        ) from None
+
+    expected_path = trusted_parent / tree_path.name
+    if os.path.normcase(os.path.normpath(trusted_path)) != os.path.normcase(
+        os.path.normpath(expected_path)
+    ):
+        raise WorkspacePathError(
+            "workspace tree escaped its bound parent",
+            "path_race",
+        )
+    _verify_bound_root(parent_path, trusted_parent, parent_identity)
+    _verify_tree_identity(root_path, identity)
+    return WorkspaceTreeBinding(
+        path=root_path,
+        trusted_path=trusted_path,
+        identity=identity,
+        parent_path=parent_path,
+        trusted_parent=trusted_parent,
+        parent_identity=parent_identity,
+    )
+
+
+def rename_workspace_tree_noreplace(
+    binding: WorkspaceTreeBinding,
+    destination: str | os.PathLike[str],
+) -> WorkspaceTreeBinding:
+    destination_path = Path(os.path.abspath(destination))
+    _verify_workspace_tree_binding(binding)
+    if os.path.normcase(os.path.normpath(destination_path.parent)) != os.path.normcase(
+        os.path.normpath(binding.parent_path)
+    ):
+        raise WorkspacePathError(
+            "workspace tree rename must stay within its bound parent",
+            "path_escape",
+        )
+    try:
+        destination_path.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        _reject_link_like(destination_path)
+        raise WorkspacePathError(
+            "workspace tree rename destination already exists",
+            "path_race",
+        )
+
+    try:
+        _platform_rename_noreplace(binding.path, destination_path)
+    except WorkspacePathError:
+        raise
+    except OSError as exc:
+        raise WorkspacePathError(
+            "workspace tree rename failed",
+            "path_race",
+        ) from exc
+
+    moved = bind_workspace_tree(destination_path)
+    if moved is None or (
+        moved.identity != binding.identity
+        or moved.parent_identity != binding.parent_identity
+    ):
+        raise WorkspacePathError(
+            "workspace tree identity changed during rename",
+            "path_race",
+        )
+    return moved
+
+
+def _verify_workspace_tree_binding(binding: WorkspaceTreeBinding) -> None:
+    _verify_bound_root(
+        binding.parent_path,
+        binding.trusted_parent,
+        binding.parent_identity,
+    )
+    _verify_bound_root(
+        binding.path,
+        binding.trusted_path,
+        binding.identity,
+    )
 
 
 def publish_workspace_snapshot(

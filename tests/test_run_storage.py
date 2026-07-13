@@ -302,6 +302,215 @@ class RunStorageTests(unittest.TestCase):
         self.assertFalse((project.workspace / "old.txt").exists())
         self.assertEqual((run.workspace / "index.html").read_text(encoding="utf-8"), "v2")
         self.assertEqual(self.workspace_swap_paths(project), [])
+        next_marker = self.read_promotion_marker(project.workspace.with_name("workspace.next-11"))
+        backup_marker = self.read_promotion_marker(
+            project.workspace.with_name("workspace.backup-11")
+        )
+        self.assertEqual(next_marker["run_id"], 11)
+        self.assertEqual(next_marker["phase"], "next")
+        self.assertEqual(backup_marker["phase"], "backup")
+        self.assertEqual(next_marker["transaction_token"], backup_marker["transaction_token"])
+        self.assertEqual(
+            tuple(next_marker["directory_identity"]),
+            workspace_fs._stat_identity(project.workspace.lstat()),
+        )
+        self.assertEqual(next_marker["parent_identity"], backup_marker["parent_identity"])
+
+    def test_promote_rejects_unowned_preexisting_next_and_preserves_sentinel(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        next_workspace = project.workspace.with_name("workspace.next-11")
+        next_workspace.mkdir()
+        sentinel = next_workspace / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+
+        with self.assertRaises(run_storage.RunStorageOwnershipError):
+            promote_run_workspace(project, 11)
+
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
+        self.assertEqual(
+            (project.workspace / "index.html").read_text(encoding="utf-8"),
+            "v1",
+        )
+
+    def test_promote_rejects_unowned_preexisting_backup_and_preserves_sentinel(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        backup_workspace = project.workspace.with_name("workspace.backup-11")
+        backup_workspace.mkdir()
+        sentinel = backup_workspace / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+
+        with self.assertRaises(run_storage.RunStorageOwnershipError):
+            promote_run_workspace(project, 11)
+
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
+        self.assertEqual(
+            (project.workspace / "index.html").read_text(encoding="utf-8"),
+            "v1",
+        )
+
+    def test_promote_rejects_wrong_run_marker_and_preserves_next_sentinel(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        next_workspace = project.workspace.with_name("workspace.next-11")
+        next_workspace.mkdir()
+        sentinel = next_workspace / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+        binding = workspace_fs.bind_workspace_tree(next_workspace)
+        marker = {
+            "schema_version": 1,
+            "run_id": 12,
+            "phase": "next",
+            "transaction_token": "wrong-run-token",
+            "directory_identity": list(binding.identity),
+            "parent_identity": list(binding.parent_identity),
+        }
+        marker_path = next_workspace.with_name(".workspace.next-11.specgate-owner.json")
+        marker_path.write_text(json.dumps(marker), encoding="utf-8")
+
+        with self.assertRaises(run_storage.RunStorageOwnershipError):
+            promote_run_workspace(project, 11)
+
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
+
+    def test_promote_rejects_current_replaced_before_bound_rename(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        replacement = project.root.parent / "replacement-current"
+        replacement.mkdir()
+        sentinel = replacement / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+        displaced = project.root.parent / "displaced-current"
+        real_rename = run_storage.rename_workspace_tree_noreplace
+
+        def replace_current(binding, destination):
+            binding.path.rename(displaced)
+            replacement.rename(binding.path)
+            return real_rename(binding, destination)
+
+        with patch(
+            "specgate.run_storage.rename_workspace_tree_noreplace",
+            side_effect=replace_current,
+        ):
+            with self.assertRaises(WorkspacePathError):
+                promote_run_workspace(project, 11)
+
+        self.assertEqual(
+            (project.workspace / "sentinel.txt").read_text(encoding="utf-8"),
+            "external sentinel",
+        )
+        self.assertEqual((displaced / "index.html").read_text(encoding="utf-8"), "v1")
+
+    def test_promote_rejects_next_replaced_before_bound_rename_and_rolls_back(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        next_workspace = project.workspace.with_name("workspace.next-11")
+        replacement = project.root.parent / "replacement-next-before-rename"
+        replacement.mkdir()
+        sentinel = replacement / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+        displaced = project.root.parent / "displaced-next-before-rename"
+        real_rename = run_storage.rename_workspace_tree_noreplace
+        calls = 0
+
+        def replace_next(binding, destination):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                binding.path.rename(displaced)
+                replacement.rename(binding.path)
+            return real_rename(binding, destination)
+
+        with patch(
+            "specgate.run_storage.rename_workspace_tree_noreplace",
+            side_effect=replace_next,
+        ):
+            with self.assertRaises(WorkspacePathError):
+                promote_run_workspace(project, 11)
+
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v1")
+        self.assertEqual(
+            (next_workspace / "sentinel.txt").read_text(encoding="utf-8"),
+            "external sentinel",
+        )
+        self.assertEqual((displaced / "index.html").read_text(encoding="utf-8"), "v2")
+
+    def test_promote_rejects_parent_replaced_before_bound_rename(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        replacement_root = project.root.with_name("replacement-project-root")
+        replacement_workspace = replacement_root / "workspace"
+        replacement_workspace.mkdir(parents=True)
+        sentinel = replacement_workspace / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+        displaced_root = project.root.with_name("displaced-project-root")
+        real_rename = run_storage.rename_workspace_tree_noreplace
+
+        def replace_parent(binding, destination):
+            project.root.rename(displaced_root)
+            replacement_root.rename(project.root)
+            return real_rename(binding, destination)
+
+        with patch(
+            "specgate.run_storage.rename_workspace_tree_noreplace",
+            side_effect=replace_parent,
+        ):
+            with self.assertRaises(WorkspacePathError):
+                promote_run_workspace(project, 11)
+
+        self.assertEqual(
+            (project.workspace / "sentinel.txt").read_text(encoding="utf-8"),
+            "external sentinel",
+        )
+        self.assertEqual(
+            (displaced_root / "workspace" / "index.html").read_text(encoding="utf-8"),
+            "v1",
+        )
+
+    def test_promote_reloads_markers_before_first_rename(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        next_workspace = project.workspace.with_name("workspace.next-11")
+        displaced_marker = project.root.parent / "displaced-next-marker.json"
+        real_commit = run_storage._commit_workspace_promotion
+
+        def replace_marker_before_commit(current, next_binding, backup, run_id, token):
+            marker_path = next_workspace.with_name(".workspace.next-11.specgate-owner.json")
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            marker_path.rename(displaced_marker)
+            marker["transaction_token"] = "wrong-token"
+            marker_path.write_text(json.dumps(marker), encoding="utf-8")
+            return real_commit(current, next_binding, backup, run_id, token)
+
+        with patch(
+            "specgate.run_storage._commit_workspace_promotion",
+            side_effect=replace_marker_before_commit,
+        ):
+            with self.assertRaises(run_storage.RunStorageOwnershipError):
+                promote_run_workspace(project, 11)
+
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v1")
+        self.assertEqual((next_workspace / "index.html").read_text(encoding="utf-8"), "v2")
+        self.assertEqual(
+            self.read_promotion_marker(next_workspace)["transaction_token"],
+            "wrong-token",
+        )
+        self.assertTrue(displaced_marker.is_file())
 
     def test_promote_run_workspace_restores_project_workspace_when_publish_rename_fails(self):
         project = self.make_project()
@@ -311,63 +520,66 @@ class RunStorageTests(unittest.TestCase):
         (run.workspace / "index.html").write_text("v2", encoding="utf-8")
         (run.workspace / "new.txt").write_text("new", encoding="utf-8")
 
-        original_rename = Path.rename
+        original_rename = run_storage.rename_workspace_tree_noreplace
         rename_calls = []
 
-        def fail_second_rename(source, target):
-            rename_calls.append((source, target))
+        def fail_second_rename(binding, target):
+            rename_calls.append((binding.path, Path(target)))
             if len(rename_calls) == 2:
                 raise OSError("publish rename failed")
-            return original_rename(source, target)
+            return original_rename(binding, target)
 
-        with patch.object(Path, "rename", autospec=True, side_effect=fail_second_rename):
+        with patch(
+            "specgate.run_storage.rename_workspace_tree_noreplace",
+            side_effect=fail_second_rename,
+        ):
             with self.assertRaisesRegex(OSError, "publish rename failed"):
                 promote_run_workspace(project, 11)
 
-        self.assertEqual(len(rename_calls), 3)
+        self.assertEqual(len(rename_calls), 4)
         self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v1")
         self.assertEqual((project.workspace / "old.txt").read_text(encoding="utf-8"), "old")
         self.assertFalse((project.workspace / "new.txt").exists())
         self.assertEqual((run.workspace / "index.html").read_text(encoding="utf-8"), "v2")
         self.assertEqual(self.workspace_swap_paths(project), [])
+        quarantines = list(project.root.glob(".workspace.next-11.specgate-quarantine-*"))
+        self.assertEqual(len(quarantines), 1)
+        self.assertEqual((quarantines[0] / "new.txt").read_text(encoding="utf-8"), "new")
 
     def test_promote_run_workspace_keeps_committed_current_when_backup_cleanup_partially_fails(self):
         project = self.make_project()
         (project.workspace / "index.html").write_text("v1", encoding="utf-8")
-        (project.workspace / "old.txt").write_text("old", encoding="utf-8")
         run = initialize_run_storage(project, 11)
         (run.workspace / "index.html").write_text("v2", encoding="utf-8")
-        (run.workspace / "new.txt").write_text("new", encoding="utf-8")
-
         backup_workspace = project.workspace.with_name("workspace.backup-11")
-        original_rmtree = shutil.rmtree
-        backup_cleanup_attempts = 0
+        replacement = project.root.parent / "replacement-backup"
+        replacement.mkdir()
+        sentinel = replacement / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+        displaced = project.root.parent / "displaced-backup"
+        real_rename = run_storage.rename_workspace_tree_noreplace
+        calls = 0
 
-        def fail_first_backup_cleanup(path, *args, **kwargs):
-            nonlocal backup_cleanup_attempts
-            if Path(path) == backup_workspace:
-                backup_cleanup_attempts += 1
-                if backup_cleanup_attempts == 1:
-                    (Path(path) / "old.txt").unlink()
-                    raise OSError("backup cleanup failed")
-            return original_rmtree(path, *args, **kwargs)
+        def replace_backup_before_quarantine(binding, destination):
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                binding.path.rename(displaced)
+                replacement.rename(binding.path)
+            return real_rename(binding, destination)
 
-        with patch("specgate.run_storage.shutil.rmtree", side_effect=fail_first_backup_cleanup):
-            with self.assertWarnsRegex(RuntimeWarning, "backup cleanup failed"):
+        with patch(
+            "specgate.run_storage.rename_workspace_tree_noreplace",
+            side_effect=replace_backup_before_quarantine,
+        ):
+            with self.assertWarnsRegex(RuntimeWarning, "backup.*quarantine failed"):
                 promote_run_workspace(project, 11)
 
-        self.assertEqual(backup_cleanup_attempts, 1)
         self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
-        self.assertEqual((project.workspace / "new.txt").read_text(encoding="utf-8"), "new")
-        self.assertTrue(backup_workspace.is_dir())
-        self.assertFalse((backup_workspace / "old.txt").exists())
-        self.assertEqual((run.workspace / "index.html").read_text(encoding="utf-8"), "v2")
-
-        promote_run_workspace(project, 11)
-
-        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
-        self.assertEqual((project.workspace / "new.txt").read_text(encoding="utf-8"), "new")
-        self.assertEqual(self.workspace_swap_paths(project), [])
+        self.assertEqual((backup_workspace / "sentinel.txt").read_text(encoding="utf-8"), "external sentinel")
+        self.assertEqual((displaced / "index.html").read_text(encoding="utf-8"), "v1")
+        with self.assertRaises(run_storage.RunStorageOwnershipError):
+            promote_run_workspace(project, 11)
 
     def test_promote_run_workspace_keeps_backup_marker_when_committed_next_cleanup_fails(self):
         project = self.make_project()
@@ -375,45 +587,57 @@ class RunStorageTests(unittest.TestCase):
         run = initialize_run_storage(project, 11)
         (run.workspace / "index.html").write_text("v2", encoding="utf-8")
         next_workspace = project.workspace.with_name("workspace.next-11")
-        backup_workspace = project.workspace.with_name("workspace.backup-11")
-        project.workspace.rename(backup_workspace)
-        shutil.copytree(run.workspace, project.workspace)
-        shutil.copytree(run.workspace, next_workspace)
+        replacement = project.root.parent / "replacement-next"
+        replacement.mkdir()
+        sentinel = replacement / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+        displaced = project.root.parent / "displaced-next"
+        real_rename = run_storage.rename_workspace_tree_noreplace
+        calls = 0
 
-        original_rmtree = shutil.rmtree
+        def fail_publish_then_replace_next(binding, destination):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("publish rename failed")
+            if calls == 4:
+                binding.path.rename(displaced)
+                replacement.rename(binding.path)
+            return real_rename(binding, destination)
 
-        def partially_fail_next_cleanup(path, *args, **kwargs):
-            if Path(path) == next_workspace:
-                (Path(path) / "index.html").unlink()
-                raise OSError("next cleanup failed")
-            return original_rmtree(path, *args, **kwargs)
-
-        with patch("specgate.run_storage.shutil.rmtree", side_effect=partially_fail_next_cleanup):
-            with self.assertWarnsRegex(RuntimeWarning, "next cleanup failed"):
+        with patch(
+            "specgate.run_storage.rename_workspace_tree_noreplace",
+            side_effect=fail_publish_then_replace_next,
+        ):
+            try:
                 promote_run_workspace(project, 11)
+            except OSError as exc:
+                error = exc
+            else:
+                self.fail("promotion did not fail")
 
-        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
-        self.assertTrue(next_workspace.is_dir())
-        self.assertTrue(backup_workspace.is_dir())
-
-        promote_run_workspace(project, 11)
-
-        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
-        self.assertEqual(self.workspace_swap_paths(project), [])
+        self.assertTrue(
+            any("next quarantine failed" in note for note in getattr(error, "__notes__", ()))
+        )
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v1")
+        self.assertEqual((next_workspace / "sentinel.txt").read_text(encoding="utf-8"), "external sentinel")
+        self.assertEqual((displaced / "index.html").read_text(encoding="utf-8"), "v2")
 
     def test_promote_run_workspace_recovers_stale_next_before_retry(self):
         project = self.make_project()
         (project.workspace / "index.html").write_text("v1", encoding="utf-8")
         run = initialize_run_storage(project, 11)
         (run.workspace / "index.html").write_text("v2", encoding="utf-8")
-        next_workspace = project.workspace.with_name("workspace.next-11")
-        shutil.copytree(run.workspace, next_workspace)
-        (next_workspace / "stale.txt").write_text("stale", encoding="utf-8")
+        with patch(
+            "specgate.run_storage._commit_workspace_promotion",
+            side_effect=KeyboardInterrupt("interrupted before commit"),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                promote_run_workspace(project, 11)
 
         promote_run_workspace(project, 11)
 
         self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
-        self.assertFalse((project.workspace / "stale.txt").exists())
         self.assertEqual(self.workspace_swap_paths(project), [])
 
     def test_promote_run_workspace_recovers_backup_when_current_is_missing(self):
@@ -421,10 +645,21 @@ class RunStorageTests(unittest.TestCase):
         (project.workspace / "index.html").write_text("v1", encoding="utf-8")
         run = initialize_run_storage(project, 11)
         (run.workspace / "index.html").write_text("v2", encoding="utf-8")
-        next_workspace = project.workspace.with_name("workspace.next-11")
         backup_workspace = project.workspace.with_name("workspace.backup-11")
-        shutil.copytree(run.workspace, next_workspace)
-        project.workspace.rename(backup_workspace)
+
+        def interrupt_after_backup(current_binding, _next_binding, backup, _run_id, _token):
+            run_storage.rename_workspace_tree_noreplace(current_binding, backup)
+            raise KeyboardInterrupt("interrupted after backup")
+
+        with patch(
+            "specgate.run_storage._commit_workspace_promotion",
+            side_effect=interrupt_after_backup,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                promote_run_workspace(project, 11)
+
+        self.assertFalse(project.workspace.exists())
+        self.assertTrue(backup_workspace.is_dir())
 
         promote_run_workspace(project, 11)
 
@@ -437,31 +672,74 @@ class RunStorageTests(unittest.TestCase):
         run = initialize_run_storage(project, 11)
         (run.workspace / "index.html").write_text("v2", encoding="utf-8")
         next_workspace = project.workspace.with_name("workspace.next-11")
+        real_is_link_like = workspace_fs.is_link_like
+
+        def mark_next_reparse(path):
+            if Path(path) == next_workspace:
+                return True
+            return real_is_link_like(path)
+
+        next_workspace.mkdir()
+        sentinel = next_workspace / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+        with patch.object(workspace_fs, "is_link_like", side_effect=mark_next_reparse):
+            with self.assertRaises(run_storage.RunStorageOwnershipError):
+                promote_run_workspace(project, 11)
+
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
+
+    def test_promote_rejects_mocked_reparse_backup_and_preserves_sentinel(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
         backup_workspace = project.workspace.with_name("workspace.backup-11")
-        shutil.copytree(run.workspace, next_workspace)
-        project.workspace.rename(backup_workspace)
+        backup_workspace.mkdir()
+        sentinel = backup_workspace / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+        real_is_link_like = workspace_fs.is_link_like
+
+        def mark_backup_reparse(path):
+            if Path(path) == backup_workspace:
+                return True
+            return real_is_link_like(path)
+
+        with patch.object(workspace_fs, "is_link_like", side_effect=mark_backup_reparse):
+            with self.assertRaises(run_storage.RunStorageOwnershipError):
+                promote_run_workspace(project, 11)
+
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
+
+    def test_backup_cleanup_reloads_marker_and_rejects_replaced_token(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        backup_workspace = project.workspace.with_name("workspace.backup-11")
+        displaced_marker = project.root.parent / "displaced-backup-marker.json"
+        real_cleanup = run_storage._quarantine_committed_phase
+
+        def replace_marker_before_cleanup(state, token):
+            state.marker_path.rename(displaced_marker)
+            replacement = dict(state.marker)
+            replacement["transaction_token"] = "wrong-token"
+            state.marker_path.write_text(json.dumps(replacement), encoding="utf-8")
+            return real_cleanup(state, token)
 
         with patch(
-            "specgate.run_storage.shutil.rmtree",
-            side_effect=OSError("recovery cleanup failed"),
+            "specgate.run_storage._quarantine_committed_phase",
+            side_effect=replace_marker_before_cleanup,
         ):
-            try:
+            with self.assertWarnsRegex(RuntimeWarning, "backup.*quarantine failed"):
                 promote_run_workspace(project, 11)
-            except Exception as exc:
-                error = exc
-            else:
-                self.fail("promote_run_workspace did not report cleanup failure")
-
-        self.assertIsInstance(error, RunStorageCleanupError)
-        self.assertIn("recovery cleanup failed", str(error))
-        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v1")
-        self.assertTrue(next_workspace.is_dir())
-        self.assertFalse(backup_workspace.exists())
-
-        promote_run_workspace(project, 11)
 
         self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v2")
-        self.assertEqual(self.workspace_swap_paths(project), [])
+        self.assertEqual((backup_workspace / "index.html").read_text(encoding="utf-8"), "v1")
+        self.assertEqual(
+            self.read_promotion_marker(backup_workspace)["transaction_token"],
+            "wrong-token",
+        )
+        self.assertTrue(displaced_marker.is_file())
 
     def workspace_swap_paths(self, project):
         return sorted(
@@ -475,6 +753,10 @@ class RunStorageTests(unittest.TestCase):
             json.dumps({"run_id": run_id, "schema_version": 1}, sort_keys=True),
             encoding="utf-8",
         )
+
+    def read_promotion_marker(self, path):
+        marker = path.with_name(f".{path.name}.specgate-owner.json")
+        return json.loads(marker.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

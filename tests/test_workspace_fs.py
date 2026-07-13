@@ -554,6 +554,44 @@ class WorkspaceFileIOTests(unittest.TestCase):
 
 
 class WorkspaceScanAndCopyTests(unittest.TestCase):
+    def test_bound_tree_rename_preserves_tree_and_parent_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            source = parent / "workspace"
+            destination = parent / "workspace.backup-11"
+            source.mkdir()
+            (source / "index.html").write_text("v1", encoding="utf-8")
+
+            binding = workspace_fs.bind_workspace_tree(source)
+            moved = workspace_fs.rename_workspace_tree_noreplace(binding, destination)
+
+            self.assertFalse(source.exists())
+            self.assertEqual(
+                (destination / "index.html").read_text(encoding="utf-8"),
+                "v1",
+            )
+            self.assertEqual(moved.path, destination)
+            self.assertEqual(moved.identity, binding.identity)
+            self.assertEqual(moved.parent_identity, binding.parent_identity)
+
+    def test_bound_tree_rename_does_not_overwrite_existing_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            source = parent / "workspace"
+            destination = parent / "workspace.backup-11"
+            source.mkdir()
+            destination.mkdir()
+            (source / "index.html").write_text("v1", encoding="utf-8")
+            sentinel = destination / "sentinel.txt"
+            sentinel.write_text("external sentinel", encoding="utf-8")
+            binding = workspace_fs.bind_workspace_tree(source)
+
+            with self.assertRaises(WorkspacePathError):
+                workspace_fs.rename_workspace_tree_noreplace(binding, destination)
+
+            self.assertEqual((source / "index.html").read_text(encoding="utf-8"), "v1")
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
+
     @unittest.skipUnless(os.name == "nt", "Windows root identity validation")
     def test_windows_stat_and_handle_identity_match_for_same_root(self):
         with tempfile.TemporaryDirectory() as tmp:
