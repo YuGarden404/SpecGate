@@ -49,7 +49,13 @@ def promote_run_workspace(project: ProjectPaths, run_id: int) -> None:
         except Exception:
             backup_workspace.rename(project.workspace)
             raise
-        shutil.rmtree(backup_workspace)
+        try:
+            shutil.rmtree(backup_workspace)
+        except Exception:
+            project.workspace.rename(next_workspace)
+            backup_workspace.rename(project.workspace)
+            shutil.rmtree(next_workspace)
+            raise
     except Exception:
         if next_workspace.exists():
             shutil.rmtree(next_workspace, ignore_errors=True)

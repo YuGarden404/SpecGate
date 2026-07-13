@@ -1,3 +1,4 @@
+import shutil
 import tempfile
 import unittest
 from dataclasses import FrozenInstanceError
@@ -132,6 +133,37 @@ class RunStorageTests(unittest.TestCase):
                 promote_run_workspace(project, 11)
 
         self.assertEqual(len(rename_calls), 3)
+        self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v1")
+        self.assertEqual((project.workspace / "old.txt").read_text(encoding="utf-8"), "old")
+        self.assertFalse((project.workspace / "new.txt").exists())
+        self.assertEqual((run.workspace / "index.html").read_text(encoding="utf-8"), "v2")
+        self.assertEqual(self.workspace_swap_paths(project), [])
+
+    def test_promote_run_workspace_restores_project_workspace_when_backup_cleanup_fails(self):
+        project = self.make_project()
+        (project.workspace / "index.html").write_text("v1", encoding="utf-8")
+        (project.workspace / "old.txt").write_text("old", encoding="utf-8")
+        run = initialize_run_storage(project, 11)
+        (run.workspace / "index.html").write_text("v2", encoding="utf-8")
+        (run.workspace / "new.txt").write_text("new", encoding="utf-8")
+
+        backup_workspace = project.workspace.with_name("workspace.backup-11")
+        original_rmtree = shutil.rmtree
+        backup_cleanup_attempts = 0
+
+        def fail_first_backup_cleanup(path, *args, **kwargs):
+            nonlocal backup_cleanup_attempts
+            if Path(path) == backup_workspace:
+                backup_cleanup_attempts += 1
+                if backup_cleanup_attempts == 1:
+                    raise OSError("backup cleanup failed")
+            return original_rmtree(path, *args, **kwargs)
+
+        with patch("specgate.run_storage.shutil.rmtree", side_effect=fail_first_backup_cleanup):
+            with self.assertRaisesRegex(OSError, "backup cleanup failed"):
+                promote_run_workspace(project, 11)
+
+        self.assertEqual(backup_cleanup_attempts, 1)
         self.assertEqual((project.workspace / "index.html").read_text(encoding="utf-8"), "v1")
         self.assertEqual((project.workspace / "old.txt").read_text(encoding="utf-8"), "old")
         self.assertFalse((project.workspace / "new.txt").exists())
