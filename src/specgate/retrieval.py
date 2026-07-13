@@ -5,7 +5,6 @@ from pathlib import Path
 import re
 
 import specgate.workspace_fs as workspace_fs
-from specgate.context_selector import scan_workspace_candidates
 
 DEFAULT_SUFFIXES = frozenset({".md", ".txt", ".toml", ".json", ".jsonl", ".py", ".html", ".css", ".js"})
 EXCLUDED_DIRS = frozenset({".git", "__pycache__", "runs", "reports", "eval-runs"})
@@ -154,7 +153,12 @@ def retrieve_chunks(
     candidates: list[RetrievedChunk] = []
     dropped_reasons: list[str] = []
     if allowed_read_paths is None:
-        scanned_files, scan_rejections = scan_workspace_candidates(root)
+        scan_result = workspace_fs.scan_workspace_files(
+            root,
+            excluded_dirs=resolved_config.exclude_dirs,
+        )
+        scanned_files = scan_result.files
+        scan_rejections = scan_result.rejections
     else:
         scanned_files = sorted(allowed_read_paths)
         scan_rejections = []

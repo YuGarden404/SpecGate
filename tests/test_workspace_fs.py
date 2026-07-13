@@ -251,6 +251,26 @@ class WorkspaceFileIOTests(unittest.TestCase):
 
             self.assertFalse(workspace_file_state(existing_root, "missing.txt").exists)
 
+    def test_missing_final_error_identifies_workspace_relative_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "trusted").mkdir()
+
+            with self.assertRaises(WorkspacePathError) as raised:
+                read_workspace_bytes(root, "trusted/missing.txt")
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertEqual(raised.exception.missing_path, "trusted/missing.txt")
+
+    def test_file_state_fails_closed_when_parent_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            with self.assertRaises(WorkspacePathError) as raised:
+                workspace_file_state(root, "missing-parent/value.txt")
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+
     def test_rejects_mocked_reparse_parent_before_missing_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -397,6 +417,104 @@ class WorkspaceFileIOTests(unittest.TestCase):
 
 
 class WorkspaceScanAndCopyTests(unittest.TestCase):
+    def test_tolerant_scan_prunes_excluded_directory_without_enumerating_children(self):
+        self.assertTrue(hasattr(workspace_fs, "scan_workspace_files"))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "safe.txt").write_text("safe", encoding="utf-8")
+            excluded = root / "eval-runs"
+            excluded.mkdir()
+            (excluded / "external-name.txt").write_text("sentinel", encoding="utf-8")
+            real_scandir = os.scandir
+
+            def reject_excluded_scan(path):
+                if not isinstance(path, int) and Path(path) == excluded:
+                    raise AssertionError("excluded directory was enumerated")
+                return real_scandir(path)
+
+            with mock.patch.object(os, "scandir", side_effect=reject_excluded_scan):
+                result = workspace_fs.scan_workspace_files(
+                    root,
+                    excluded_dirs={"eval-runs"},
+                )
+
+            self.assertEqual(result.files, ["safe.txt"])
+            self.assertNotIn("external-name.txt", str(result))
+
+    @unittest.skipUnless(os.name == "nt", "Windows tolerant directory identity validation")
+    def test_tolerant_scan_rejects_replaced_directory_without_external_names(self):
+        self.assertTrue(hasattr(workspace_fs, "scan_workspace_files"))
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            (root / "safe.txt").write_text("safe", encoding="utf-8")
+            nested = root / "nested"
+            nested.mkdir()
+            (nested / "inside.txt").write_text("inside", encoding="utf-8")
+            external = Path(outside)
+            (external / "EXTERNAL_NAME_SENTINEL.txt").write_text("sentinel", encoding="utf-8")
+            root_stat = root.stat()
+            outside_stat = external.stat()
+            real_scandir = os.scandir
+
+            def redirect_replaced_directory(path):
+                if not isinstance(path, int) and Path(path) == nested:
+                    return real_scandir(external)
+                return real_scandir(path)
+
+            with (
+                mock.patch.object(
+                    workspace_fs,
+                    "_windows_handle_identity",
+                    side_effect=(
+                        (root_stat.st_dev, root_stat.st_ino),
+                        (outside_stat.st_dev, outside_stat.st_ino),
+                    ),
+                ),
+                mock.patch.object(os, "scandir", side_effect=redirect_replaced_directory),
+            ):
+                result = workspace_fs.scan_workspace_files(root)
+
+            self.assertEqual(result.files, ["safe.txt"])
+            self.assertTrue(
+                any(
+                    rejection.path == "nested" and rejection.rule_family == "path_race"
+                    for rejection in result.rejections
+                )
+            )
+            self.assertNotIn("EXTERNAL_NAME_SENTINEL", str(result))
+
+    @unittest.skipIf(os.name == "nt", "POSIX tolerant directory descriptor validation")
+    def test_tolerant_scan_rejects_directory_swap_without_external_names(self):
+        self.assertTrue(hasattr(workspace_fs, "scan_workspace_files"))
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            (root / "safe.txt").write_text("safe", encoding="utf-8")
+            nested = root / "nested"
+            nested.mkdir()
+            (nested / "inside.txt").write_text("inside", encoding="utf-8")
+            saved = root / "saved"
+            external = Path(outside)
+            (external / "EXTERNAL_NAME_SENTINEL.txt").write_text("sentinel", encoding="utf-8")
+            real_open = os.open
+            replaced = False
+
+            def replace_then_open(path, flags, mode=0o777, *, dir_fd=None):
+                nonlocal replaced
+                if path == "nested" and dir_fd is not None and not replaced:
+                    nested.rename(saved)
+                    os.symlink(external, nested, target_is_directory=True)
+                    replaced = True
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
+            with mock.patch.object(os, "open", side_effect=replace_then_open):
+                result = workspace_fs.scan_workspace_files(root)
+
+            self.assertEqual(result.files, ["safe.txt"])
+            self.assertTrue(
+                any(rejection.path == "nested" for rejection in result.rejections)
+            )
+            self.assertNotIn("EXTERNAL_NAME_SENTINEL", str(result))
+
     def test_iterates_normal_nested_files_in_stable_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

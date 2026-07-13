@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 from pathlib import Path
 
 import specgate.workspace_fs as workspace_fs
@@ -30,13 +29,6 @@ class ContextSelection:
     used_chars: int
 
 
-@dataclass(frozen=True)
-class ScanRejection:
-    path: str
-    rule_family: str
-    message: str
-
-
 def _is_under_excluded_dir(relative_path: str) -> bool:
     return any(
         part in EXCLUDED_DIRS or part.startswith(".")
@@ -62,49 +54,6 @@ def _priority(relative_path: str) -> int:
     return 40
 
 
-def scan_workspace_candidates(root: Path) -> tuple[list[str], list[ScanRejection]]:
-    root_path = Path(os.path.abspath(root))
-    files: list[str] = []
-    rejections: list[ScanRejection] = []
-
-    def reject(path: str, rule_family: str, message: str) -> None:
-        rejections.append(ScanRejection(path, rule_family, message))
-
-    def scan(directory: Path, prefix: str) -> None:
-        try:
-            with os.scandir(directory) as entries:
-                ordered = sorted(entries, key=lambda entry: entry.name)
-        except OSError:
-            reject(prefix or "<workspace>", "path_race", "directory changed during scan")
-            return
-
-        for entry in ordered:
-            raw_relative = f"{prefix}/{entry.name}" if prefix else entry.name
-            try:
-                relative = workspace_fs.normalize_workspace_relative(raw_relative)
-                if workspace_fs.is_link_like(Path(entry.path)):
-                    reject(relative, "linked_path", "link-like entry rejected")
-                    continue
-                is_directory = entry.is_dir(follow_symlinks=False)
-                is_file = entry.is_file(follow_symlinks=False)
-            except workspace_fs.WorkspacePathError as exc:
-                reject(raw_relative, exc.rule_family, exc.message)
-                continue
-            except OSError:
-                reject(relative, "path_race", "entry changed during scan")
-                continue
-
-            if is_directory:
-                scan(Path(entry.path), relative)
-            elif is_file:
-                files.append(relative)
-            else:
-                reject(relative, "unsafe_file_type", "non-regular entry rejected")
-
-    scan(root_path, "")
-    return sorted(files), sorted(rejections, key=lambda item: item.path)
-
-
 def select_context_files(
     root: Path,
     budget_chars: int = DEFAULT_BUDGET_CHARS,
@@ -117,7 +66,12 @@ def select_context_files(
     skipped: list[ContextFile] = []
 
     if allowed_read_paths is None:
-        scanned_files, scan_rejections = scan_workspace_candidates(root)
+        scan_result = workspace_fs.scan_workspace_files(
+            root,
+            excluded_dirs=EXCLUDED_DIRS,
+        )
+        scanned_files = scan_result.files
+        scan_rejections = scan_result.rejections
     else:
         scanned_files = sorted(allowed_read_paths)
         scan_rejections = []

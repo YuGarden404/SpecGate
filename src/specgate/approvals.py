@@ -115,9 +115,6 @@ class ApprovalQueue:
     @classmethod
     def read(cls, path: Path) -> "ApprovalQueue":
         root, relative_path = _approval_queue_location(path)
-        parent_relative = relative_path.rpartition("/")[0]
-        if parent_relative:
-            workspace_fs._ensure_workspace_directory(root, parent_relative)
         try:
             content = workspace_fs.read_workspace_text(
                 root,
@@ -242,18 +239,10 @@ def _is_missing_queue_file(
     error: workspace_fs.WorkspacePathError,
     path: Path,
 ) -> bool:
-    cause = error.__cause__
-    if error.rule_family != "path_race" or not isinstance(cause, FileNotFoundError):
+    if error.rule_family != "path_race":
         return False
-    if cause.filename is None:
-        return False
-
-    expected = Path(os.path.abspath(path))
-    missing = Path(cause.filename)
-    if missing.is_absolute():
-        return os.path.normcase(str(missing)) == os.path.normcase(str(expected))
-
-    return missing.name == expected.name and expected.name not in expected.parent.parts
+    _, expected_relative = _approval_queue_location(path)
+    return error.missing_path == expected_relative
 
 
 def _parse_pending_approval(approval: dict[str, Any]) -> PendingApproval:

@@ -1,5 +1,6 @@
 import json
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -82,16 +83,19 @@ class ContextStrategyTests(unittest.TestCase):
             root = Path(tmp)
             (root / "safe-notes.md").write_text("SAFE_CONTEXT_CONTENT", encoding="utf-8")
             (root / "linked-notes.md").write_text("EXTERNAL_CONTEXT_SENTINEL", encoding="utf-8")
-            original_is_link_like = workspace_fs.is_link_like
-
-            def mark_linked(path):
-                if Path(path).name == "linked-notes.md":
-                    return True
-                return original_is_link_like(path)
-
             with mock.patch(
-                "specgate.workspace_fs.is_link_like",
-                side_effect=mark_linked,
+                "specgate.workspace_fs.scan_workspace_files",
+                create=True,
+                return_value=types.SimpleNamespace(
+                    files=["safe-notes.md"],
+                    rejections=[
+                        types.SimpleNamespace(
+                            path="linked-notes.md",
+                            rule_family="linked_path",
+                            message="link-like entry rejected",
+                        )
+                    ],
+                ),
             ):
                 context = build_context_pack(root, None, [], strategy="baseline")
 
@@ -108,19 +112,19 @@ class ContextStrategyTests(unittest.TestCase):
                 "EXTERNAL_EXCLUDED_SENTINEL",
                 encoding="utf-8",
             )
-            original_is_link_like = workspace_fs.is_link_like
-
-            def mark_linked(path):
-                if Path(path).name == "linked.md":
-                    return True
-                return original_is_link_like(path)
-
             with mock.patch(
-                "specgate.workspace_fs.iter_workspace_files",
-                side_effect=WorkspacePathError("excluded linked entry", "linked_path"),
-            ), mock.patch(
-                "specgate.workspace_fs.is_link_like",
-                side_effect=mark_linked,
+                "specgate.workspace_fs.scan_workspace_files",
+                create=True,
+                return_value=types.SimpleNamespace(
+                    files=["safe-notes.md"],
+                    rejections=[
+                        types.SimpleNamespace(
+                            path="eval-runs",
+                            rule_family="linked_path",
+                            message="link-like entry rejected",
+                        )
+                    ],
+                ),
             ):
                 context = build_context_pack(root, None, [], strategy="baseline")
 

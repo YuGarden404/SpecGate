@@ -1,4 +1,5 @@
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -90,7 +91,7 @@ class RetrievalTests(unittest.TestCase):
             statuses = {item.path: item.status for item in selection.files}
 
             self.assertEqual(statuses["TASK_SPEC.md"], "selected")
-            self.assertEqual(statuses["eval-runs/latest.json"], "skipped")
+            self.assertNotIn("eval-runs/latest.json", statuses)
 
     def test_retrieval_rejects_external_link_and_records_rule_family(self):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
@@ -128,16 +129,19 @@ class RetrievalTests(unittest.TestCase):
             (root / "safe.md").write_text("python gate search safe", encoding="utf-8")
             sentinel = "EXTERNAL_RETRIEVAL_SENTINEL python gate search"
             (root / "linked.md").write_text(sentinel, encoding="utf-8")
-            original_is_link_like = workspace_fs.is_link_like
-
-            def mark_linked(path):
-                if Path(path).name == "linked.md":
-                    return True
-                return original_is_link_like(path)
-
             with mock.patch(
-                "specgate.workspace_fs.is_link_like",
-                side_effect=mark_linked,
+                "specgate.workspace_fs.scan_workspace_files",
+                create=True,
+                return_value=types.SimpleNamespace(
+                    files=["safe.md"],
+                    rejections=[
+                        types.SimpleNamespace(
+                            path="linked.md",
+                            rule_family="linked_path",
+                            message="link-like entry rejected",
+                        )
+                    ],
+                ),
             ):
                 result = retrieve_chunks(root, ["python", "gate", "search"])
 
@@ -154,19 +158,19 @@ class RetrievalTests(unittest.TestCase):
                 "EXTERNAL_EXCLUDED_SENTINEL python gate search",
                 encoding="utf-8",
             )
-            original_is_link_like = workspace_fs.is_link_like
-
-            def mark_linked(path):
-                if Path(path).name == "linked.md":
-                    return True
-                return original_is_link_like(path)
-
             with mock.patch(
-                "specgate.workspace_fs.iter_workspace_files",
-                side_effect=WorkspacePathError("excluded linked entry", "linked_path"),
-            ), mock.patch(
-                "specgate.workspace_fs.is_link_like",
-                side_effect=mark_linked,
+                "specgate.workspace_fs.scan_workspace_files",
+                create=True,
+                return_value=types.SimpleNamespace(
+                    files=["safe.md"],
+                    rejections=[
+                        types.SimpleNamespace(
+                            path="eval-runs",
+                            rule_family="linked_path",
+                            message="link-like entry rejected",
+                        )
+                    ],
+                ),
             ):
                 result = retrieve_chunks(root, ["python", "gate", "search"])
 

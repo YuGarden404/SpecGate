@@ -255,14 +255,25 @@ class ApprovalTests(unittest.TestCase):
 
             self.assertEqual(queue, ApprovalQueue())
 
-    def test_queue_read_safely_establishes_missing_parent_before_returning_empty(self):
+    def test_queue_read_returns_empty_when_trusted_parent_matches_queue_name(self):
         with tempfile.TemporaryDirectory() as tmp:
-            queue_path = Path(tmp) / "missing" / "pending_approvals.json"
+            parent = Path(tmp) / "pending_approvals.json"
+            parent.mkdir()
+            queue_path = parent / "pending_approvals.json"
 
             queue = ApprovalQueue.read(queue_path)
 
             self.assertEqual(queue, ApprovalQueue())
-            self.assertTrue(queue_path.parent.is_dir())
+
+    def test_queue_read_fails_closed_when_parent_is_missing_before_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "missing" / "pending_approvals.json"
+
+            with self.assertRaises(WorkspacePathError) as raised:
+                ApprovalQueue.read(queue_path)
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertFalse(queue_path.parent.exists())
 
     def test_queue_read_fails_closed_when_parent_disappears_after_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -276,9 +287,6 @@ class ApprovalTests(unittest.TestCase):
             error.__cause__ = missing
 
             with mock.patch(
-                "specgate.workspace_fs._ensure_workspace_directory",
-                return_value=None,
-            ), mock.patch(
                 "specgate.workspace_fs.read_workspace_text",
                 side_effect=error,
             ):

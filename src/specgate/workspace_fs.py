@@ -11,20 +11,40 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO, Iterator
+from typing import Any, BinaryIO, Collection, Iterator
 
 
 class WorkspacePathError(ValueError):
-    def __init__(self, message: str, rule_family: str):
+    def __init__(
+        self,
+        message: str,
+        rule_family: str,
+        *,
+        missing_path: str | None = None,
+    ):
         super().__init__(message)
         self.message = message
         self.rule_family = rule_family
+        self.missing_path = missing_path
 
 
 @dataclass(frozen=True)
 class WorkspaceFileState:
     exists: bool
     sha256: str | None
+
+
+@dataclass(frozen=True)
+class WorkspaceScanRejection:
+    path: str
+    rule_family: str
+    message: str
+
+
+@dataclass(frozen=True)
+class WorkspaceScanResult:
+    files: list[str]
+    rejections: list[WorkspaceScanRejection]
 
 
 @dataclass(frozen=True)
@@ -191,10 +211,11 @@ def workspace_file_state(
     root: str | os.PathLike[str],
     relative: str,
 ) -> WorkspaceFileState:
+    normalized = normalize_workspace_relative(relative)
     try:
-        content = read_workspace_bytes(root, relative)
+        content = read_workspace_bytes(root, normalized)
     except WorkspacePathError as exc:
-        if isinstance(exc.__cause__, FileNotFoundError):
+        if exc.missing_path == normalized:
             return WorkspaceFileState(False, None)
         raise
     return WorkspaceFileState(True, hashlib.sha256(content).hexdigest())
@@ -203,6 +224,31 @@ def workspace_file_state(
 def iter_workspace_files(root: str | os.PathLike[str]) -> Iterator[str]:
     _, files = _scan_workspace(Path(root))
     yield from files
+
+
+def scan_workspace_files(
+    root: str | os.PathLike[str],
+    *,
+    excluded_dirs: Collection[str] = (),
+) -> WorkspaceScanResult:
+    excluded = frozenset(excluded_dirs)
+    try:
+        root_path, trusted_root, root_identity = _validate_root(Path(root))
+        if os.name == "nt":
+            return _scan_windows_workspace_tolerant(
+                root_path,
+                trusted_root,
+                root_identity,
+                excluded,
+            )
+        return _scan_posix_workspace_tolerant(root_path, root_identity, excluded)
+    except WorkspacePathError:
+        raise
+    except OSError as exc:
+        raise WorkspacePathError(
+            "workspace changed or could not be opened during scan",
+            "path_race",
+        ) from exc
 
 
 def copy_workspace_tree(
@@ -419,6 +465,226 @@ def _scan_windows_workspace(
 
     scan(root, "", root_identity)
     return sorted(directories), sorted(files)
+
+
+def _scan_posix_workspace_tolerant(
+    root: Path,
+    root_identity: tuple[int, int],
+    excluded_dirs: frozenset[str],
+) -> WorkspaceScanResult:
+    required = (
+        hasattr(os, "O_NOFOLLOW")
+        and hasattr(os, "O_DIRECTORY")
+        and os.open in os.supports_dir_fd
+        and os.scandir in os.supports_fd
+    )
+    if not required:
+        raise WorkspacePathError(
+            "secure POSIX directory scanning is unavailable",
+            "path_race",
+        )
+
+    files: list[str] = []
+    rejections: list[WorkspaceScanRejection] = []
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory_flags |= getattr(os, "O_CLOEXEC", 0)
+    root_fd = _open_posix_root_fd(root, directory_flags, root_identity)
+
+    def reject(path: str, rule_family: str, message: str) -> None:
+        rejections.append(WorkspaceScanRejection(path, rule_family, message))
+
+    def scan(current_fd: int, prefix: str) -> None:
+        try:
+            with os.scandir(current_fd) as scanner:
+                entries = sorted(scanner, key=lambda item: item.name)
+        except OSError as exc:
+            if not prefix:
+                raise WorkspacePathError(
+                    "workspace root changed during scan",
+                    "path_race",
+                ) from exc
+            reject(prefix, "path_race", "directory changed during scan")
+            return
+
+        for entry in entries:
+            raw_relative = f"{prefix}/{entry.name}" if prefix else entry.name
+            try:
+                relative = normalize_workspace_relative(raw_relative)
+            except WorkspacePathError as exc:
+                reject(raw_relative, exc.rule_family, exc.message)
+                continue
+            try:
+                entry_stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                reject(relative, "path_race", "entry changed during scan")
+                continue
+
+            if stat.S_ISLNK(entry_stat.st_mode):
+                reject(relative, "linked_path", "symbolic link rejected")
+                continue
+            reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            if getattr(entry_stat, "st_file_attributes", 0) & reparse_flag:
+                reject(relative, "reparse_point", "reparse point rejected")
+                continue
+            if stat.S_ISDIR(entry_stat.st_mode):
+                if entry.name in excluded_dirs:
+                    continue
+                try:
+                    next_fd = os.open(
+                        entry.name,
+                        directory_flags,
+                        dir_fd=current_fd,
+                    )
+                except OSError as exc:
+                    try:
+                        _raise_posix_link_error(exc, current_fd, entry.name)
+                    except WorkspacePathError as link_error:
+                        reject(relative, link_error.rule_family, link_error.message)
+                    else:
+                        reject(relative, "path_race", "directory changed before open")
+                    continue
+                try:
+                    _verify_same_object(entry_stat, os.fstat(next_fd))
+                except WorkspacePathError as exc:
+                    os.close(next_fd)
+                    reject(relative, exc.rule_family, exc.message)
+                    continue
+                except OSError:
+                    os.close(next_fd)
+                    reject(relative, "path_race", "directory changed after open")
+                    continue
+                try:
+                    scan(next_fd, relative)
+                finally:
+                    os.close(next_fd)
+            elif stat.S_ISREG(entry_stat.st_mode):
+                files.append(relative)
+            else:
+                reject(relative, "unsafe_file_type", "non-regular entry rejected")
+
+    try:
+        scan(root_fd, "")
+    finally:
+        os.close(root_fd)
+    return WorkspaceScanResult(
+        sorted(files),
+        sorted(rejections, key=lambda item: item.path),
+    )
+
+
+def _scan_windows_workspace_tolerant(
+    root: Path,
+    trusted_root: Path,
+    root_identity: tuple[int, int],
+    excluded_dirs: frozenset[str],
+) -> WorkspaceScanResult:
+    files: list[str] = []
+    rejections: list[WorkspaceScanRejection] = []
+
+    def reject(path: str, rule_family: str, message: str) -> None:
+        rejections.append(WorkspaceScanRejection(path, rule_family, message))
+
+    def scan(
+        current: Path,
+        prefix: str,
+        expected_identity: tuple[int, int],
+    ) -> None:
+        expected = trusted_root.joinpath(*prefix.split("/")) if prefix else trusted_root
+        try:
+            with _open_windows_directory_lock(
+                current,
+                expected,
+                expected_identity,
+            ) as current_identity:
+                try:
+                    with os.scandir(current) as scanner:
+                        entries = sorted(scanner, key=lambda item: item.name)
+                except OSError as exc:
+                    if not prefix:
+                        raise WorkspacePathError(
+                            "workspace root changed during scan",
+                            "path_race",
+                        ) from exc
+                    reject(prefix, "path_race", "directory changed during scan")
+                    return
+
+                discovered: list[tuple[Path, str, tuple[int, int]]] = []
+                for entry in entries:
+                    raw_relative = f"{prefix}/{entry.name}" if prefix else entry.name
+                    try:
+                        relative = normalize_workspace_relative(raw_relative)
+                    except WorkspacePathError as exc:
+                        reject(raw_relative, exc.rule_family, exc.message)
+                        continue
+                    try:
+                        entry_stat = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        reject(relative, "path_race", "entry changed during scan")
+                        continue
+
+                    if stat.S_ISLNK(entry_stat.st_mode):
+                        reject(relative, "linked_path", "symbolic link rejected")
+                        continue
+                    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+                    if getattr(entry_stat, "st_file_attributes", 0) & reparse_flag:
+                        reject(relative, "reparse_point", "reparse point rejected")
+                        continue
+                    entry_path = current / entry.name
+                    try:
+                        _reject_link_like(entry_path)
+                    except WorkspacePathError as exc:
+                        reject(relative, exc.rule_family, exc.message)
+                        continue
+
+                    if stat.S_ISDIR(entry_stat.st_mode):
+                        if entry.name in excluded_dirs:
+                            continue
+                        discovered.append(
+                            (
+                                entry_path,
+                                relative,
+                                (current_identity[0], entry_stat.st_ino),
+                            )
+                        )
+                    elif stat.S_ISREG(entry_stat.st_mode):
+                        try:
+                            descriptor = _open_windows_workspace_fd(
+                                root,
+                                trusted_root,
+                                relative.split("/"),
+                                "read",
+                                False,
+                            )
+                        except WorkspacePathError as exc:
+                            reject(relative, exc.rule_family, exc.message)
+                            continue
+                        except OSError:
+                            reject(relative, "path_race", "file changed during scan")
+                            continue
+                        os.close(descriptor)
+                        files.append(relative)
+                    else:
+                        reject(relative, "unsafe_file_type", "non-regular entry rejected")
+
+                for entry_path, relative, entry_identity in discovered:
+                    scan(entry_path, relative, entry_identity)
+        except WorkspacePathError as exc:
+            if not prefix:
+                raise
+            reject(prefix, exc.rule_family, exc.message)
+        except OSError as exc:
+            if not prefix:
+                raise WorkspacePathError(
+                    "workspace root changed during scan",
+                    "path_race",
+                ) from exc
+            reject(prefix, "path_race", "directory changed during scan")
+
+    scan(root, "", root_identity)
+    return WorkspaceScanResult(
+        sorted(files),
+        sorted(rejections, key=lambda item: item.path),
+    )
 
 
 def _create_private_staging(destination: Path) -> _StagingOwnership:
@@ -796,10 +1062,15 @@ def _open_windows_workspace_fd(
     target = current / parts[-1]
     try:
         target_stat = target.lstat()
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
         target_stat = None
         if not create:
-            raise
+            relative = "/".join(parts)
+            raise WorkspacePathError(
+                f"workspace file does not exist: {relative}",
+                "path_race",
+                missing_path=relative,
+            ) from exc
     if target_stat is not None:
         _reject_link_like(target)
         if not stat.S_ISREG(target_stat.st_mode):
@@ -1132,10 +1403,15 @@ def _open_posix_workspace_fd(
         _reject_link_like(current_path / final_name)
         try:
             before = os.stat(final_name, dir_fd=current_fd, follow_symlinks=False)
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
             before = None
             if not create:
-                raise
+                relative = "/".join(parts)
+                raise WorkspacePathError(
+                    f"workspace file does not exist: {relative}",
+                    "path_race",
+                    missing_path=relative,
+                ) from exc
         if before is not None:
             if stat.S_ISLNK(before.st_mode):
                 raise WorkspacePathError(
