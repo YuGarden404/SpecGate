@@ -337,6 +337,52 @@ class WebRunsTests(unittest.TestCase):
             [],
         )
 
+    def test_create_run_holds_runs_quota_guard_from_preflight_through_storage_creation(self):
+        db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        for index in range(workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT - 1):
+            (paths.runs / workspace_fs.make_quarantine_name(f"old-{index}")).mkdir()
+        initialize_run_storage_real(paths, 99)
+
+        initialization_started = threading.Event()
+        release_initialization = threading.Event()
+        cleanup_finished = threading.Event()
+
+        def controlled_initialize(project_paths_value, run_id):
+            initialization_started.set()
+            if not release_initialization.wait(timeout=5):
+                raise TimeoutError("test did not release run initialization")
+            return initialize_run_storage_real(project_paths_value, run_id)
+
+        def consume_last_slot():
+            run_storage.remove_run_storage(paths, 99)
+            cleanup_finished.set()
+
+        with patch("specgate.web_runs.initialize_run_storage", side_effect=controlled_initialize):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                creation = executor.submit(
+                    create_run,
+                    db_path,
+                    project["id"],
+                    user["id"],
+                    "Build the result",
+                    data_root=data_root,
+                )
+                self.assertTrue(initialization_started.wait(timeout=5))
+                cleanup = executor.submit(consume_last_slot)
+                self.assertFalse(cleanup_finished.wait(timeout=0.2))
+                release_initialization.set()
+                created = creation.result(timeout=5)
+                cleanup.result(timeout=5)
+
+        self.assertEqual(created["status"], "queued")
+        binding = workspace_fs.bind_workspace_tree(paths.runs)
+        self.assertIsNotNone(binding)
+        self.assertEqual(
+            workspace_fs.count_quarantine_entries(binding),
+            workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT,
+        )
+
     def test_create_run_requires_data_root(self):
         db_path, _data_root, user, project = self.make_context()
 
@@ -1145,6 +1191,42 @@ class WebRunsTests(unittest.TestCase):
         )
         self.assertEqual(list(paths.root.glob(".workspace.specgate-quarantine-*")), [])
         self.assertTrue(displaced.is_dir())
+
+    def test_backup_quota_after_workspace_switch_keeps_publishing_and_recoverable(self):
+        db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        (paths.workspace / "index.html").write_text("old workspace", encoding="utf-8")
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        for index in range(workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT - 1):
+            (paths.root / workspace_fs.make_quarantine_name(f"old-{index}")).mkdir()
+
+        real_cleanup = run_storage._quarantine_committed_phase
+        occupied_last_slot = False
+
+        def occupy_last_slot_after_switch(state, token):
+            nonlocal occupied_last_slot
+            if not occupied_last_slot:
+                occupied_last_slot = True
+                (paths.root / workspace_fs.make_quarantine_name("competitor")).mkdir()
+            return real_cleanup(state, token)
+
+        with patch(
+            "specgate.run_storage._quarantine_committed_phase",
+            side_effect=occupy_last_slot_after_switch,
+        ):
+            with self.assertRaises(run_storage.RunStoragePostRenameError):
+                execute_run_once(db_path, data_root, run["id"])
+
+        updated = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(updated["status"], "publishing")
+        self.assertIn("quota exceeded", updated["error_message"])
+        self.assertNotEqual(
+            (paths.workspace / "index.html").read_text(encoding="utf-8"),
+            "old workspace",
+        )
+        backups = list(paths.root.glob("workspace.backup-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual((backups[0] / "index.html").read_text(encoding="utf-8"), "old workspace")
 
     def test_post_rename_ownership_validation_error_stays_publishing_and_redacted(self):
         db_path, data_root, user, project = self.make_context()

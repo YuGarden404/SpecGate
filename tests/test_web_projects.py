@@ -1,8 +1,10 @@
 import io
+import multiprocessing
 import sqlite3
 import stat
 import tempfile
 import threading
+import time
 import unittest
 import warnings
 import zipfile
@@ -22,6 +24,43 @@ from specgate.web_projects import (
     package_result_zip,
     project_paths,
 )
+
+
+def _concurrent_failed_upload_worker(
+    db_path_value,
+    data_root_value,
+    user_id,
+    zip_content,
+    start_event,
+    ready_queue,
+    result_queue,
+):
+    db_path = Path(db_path_value)
+    data_root = Path(data_root_value)
+    real_count = workspace_fs.count_quarantine_entries
+
+    def slow_full_slot_race(binding):
+        count = real_count(binding)
+        if count == workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT - 1:
+            time.sleep(1)
+        return count
+
+    def fail_write(root, _relative, _source, **_kwargs):
+        (Path(root).parent / "sentinel.txt").write_text("retained", encoding="utf-8")
+        raise WorkspacePathError("write failed", "path_race")
+
+    workspace_fs.count_quarantine_entries = slow_full_slot_race
+    web_projects.write_workspace_stream = fail_write
+    ready_queue.put(True)
+    if not start_event.wait(timeout=10):
+        result_queue.put(("TimeoutError", "start timeout"))
+        return
+    try:
+        create_project_from_zip(db_path, data_root, user_id, "Concurrent", zip_content)
+    except Exception as exc:
+        result_queue.put((type(exc).__name__, str(exc)))
+    else:
+        result_queue.put(("success", ""))
 
 
 class WebProjectsTests(unittest.TestCase):
@@ -722,6 +761,65 @@ class WebProjectsTests(unittest.TestCase):
         )
         with closing(connect_db(db_path)) as conn:
             self.assertEqual(conn.execute("select count(*) from projects").fetchone()[0], 0)
+
+    def test_cross_process_failed_uploads_cannot_race_from_seven_to_nine(self):
+        db_path, data_root, user = self.make_context()
+        zip_content = self.zip_bytes({"SPEC.md": "Spec", "CHECKLIST.md": "Checklist"})
+        projects_root = data_root / "users" / str(user["id"]) / "projects"
+        projects_root.mkdir(parents=True)
+        for index in range(workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT - 1):
+            (projects_root / workspace_fs.make_quarantine_name(f"old-{index}")).mkdir()
+
+        context = multiprocessing.get_context("spawn")
+        start_event = context.Event()
+        ready_queue = context.Queue()
+        result_queue = context.Queue()
+        processes = [
+            context.Process(
+                target=_concurrent_failed_upload_worker,
+                args=(
+                    str(db_path),
+                    str(data_root),
+                    int(user["id"]),
+                    zip_content,
+                    start_event,
+                    ready_queue,
+                    result_queue,
+                ),
+            )
+            for _ in range(2)
+        ]
+        for process in processes:
+            process.start()
+        try:
+            for _ in processes:
+                self.assertTrue(ready_queue.get(timeout=15))
+            start_event.set()
+            results = [result_queue.get(timeout=20) for _ in processes]
+        finally:
+            start_event.set()
+            for process in processes:
+                process.join(timeout=10)
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=5)
+
+        self.assertEqual([process.exitcode for process in processes], [0, 0])
+        binding = workspace_fs.bind_workspace_tree(projects_root)
+        self.assertIsNotNone(binding)
+        self.assertEqual(
+            workspace_fs.count_quarantine_entries(binding),
+            workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT,
+        )
+        self.assertEqual(sum(name == "WorkspacePathError" for name, _ in results), 1, results)
+        self.assertEqual(sum(name == "QuarantineQuotaError" for name, _ in results), 1, results)
+        unquarantined_staging = [
+            name
+            for name in workspace_fs.list_workspace_child_names(binding)
+            if name.startswith(".specgate-upload-")
+            and workspace_fs.QUARANTINE_NAME_MARKER not in name
+        ]
+        self.assertEqual(unquarantined_staging, [])
 
     def test_cleanup_does_not_delete_staging_replacement(self):
         db_path, data_root, user = self.make_context()

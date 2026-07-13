@@ -9,6 +9,7 @@ import secrets
 import stat
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,9 @@ from typing import Any, BinaryIO, Collection, Iterator
 
 QUARANTINE_NAME_MARKER = ".specgate-quarantine-"
 MAX_QUARANTINE_ENTRIES_PER_PARENT = 8
+_LEGACY_UPLOAD_QUARANTINE_NAME_MARKER = ".specgate-upload-quarantine-"
+_QUARANTINE_PARENT_LOCK_NAME = ".specgate-quarantine.lock"
+_QUARANTINE_PARENT_LOCK_STATE = threading.local()
 
 
 if os.name == "nt":
@@ -260,6 +264,100 @@ def ensure_quarantine_capacity(binding: WorkspaceTreeBinding) -> None:
         raise QuarantineQuotaError()
 
 
+@contextlib.contextmanager
+def quarantine_parent_lock(binding: WorkspaceTreeBinding) -> Iterator[None]:
+    _verify_workspace_tree_binding(binding)
+    key = (
+        os.path.normcase(os.path.normpath(binding.trusted_path)),
+        binding.identity,
+    )
+    held = getattr(_QUARANTINE_PARENT_LOCK_STATE, "held", None)
+    if held is None:
+        held = {}
+        _QUARANTINE_PARENT_LOCK_STATE.held = held
+    depth = held.get(key, 0)
+    if depth:
+        held[key] = depth + 1
+        try:
+            _verify_workspace_tree_binding(binding)
+            yield
+        finally:
+            held[key] -= 1
+        return
+
+    root_binding = _WorkspaceRootBinding(
+        binding.path,
+        binding.trusted_path,
+        binding.identity,
+    )
+    with open_workspace_file(
+        binding.path,
+        _QUARANTINE_PARENT_LOCK_NAME,
+        "update",
+        create=True,
+        _binding=root_binding,
+    ) as handle:
+        _prepare_quarantine_lock_handle(handle)
+        _lock_quarantine_handle(handle)
+        held[key] = 1
+        try:
+            _verify_workspace_tree_binding(binding)
+            yield
+        finally:
+            del held[key]
+            _unlock_quarantine_handle(handle)
+
+
+def _prepare_quarantine_lock_handle(handle: BinaryIO) -> None:
+    handle.seek(0, os.SEEK_END)
+    if handle.tell() == 0:
+        handle.write(b"\0")
+        handle.flush()
+    handle.seek(0)
+
+
+def _lock_quarantine_handle(handle: BinaryIO) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            while True:
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    return
+                except OSError as exc:
+                    if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                        raise
+                    time.sleep(0.01)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    except OSError as exc:
+        raise WorkspacePathError(
+            "quarantine parent lock could not be acquired",
+            "path_race",
+        ) from exc
+
+
+def _unlock_quarantine_handle(handle: BinaryIO) -> None:
+    try:
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except OSError as exc:
+        raise WorkspacePathError(
+            "quarantine parent lock could not be released",
+            "path_race",
+        ) from exc
+
+
 def _is_high_entropy_quarantine_token(token: str) -> bool:
     return (
         isinstance(token, str)
@@ -269,10 +367,21 @@ def _is_high_entropy_quarantine_token(token: str) -> bool:
 
 
 def _is_quarantine_name(name: str) -> bool:
-    prefix, marker, token = name.rpartition(QUARANTINE_NAME_MARKER)
-    return bool(marker and prefix.startswith(".") and len(prefix) > 1) and (
-        _is_high_entropy_quarantine_token(token)
+    recognized_formats = (
+        (QUARANTINE_NAME_MARKER, {32, 64}),
+        (_LEGACY_UPLOAD_QUARANTINE_NAME_MARKER, {32}),
     )
+    for marker_value, token_lengths in recognized_formats:
+        prefix, marker, token = name.rpartition(marker_value)
+        if (
+            marker
+            and prefix.startswith(".")
+            and len(prefix) > 1
+            and len(token) in token_lengths
+            and all(character in "0123456789abcdef" for character in token)
+        ):
+            return True
+    return False
 
 
 def normalize_workspace_relative(value: str) -> str:
@@ -1524,17 +1633,18 @@ def _quarantine_unknown_tree(destination: Path) -> Path | None:
     parent_binding = bind_workspace_tree(destination.parent)
     if parent_binding is None:
         raise WorkspacePathError("quarantine parent is missing", "path_race")
-    ensure_quarantine_capacity(parent_binding)
-    quarantine = destination.parent / make_quarantine_name(destination.name)
-    try:
-        _platform_rename_noreplace(destination, quarantine)
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        raise WorkspacePathError(
-            "uncertain published tree could not be quarantined",
-            "path_race",
-        ) from exc
+    with quarantine_parent_lock(parent_binding):
+        ensure_quarantine_capacity(parent_binding)
+        quarantine = destination.parent / make_quarantine_name(destination.name)
+        try:
+            _platform_rename_noreplace(destination, quarantine)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise WorkspacePathError(
+                "uncertain published tree could not be quarantined",
+                "path_race",
+            ) from exc
     return quarantine
 
 

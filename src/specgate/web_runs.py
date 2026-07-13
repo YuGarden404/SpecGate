@@ -7,6 +7,7 @@ import os
 import sqlite3
 import threading
 import zipfile
+from contextlib import AbstractContextManager
 from pathlib import Path
 
 from specgate.approvals import ApprovalQueue, GovernanceConfig
@@ -20,10 +21,10 @@ from specgate.run_storage import (
     RunStoragePostRenameError,
     RunStorageTargetExists,
     cleanup_interrupted_run_storage,
-    ensure_run_quarantine_capacity,
     initialize_run_storage,
     promote_run_workspace,
     remove_run_storage,
+    run_quarantine_capacity_guard,
     validate_run_storage_ownership,
 )
 from specgate.runner import AgentRunner, RunResult
@@ -143,7 +144,7 @@ def create_run(
     data_root: Path,
 ) -> sqlite3.Row:
     run_prompt = _require_text(prompt, "prompt")
-    run_id, paths, created_at, initialization_lock = _reserve_initializing_run(
+    run_id, paths, created_at, initialization_lock, quota_guard = _reserve_initializing_run(
         db_path,
         data_root,
         project_id,
@@ -172,7 +173,10 @@ def create_run(
         )
         raise
     finally:
-        initialization_lock.release()
+        try:
+            initialization_lock.release()
+        finally:
+            quota_guard.__exit__(None, None, None)
 
 
 def _reserve_initializing_run(
@@ -181,9 +185,16 @@ def _reserve_initializing_run(
     project_id: int,
     user_id: int,
     run_prompt: str,
-) -> tuple[int, ProjectPaths, str, RunInitializationLock]:
+) -> tuple[
+    int,
+    ProjectPaths,
+    str,
+    RunInitializationLock,
+    AbstractContextManager[None],
+]:
     conn = connect_db(db_path)
     initialization_lock = None
+    quota_guard = None
     try:
         conn.execute("BEGIN IMMEDIATE")
         project = conn.execute(
@@ -205,7 +216,8 @@ def _reserve_initializing_run(
             raise ActiveRunConflict()
 
         paths = project_paths(data_root, int(project["user_id"]), int(project["id"]))
-        ensure_run_quarantine_capacity(paths)
+        quota_guard = run_quarantine_capacity_guard(paths)
+        quota_guard.__enter__()
 
         now = utc_now().isoformat()
         cursor = conn.execute(
@@ -219,11 +231,15 @@ def _reserve_initializing_run(
         initialization_lock = RunInitializationLock(paths, run_id)
         initialization_lock.acquire()
         conn.commit()
-        return run_id, paths, now, initialization_lock
+        return run_id, paths, now, initialization_lock, quota_guard
     except Exception:
         conn.rollback()
-        if initialization_lock is not None:
-            initialization_lock.release()
+        try:
+            if initialization_lock is not None:
+                initialization_lock.release()
+        finally:
+            if quota_guard is not None:
+                quota_guard.__exit__(None, None, None)
         raise
     finally:
         conn.close()

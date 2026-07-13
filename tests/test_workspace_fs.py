@@ -87,6 +87,23 @@ class WorkspaceDirectChildTests(unittest.TestCase):
 
         self.assertEqual(workspace_fs.count_quarantine_entries(binding), 3)
 
+    def test_counts_legacy_run_and_upload_quarantine_names_after_upgrade(self):
+        root, binding = self.make_bound_root()
+        legacy_names = (
+            f".workspace.specgate-quarantine-{'a' * 32}",
+            f".specgate-upload-old.specgate-upload-quarantine-{'b' * 32}",
+        )
+        invalid_names = (
+            f".workspace.specgate-quarantine-{'c' * 31}",
+            f".workspace.specgate-quarantine-{'z' * 32}",
+            f".specgate-upload-old.specgate-upload-quarantine-{'d' * 64}",
+            f"workspace.specgate-quarantine-{'e' * 32}",
+        )
+        for name in (*legacy_names, *invalid_names):
+            (root / name).mkdir()
+
+        self.assertEqual(workspace_fs.count_quarantine_entries(binding), 2)
+
 
 class NormalizeWorkspaceRelativeTests(unittest.TestCase):
     def test_preserves_normal_nested_path(self):

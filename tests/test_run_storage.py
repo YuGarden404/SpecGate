@@ -686,7 +686,7 @@ class RunStorageTests(unittest.TestCase):
         )
         self.assertEqual((displaced / "index.html").read_text(encoding="utf-8"), "v2")
 
-    def test_promote_rejects_parent_replaced_before_bound_rename(self):
+    def test_promote_parent_lock_prevents_replacement_before_bound_rename(self):
         project = self.make_project()
         (project.workspace / "index.html").write_text("v1", encoding="utf-8")
         run = initialize_run_storage(project, 11)
@@ -708,17 +708,18 @@ class RunStorageTests(unittest.TestCase):
             "specgate.run_storage.rename_workspace_tree_noreplace",
             side_effect=replace_parent,
         ):
-            with self.assertRaises(WorkspacePathError):
+            with self.assertRaises(PermissionError):
                 promote_run_workspace(project, 11)
 
         self.assertEqual(
-            (project.workspace / "sentinel.txt").read_text(encoding="utf-8"),
+            (replacement_workspace / "sentinel.txt").read_text(encoding="utf-8"),
             "external sentinel",
         )
         self.assertEqual(
-            (displaced_root / "workspace" / "index.html").read_text(encoding="utf-8"),
+            (project.workspace / "index.html").read_text(encoding="utf-8"),
             "v1",
         )
+        self.assertFalse(displaced_root.exists())
 
     def test_promote_reloads_markers_before_first_rename(self):
         project = self.make_project()

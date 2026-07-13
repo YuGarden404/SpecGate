@@ -23,6 +23,7 @@ from specgate.workspace_fs import (
     ensure_quarantine_capacity,
     ensure_workspace_directory,
     make_quarantine_name,
+    quarantine_parent_lock,
     read_workspace_bytes,
     rename_workspace_tree_noreplace,
     verify_workspace_tree_binding,
@@ -187,6 +188,7 @@ def create_project_from_zip(
         staging_binding: WorkspaceTreeBinding | None = None
         staging_identity: tuple[int, int] | None = None
         published_identity: tuple[int, int] | None = None
+        quota_lock_context = None
         upload_lock = _upload_lock_for(data_root, user_id)
         upload_lock.acquire()
         try:
@@ -196,6 +198,8 @@ def create_project_from_zip(
             projects_binding = bind_workspace_tree(projects_root)
             if projects_binding is None:
                 raise WorkspacePathError("upload projects root is missing", "path_race")
+            quota_lock_context = quarantine_parent_lock(projects_binding)
+            quota_lock_context.__enter__()
             ensure_quarantine_capacity(projects_binding)
             staging_root = Path(
                 tempfile.mkdtemp(
@@ -266,7 +270,11 @@ def create_project_from_zip(
         finally:
             if conn is not None:
                 conn.close()
-            upload_lock.release()
+            try:
+                if quota_lock_context is not None:
+                    quota_lock_context.__exit__(None, None, None)
+            finally:
+                upload_lock.release()
 
 
 def package_result_zip(source: Path, zip_path: Path | None = None) -> Path:
@@ -516,9 +524,10 @@ def _quarantine_owned_upload_tree(
         parent_binding = bind_workspace_tree(path.parent)
         if parent_binding is None:
             raise WorkspacePathError("upload quarantine parent is missing", "path_race")
-        ensure_quarantine_capacity(parent_binding)
-        quarantine = path.parent / make_quarantine_name(path.name)
-        return rename_workspace_tree_noreplace(binding, quarantine).path
+        with quarantine_parent_lock(parent_binding):
+            ensure_quarantine_capacity(parent_binding)
+            quarantine = path.parent / make_quarantine_name(path.name)
+            return rename_workspace_tree_noreplace(binding, quarantine).path
     except WorkspacePathError:
         raise
     except OSError as exc:
