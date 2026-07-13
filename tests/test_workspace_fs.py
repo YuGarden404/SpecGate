@@ -144,6 +144,22 @@ class LinkLikeTests(unittest.TestCase):
 
 
 class WorkspaceFileIOTests(unittest.TestCase):
+    def test_update_mode_creates_without_truncating_regular_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            existing = root / "existing.lock"
+            existing.write_bytes(b"abc")
+
+            with open_workspace_file(root, "existing.lock", "update", create=True) as handle:
+                self.assertEqual(handle.read(), b"abc")
+                handle.seek(0)
+                handle.write(b"Z")
+            with open_workspace_file(root, "created.lock", "update", create=True) as handle:
+                handle.write(b"x")
+
+            self.assertEqual(existing.read_bytes(), b"Zbc")
+            self.assertEqual((root / "created.lock").read_bytes(), b"x")
+
     def _metadata(self, root, relative):
         self.assertTrue(hasattr(workspace_fs, "workspace_file_metadata"))
         return workspace_fs.workspace_file_metadata(root, relative)

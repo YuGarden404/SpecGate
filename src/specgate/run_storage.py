@@ -4,7 +4,6 @@ import errno
 import json
 import os
 import secrets
-import shutil
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,11 +19,14 @@ from specgate.workspace_fs import (
     WorkspacePathError,
     bind_workspace_tree,
     copy_workspace_tree,
+    ensure_workspace_directory,
+    open_workspace_file,
     publish_workspace_bytes,
     publish_workspace_snapshot,
     read_optional_workspace_text,
     read_workspace_text,
     rename_workspace_tree_noreplace,
+    verify_workspace_tree_binding,
 )
 
 
@@ -74,10 +76,13 @@ class _RunPhaseLock:
         description: str,
         error_type: type[RuntimeError],
     ) -> None:
+        self._root = project.root
+        self._relative = f"runs/.{run_id}.{phase}.lock"
         self.path = project.runs / f".{run_id}.{phase}.lock"
         self._description = description
         self._error_type = error_type
         self._handle = None
+        self._handle_context = None
 
     def acquire(self) -> None:
         if not self.try_acquire():
@@ -87,33 +92,42 @@ class _RunPhaseLock:
         if self._handle is not None:
             return True
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        handle = self.path.open("a+b")
+        ensure_workspace_directory(self._root, "runs")
+        handle_context = open_workspace_file(
+            self._root,
+            self._relative,
+            "update",
+            create=True,
+        )
+        handle = handle_context.__enter__()
         try:
-            handle.seek(0, 2)
-            if handle.tell() == 0:
-                handle.write(b"\0")
-                handle.flush()
+            handle.seek(0)
+            handle.write(b"\0")
+            handle.flush()
             handle.seek(0)
             _lock_handle_nonblocking(handle)
-        except OSError as exc:
-            handle.close()
-            if _is_lock_contention(exc):
+        except BaseException as exc:
+            handle_context.__exit__(None, None, None)
+            if isinstance(exc, OSError) and _is_lock_contention(exc):
                 return False
             raise
         self._handle = handle
+        self._handle_context = handle_context
         return True
 
     def release(self) -> None:
         handle = self._handle
+        handle_context = self._handle_context
         if handle is None:
             return
+        assert handle_context is not None
         self._handle = None
+        self._handle_context = None
         try:
             handle.seek(0)
             _unlock_handle(handle)
         finally:
-            handle.close()
+            handle_context.__exit__(None, None, None)
 
     def __enter__(self) -> _RunPhaseLock:
         self.acquire()
@@ -136,7 +150,7 @@ class RunPublicationLock(_RunPhaseLock):
 
 def initialize_run_storage(project: ProjectPaths, run_id: int) -> RunPaths:
     run = web_run_paths(project, run_id)
-    project.runs.mkdir(parents=True, exist_ok=True)
+    ensure_workspace_directory(project.root, "runs")
     try:
         publish_workspace_snapshot(
             run.root,
@@ -163,8 +177,16 @@ def initialize_run_storage(project: ProjectPaths, run_id: int) -> RunPaths:
 
 def remove_run_storage(project: ProjectPaths, run_id: int) -> None:
     run = web_run_paths(project, run_id)
-    if _path_exists(run.root):
-        _remove_owned_tree(run.root, run_id, "run storage cleanup failed")
+    runs_binding = _bind_cleanup_parent(project.runs)
+    if runs_binding is None:
+        return
+    _remove_owned_tree(
+        run.root,
+        run_id,
+        "run storage cleanup failed",
+        parent_binding=runs_binding,
+        missing_ok=True,
+    )
 
 
 def validate_run_storage_ownership(project: ProjectPaths, run_id: int) -> dict[str, int]:
@@ -180,19 +202,34 @@ def validate_run_storage_ownership(project: ProjectPaths, run_id: int) -> dict[s
 
 
 def cleanup_interrupted_run_storage(project: ProjectPaths, run_id: int) -> None:
-    candidates = sorted(
-        (*project.runs.glob(f".{run_id}.tmp-*"), *project.runs.glob(f".{run_id}.specgate-copy-*"))
-    )
-    run = web_run_paths(project, run_id)
-    if _path_exists(run.root):
-        candidates.append(run.root)
+    runs_binding = _bind_cleanup_parent(project.runs)
+    if runs_binding is None:
+        return
+    try:
+        verify_workspace_tree_binding(runs_binding)
+        candidates = sorted(
+            (
+                *project.runs.glob(f".{run_id}.tmp-*"),
+                *project.runs.glob(f".{run_id}.specgate-copy-*"),
+            )
+        )
+        verify_workspace_tree_binding(runs_binding)
+    except (OSError, WorkspacePathError) as exc:
+        raise RunStorageOwnershipError("unowned run storage retained") from exc
+    candidates.append(web_run_paths(project, run_id).root)
 
     retained_unowned = False
     for path in candidates:
-        if not _has_matching_ownership_marker(path, run_id):
+        try:
+            _remove_owned_tree(
+                path,
+                run_id,
+                "interrupted run storage cleanup failed",
+                parent_binding=runs_binding,
+                missing_ok=True,
+            )
+        except RunStorageOwnershipError:
             retained_unowned = True
-            continue
-        _remove_tree_required(path, "interrupted run storage cleanup failed")
 
     if retained_unowned:
         raise RunStorageOwnershipError("unowned run storage retained")
@@ -676,11 +713,11 @@ def _require_tree_binding(path: Path, description: str) -> WorkspaceTreeBinding:
     return binding
 
 
-def _remove_tree_required(path: Path, context: str) -> None:
+def _bind_cleanup_parent(path: Path) -> WorkspaceTreeBinding | None:
     try:
-        shutil.rmtree(path)
-    except Exception as exc:
-        raise RunStorageCleanupError(f"{context}: {exc}") from exc
+        return bind_workspace_tree(path, missing_ok=True)
+    except (OSError, WorkspacePathError) as exc:
+        raise RunStorageOwnershipError("unowned run storage retained") from exc
 
 
 def _ownership_marker_bytes(run_id: int) -> bytes:
@@ -690,22 +727,48 @@ def _ownership_marker_bytes(run_id: int) -> bytes:
     ).encode("utf-8")
 
 
-def _has_matching_ownership_marker(root: Path, run_id: int) -> bool:
+def _remove_owned_tree(
+    path: Path,
+    run_id: int,
+    context: str,
+    *,
+    parent_binding: WorkspaceTreeBinding | None = None,
+    missing_ok: bool = False,
+) -> bool:
+    if parent_binding is None:
+        parent_binding = _bind_cleanup_parent(path.parent)
+        if parent_binding is None:
+            if missing_ok:
+                return False
+            raise RunStorageOwnershipError("unowned run storage retained")
     try:
-        marker = json.loads(read_workspace_text(root, _OWNERSHIP_MARKER))
-    except (OSError, UnicodeError, json.JSONDecodeError, WorkspacePathError):
-        return False
-    return marker == {"run_id": run_id, "schema_version": _OWNERSHIP_SCHEMA_VERSION}
+        binding = bind_workspace_tree(path, missing_ok=missing_ok)
+        if binding is None:
+            return False
+        if (
+            binding.parent_identity != parent_binding.identity
+            or os.path.normcase(os.path.normpath(binding.trusted_parent))
+            != os.path.normcase(os.path.normpath(parent_binding.trusted_path))
+        ):
+            raise RunStorageOwnershipError("unowned run storage retained")
+        marker = json.loads(read_workspace_text(binding.path, _OWNERSHIP_MARKER))
+        expected = {"run_id": run_id, "schema_version": _OWNERSHIP_SCHEMA_VERSION}
+        if marker != expected:
+            raise RunStorageOwnershipError("unowned run storage retained")
+        verify_workspace_tree_binding(binding)
+    except RunStorageOwnershipError:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError, WorkspacePathError) as exc:
+        raise RunStorageOwnershipError("unowned run storage retained") from exc
 
-
-def _remove_owned_tree(path: Path, run_id: int, context: str) -> None:
-    if not _has_matching_ownership_marker(path, run_id):
-        raise RunStorageOwnershipError("unowned run storage retained")
-    _remove_tree_required(path, context)
-
-
-def _path_exists(path: Path) -> bool:
-    return path.exists() or path.is_symlink()
+    quarantine = path.with_name(
+        f".{path.name}.specgate-quarantine-{secrets.token_hex(32)}"
+    )
+    try:
+        rename_workspace_tree_noreplace(binding, quarantine)
+    except Exception as exc:
+        raise RunStorageCleanupError(f"{context}: {exc}") from exc
+    return True
 
 
 def _add_owned_cleanup_failure_note(
@@ -714,10 +777,8 @@ def _add_owned_cleanup_failure_note(
     run_id: int,
     context: str,
 ) -> None:
-    if not _path_exists(path):
-        return
     try:
-        _remove_owned_tree(path, run_id, context)
+        _remove_owned_tree(path, run_id, context, missing_ok=True)
     except Exception as cleanup_error:
         error.add_note(f"{context}: {cleanup_error}")
 

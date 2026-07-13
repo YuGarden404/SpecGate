@@ -239,10 +239,10 @@ def open_workspace_file(
     _binding: _WorkspaceRootBinding | None = None,
 ) -> Iterator[BinaryIO]:
     normalized = normalize_workspace_relative(relative)
-    if access not in {"read", "write"}:
+    if access not in {"read", "write", "update"}:
         raise WorkspacePathError("unsupported workspace file access", "invalid_path")
-    if create and access != "write":
-        raise WorkspacePathError("create requires write access", "invalid_path")
+    if create and access not in {"write", "update"}:
+        raise WorkspacePathError("create requires writable access", "invalid_path")
 
     descriptor = -1
     try:
@@ -285,9 +285,10 @@ def open_workspace_file(
                 "path_race",
             ) from exc
 
-        mode = "rb" if access == "read" else "wb"
+        mode = {"read": "rb", "write": "wb", "update": "r+b"}[access]
         try:
-            handle = os.fdopen(descriptor, mode)
+            buffering = 0 if access == "update" else -1
+            handle = os.fdopen(descriptor, mode, buffering=buffering)
         except OSError as exc:
             raise WorkspacePathError(
                 f"workspace file handle could not be opened: {normalized}",
@@ -1746,7 +1747,11 @@ def _open_windows_workspace_fd(
                     )
 
             flags = getattr(os, "O_BINARY", 0) | getattr(os, "O_NOINHERIT", 0)
-            flags |= os.O_RDONLY if access == "read" else os.O_WRONLY
+            flags |= {
+                "read": os.O_RDONLY,
+                "write": os.O_WRONLY,
+                "update": os.O_RDWR,
+            }[access]
             if create:
                 flags |= os.O_CREAT
             try:
@@ -2142,7 +2147,11 @@ def _open_posix_workspace_fd(
 
         flags = os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
         flags |= getattr(os, "O_NONBLOCK", 0)
-        flags |= os.O_RDONLY if access == "read" else os.O_WRONLY
+        flags |= {
+            "read": os.O_RDONLY,
+            "write": os.O_WRONLY,
+            "update": os.O_RDWR,
+        }[access]
         if create:
             flags |= os.O_CREAT
         try:

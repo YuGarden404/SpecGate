@@ -526,7 +526,10 @@ class WebRunsTests(unittest.TestCase):
         with closing(connect_db(db_path)) as conn:
             self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
             self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
-        self.assertEqual([path for path in paths.runs.iterdir() if path.is_dir()], [])
+        self.assertFalse(web_run_paths(paths, 1).root.exists())
+        quarantines = list(paths.runs.glob(".1.specgate-quarantine-*"))
+        self.assertEqual(len(quarantines), 1)
+        self.assertTrue((quarantines[0] / self.ownership_marker).is_file())
 
     def test_create_run_preserves_diagnostic_row_when_owned_storage_cleanup_fails(self):
         db_path, data_root, user, project = self.make_context()
@@ -567,7 +570,10 @@ class WebRunsTests(unittest.TestCase):
                 "specgate.workspace_fs._rename_staging_noreplace",
                 side_effect=OSError("copy failed"),
             ),
-            patch("specgate.run_storage.shutil.rmtree", side_effect=OSError("cleanup failed")),
+            patch(
+                "specgate.run_storage.rename_workspace_tree_noreplace",
+                side_effect=OSError("cleanup failed"),
+            ),
         ):
             with self.assertRaises(WorkspacePathError) as raised:
                 create_run(

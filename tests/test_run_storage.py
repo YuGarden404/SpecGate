@@ -2,7 +2,9 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import patch
@@ -64,6 +66,81 @@ class RunStorageTests(unittest.TestCase):
 
         self.assertTrue(second.try_acquire())
         second.release()
+
+    def test_run_lock_writes_one_byte_without_truncating_existing_file(self):
+        project = self.make_project()
+        lock_path = project.runs / ".11.init.lock"
+        lock_path.write_bytes(b"abc")
+
+        lock = run_storage.RunInitializationLock(project, 11)
+        lock.acquire()
+        lock.release()
+
+        self.assertEqual(lock_path.read_bytes(), b"\0bc")
+
+    def test_run_initialization_lock_is_exclusive_during_concurrent_creation(self):
+        project = self.make_project()
+        (project.runs / ".11.init.lock").unlink(missing_ok=True)
+        attempted = threading.Barrier(3)
+        release_winner = threading.Event()
+        results = []
+
+        def compete():
+            lock = run_storage.RunInitializationLock(project, 11)
+            acquired = lock.try_acquire()
+            results.append(acquired)
+            attempted.wait(timeout=5)
+            if acquired:
+                release_winner.wait(timeout=5)
+                lock.release()
+            return acquired
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(compete) for _ in range(2)]
+            attempted.wait(timeout=5)
+            self.assertEqual(sorted(results), [False, True])
+            release_winner.set()
+            self.assertEqual(sorted(future.result(timeout=5) for future in futures), [False, True])
+
+        contender = run_storage.RunInitializationLock(project, 11)
+        self.assertTrue(contender.try_acquire())
+        contender.release()
+
+    def test_run_lock_rejects_linked_runs_directory_without_external_creation(self):
+        project = self.make_project()
+        project.runs.rmdir()
+        external = project.root.parent / "external-runs"
+        external.mkdir()
+        sentinel = external / "sentinel.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+        try:
+            os.symlink(external, project.runs, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"directory symlinks unavailable: {exc}")
+
+        with self.assertRaises(WorkspacePathError):
+            run_storage.RunInitializationLock(project, 11).try_acquire()
+
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+        self.assertEqual(sorted(path.name for path in external.iterdir()), ["sentinel.txt"])
+
+    def test_run_lock_rejects_mocked_reparse_runs_directory(self):
+        project = self.make_project()
+        sentinel = project.runs / "sentinel.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+        real_is_link_like = workspace_fs.is_link_like
+
+        def mark_runs_reparse(path):
+            if Path(path) == project.runs:
+                return True
+            return real_is_link_like(path)
+
+        with patch("specgate.workspace_fs.is_link_like", side_effect=mark_runs_reparse):
+            with self.assertRaises(WorkspacePathError):
+                run_storage.RunInitializationLock(project, 11).try_acquire()
+
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+        self.assertFalse((project.runs / ".11.init.lock").exists())
 
     def test_run_initialization_lock_context_releases_after_exception(self):
         project = self.make_project()
@@ -147,6 +224,24 @@ class RunStorageTests(unittest.TestCase):
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
         self.assertFalse(web_run_paths(project, 11).root.exists())
 
+    def test_initialize_rejects_mocked_reparse_runs_directory(self):
+        project = self.make_project()
+        sentinel = project.runs / "sentinel.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+        real_is_link_like = workspace_fs.is_link_like
+
+        def mark_runs_reparse(path):
+            if Path(path) == project.runs:
+                return True
+            return real_is_link_like(path)
+
+        with patch("specgate.workspace_fs.is_link_like", side_effect=mark_runs_reparse):
+            with self.assertRaises(WorkspacePathError):
+                initialize_run_storage(project, 11)
+
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+        self.assertFalse(web_run_paths(project, 11).root.exists())
+
     @unittest.skipUnless(os.name == "nt", "Windows publication failure")
     def test_initialize_run_storage_fails_closed_when_windows_rename_is_denied(self):
         project = self.make_project()
@@ -197,7 +292,7 @@ class RunStorageTests(unittest.TestCase):
         denied.winerror = 5
         with (
             patch("specgate.workspace_fs._rename_staging_noreplace", side_effect=denied),
-            patch("specgate.run_storage.shutil.rmtree") as rmtree,
+            patch("shutil.rmtree") as rmtree,
         ):
             with self.assertRaises(WorkspacePathError):
                 initialize_run_storage(project, 11)
@@ -249,7 +344,10 @@ class RunStorageTests(unittest.TestCase):
         project = self.make_project()
         run = initialize_run_storage(project, 11)
 
-        with patch("specgate.run_storage.shutil.rmtree", side_effect=OSError("cleanup failed")):
+        with patch(
+            "specgate.run_storage.rename_workspace_tree_noreplace",
+            side_effect=OSError("cleanup failed"),
+        ):
             with self.assertRaisesRegex(RunStorageCleanupError, "cleanup failed"):
                 run_storage.cleanup_interrupted_run_storage(project, 11)
 
@@ -263,6 +361,68 @@ class RunStorageTests(unittest.TestCase):
         remove_run_storage(project, 11)
 
         self.assertFalse(run.root.exists())
+
+    def test_remove_run_storage_quarantines_owned_tree_without_recursive_delete(self):
+        project = self.make_project()
+        run = initialize_run_storage(project, 11)
+        sentinel = run.root / "sentinel.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+
+        with patch("shutil.rmtree", side_effect=AssertionError("recursive delete called")) as rmtree:
+            remove_run_storage(project, 11)
+
+        rmtree.assert_not_called()
+        self.assertFalse(run.root.exists())
+        quarantines = list(project.runs.glob(".11.specgate-quarantine-*"))
+        self.assertEqual(len(quarantines), 1)
+        self.assertEqual((quarantines[0] / "sentinel.txt").read_text(encoding="utf-8"), "keep")
+        token = quarantines[0].name.rsplit("-", 1)[-1]
+        self.assertEqual(len(token), 64)
+        int(token, 16)
+
+    def test_remove_run_storage_rejects_tree_replaced_after_marker_read(self):
+        project = self.make_project()
+        run = initialize_run_storage(project, 11)
+        displaced = project.runs / "displaced-owned-run"
+        replacement = project.runs / "replacement-run"
+        replacement.mkdir()
+        self.write_ownership_marker(replacement, 11)
+        sentinel = replacement / "sentinel.txt"
+        sentinel.write_text("replacement sentinel", encoding="utf-8")
+        real_read = run_storage.read_workspace_text
+
+        def replace_after_read(root, relative):
+            content = real_read(root, relative)
+            os.rename(run.root, displaced)
+            os.rename(replacement, run.root)
+            return content
+
+        with patch("specgate.run_storage.read_workspace_text", side_effect=replace_after_read):
+            with self.assertRaisesRegex(RunStorageCleanupError, "retained"):
+                remove_run_storage(project, 11)
+
+        self.assertEqual((run.root / "sentinel.txt").read_text(encoding="utf-8"), "replacement sentinel")
+        self.assertTrue((displaced / self.ownership_marker).is_file())
+
+    def test_cleanup_interrupted_retains_reparse_candidate_and_reports_error(self):
+        project = self.make_project()
+        candidate = project.runs / ".11.tmp-reparse"
+        candidate.mkdir()
+        self.write_ownership_marker(candidate, 11)
+        sentinel = candidate / "sentinel.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+        real_is_link_like = workspace_fs.is_link_like
+
+        def mark_candidate_reparse(path):
+            if Path(path) == candidate:
+                return True
+            return real_is_link_like(path)
+
+        with patch("specgate.workspace_fs.is_link_like", side_effect=mark_candidate_reparse):
+            with self.assertRaisesRegex(RunStorageCleanupError, "retained"):
+                run_storage.cleanup_interrupted_run_storage(project, 11)
+
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
 
     def test_remove_run_storage_preserves_unowned_run_root(self):
         project = self.make_project()
