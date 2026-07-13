@@ -1,7 +1,9 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from specgate import workspace_fs
 from specgate.gate import run_html_gate
 
 
@@ -98,6 +100,144 @@ class HtmlGateTests(unittest.TestCase):
 
             self.assertFalse(result.passed)
             self.assertTrue(any(issue.code == "no_secret" for issue in result.issues))
+
+    def test_file_links_fail_closed_without_exposing_external_content(self):
+        sentinel = "EXTERNAL_GATE_SENTINEL"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            linked_html = root / "index.html"
+            linked_html.write_text(VALID_HTML.replace("</body>", f"{sentinel}</body>"), encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            real_is_link_like = workspace_fs.is_link_like
+            real_is_symlink = Path.is_symlink
+
+            with (
+                mock.patch.object(
+                    Path,
+                    "is_symlink",
+                    autospec=True,
+                    side_effect=lambda path: path == linked_html or real_is_symlink(path),
+                ),
+                mock.patch.object(
+                    workspace_fs,
+                    "is_link_like",
+                    side_effect=lambda path: Path(path) == linked_html or real_is_link_like(path),
+                ),
+            ):
+                result = run_html_gate(linked_html, root / "CHECKLIST.md")
+
+            self.assertFalse(result.passed)
+            self.assertTrue(any(issue.code == "unsafe_artifact" for issue in result.issues))
+            self.assertNotIn(sentinel, result.summary)
+            self.assertNotIn(sentinel, repr(result.issues))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "index.html").write_text(VALID_HTML, encoding="utf-8")
+            linked_checklist = root / "CHECKLIST.md"
+            linked_checklist.write_text(f"- must include {sentinel}\n", encoding="utf-8")
+            real_is_link_like = workspace_fs.is_link_like
+            real_is_symlink = Path.is_symlink
+
+            with (
+                mock.patch.object(
+                    Path,
+                    "is_symlink",
+                    autospec=True,
+                    side_effect=lambda path: path == linked_checklist or real_is_symlink(path),
+                ),
+                mock.patch.object(
+                    workspace_fs,
+                    "is_link_like",
+                    side_effect=lambda path: Path(path) == linked_checklist or real_is_link_like(path),
+                ),
+            ):
+                result = run_html_gate(root / "index.html", linked_checklist)
+
+            self.assertFalse(result.passed)
+            self.assertTrue(any(issue.code == "unsafe_checklist" for issue in result.issues))
+            self.assertNotIn(sentinel, result.summary)
+            self.assertNotIn(sentinel, repr(result.issues))
+
+    def test_directory_reparse_inputs_fail_closed(self):
+        sentinel = "EXTERNAL_REPARSE_SENTINEL"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "index.html").write_text(VALID_HTML.replace("</body>", f"{sentinel}</body>"), encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            real_is_link_like = workspace_fs.is_link_like
+
+            with mock.patch.object(
+                workspace_fs,
+                "is_link_like",
+                side_effect=lambda path: Path(path) == root or real_is_link_like(path),
+            ):
+                result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
+
+            self.assertFalse(result.passed)
+            self.assertTrue(any(issue.code == "unsafe_artifact" for issue in result.issues))
+            self.assertNotIn(sentinel, result.summary)
+            self.assertNotIn(sentinel, repr(result.issues))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checklist_root = root / "linked-checklist"
+            checklist_root.mkdir()
+            (root / "index.html").write_text(VALID_HTML, encoding="utf-8")
+            (checklist_root / "CHECKLIST.md").write_text(f"- must include {sentinel}\n", encoding="utf-8")
+            real_is_link_like = workspace_fs.is_link_like
+
+            with mock.patch.object(
+                workspace_fs,
+                "is_link_like",
+                side_effect=lambda path: Path(path) == checklist_root or real_is_link_like(path),
+            ):
+                result = run_html_gate(root / "index.html", checklist_root / "CHECKLIST.md")
+
+            self.assertFalse(result.passed)
+            self.assertTrue(any(issue.code == "unsafe_checklist" for issue in result.issues))
+            self.assertNotIn(sentinel, result.summary)
+            self.assertNotIn(sentinel, repr(result.issues))
+
+    def test_ancestor_replacement_during_read_fails_closed(self):
+        sentinel = "EXTERNAL_RACE_SENTINEL"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "index.html").write_text(VALID_HTML.replace("</body>", f"{sentinel}</body>"), encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            real_read = workspace_fs.read_workspace_text
+
+            def race_html(read_root, relative, **kwargs):
+                if Path(read_root) == root and relative == "index.html":
+                    raise workspace_fs.WorkspacePathError(f"ancestor replaced: {sentinel}", "path_race")
+                return real_read(read_root, relative, **kwargs)
+
+            with mock.patch.object(workspace_fs, "read_workspace_text", side_effect=race_html):
+                result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
+
+            self.assertFalse(result.passed)
+            self.assertTrue(any(issue.code == "unsafe_artifact" for issue in result.issues))
+            self.assertNotIn(sentinel, result.summary)
+            self.assertNotIn(sentinel, repr(result.issues))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "index.html").write_text(VALID_HTML, encoding="utf-8")
+            (root / "CHECKLIST.md").write_text(f"- must include {sentinel}\n", encoding="utf-8")
+            real_read = workspace_fs.read_workspace_text
+
+            def race_checklist(read_root, relative, **kwargs):
+                if Path(read_root) == root and relative == "CHECKLIST.md":
+                    raise workspace_fs.WorkspacePathError(f"ancestor replaced: {sentinel}", "path_race")
+                return real_read(read_root, relative, **kwargs)
+
+            with mock.patch.object(workspace_fs, "read_workspace_text", side_effect=race_checklist):
+                result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
+
+            self.assertFalse(result.passed)
+            self.assertTrue(any(issue.code == "unsafe_checklist" for issue in result.issues))
+            self.assertNotIn(sentinel, result.summary)
+            self.assertNotIn(sentinel, repr(result.issues))
 
 
 if __name__ == "__main__":

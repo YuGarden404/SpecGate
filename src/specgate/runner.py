@@ -236,6 +236,7 @@ class AgentRunner:
         ok: bool,
         blocked: bool,
         message: str,
+        rule_family: str | None = None,
     ) -> None:
         decision = PermissionDecision(
             step=step,
@@ -245,7 +246,7 @@ class AgentRunner:
             blocked=blocked,
             reason=message,
             profile=self.governance_profile,
-            rule_family=classify_rule_family(message),
+            rule_family=rule_family if rule_family is not None else classify_rule_family(message),
         )
         permission_decisions.append(decision)
         self.trace.append("permission_decision", decision.to_dict())
@@ -381,6 +382,7 @@ class AgentRunner:
                 ok=False,
                 blocked=False,
                 message=risk.reason,
+                rule_family=risk.rule_family,
             )
             metrics = replace(
                 metrics,
@@ -406,6 +408,7 @@ class AgentRunner:
                 ok=False,
                 blocked=True,
                 message=risk.reason,
+                rule_family=risk.rule_family,
             )
             self._record_tool_feedback(
                 runtime_feedback,
@@ -434,6 +437,7 @@ class AgentRunner:
             ok=tool_result.ok,
             blocked=tool_result.blocked,
             message=tool_result.message,
+            rule_family=getattr(tool_result, "rule_family", None),
         )
         runtime_feedback.append(
             redact(
@@ -710,6 +714,7 @@ class AgentRunner:
                     ok=False,
                     blocked=False,
                     message=risk.reason,
+                    rule_family=risk.rule_family,
                 )
                 metrics = replace(
                     metrics,
@@ -735,6 +740,7 @@ class AgentRunner:
                     ok=False,
                     blocked=True,
                     message=risk.reason,
+                    rule_family=risk.rule_family,
                 )
                 self._record_tool_feedback(
                     runtime_feedback,
@@ -765,6 +771,7 @@ class AgentRunner:
                 ok=tool_result.ok,
                 blocked=tool_result.blocked,
                 message=tool_result.message,
+                rule_family=getattr(tool_result, "rule_family", None),
             )
             runtime_feedback.append(
                 redact(
@@ -908,7 +915,7 @@ class AgentRunner:
                 blocked=True,
                 reason=risk.reason,
                 profile=self.governance_profile,
-                rule_family=classify_rule_family(risk.reason),
+                rule_family=risk.rule_family,
             )
             permission_decisions.append(decision)
             self.trace.append("permission_decision", decision.to_dict())
@@ -959,7 +966,11 @@ class AgentRunner:
             blocked=tool_result.blocked,
             reason=tool_result.message,
             profile=self.governance_profile,
-            rule_family=classify_rule_family(tool_result.message),
+            rule_family=(
+                tool_result.rule_family
+                if hasattr(tool_result, "rule_family")
+                else classify_rule_family(tool_result.message)
+            ),
         )
         permission_decisions.append(decision)
         self.trace.append("permission_decision", decision.to_dict())

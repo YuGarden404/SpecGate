@@ -2,12 +2,14 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from specgate.llm import MockLLM
 from specgate.metrics import RunMetrics
 from specgate.policy import WorkspacePolicy
 from specgate.runner import AgentRunner
-from specgate.approvals import ApprovalQueue, GovernanceConfig, PendingApproval, approval_queue_path
+from specgate.approvals import ActionRisk, ApprovalQueue, GovernanceConfig, PendingApproval, approval_queue_path
+from specgate.tools import ToolResult
 
 
 BROKEN_HTML = "<html><head><title>x</title></head><body></body></html>"
@@ -1163,6 +1165,77 @@ class RunnerTests(unittest.TestCase):
             self.assertIsNotNone(result.metrics)
             self.assertEqual(result.metrics.tool_calls, 1)
             self.assertEqual(result.metrics.successful_tool_calls, 0)
+
+    def test_permission_decision_uses_action_risk_rule_family(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(FIXED_HTML, encoding="utf-8")
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": FIXED_HTML},
+                    }
+                ]
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"write_file"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            with mock.patch(
+                "specgate.runner.classify_action_risk",
+                return_value=ActionRisk("blocked", "opaque risk rejection", "invalid_path"),
+            ):
+                result = AgentRunner(root, llm, policy, max_steps=1).run()
+
+            self.assertEqual(result.permission_decisions[0].rule_family, "invalid_path")
+            trace = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"rule_family": "invalid_path"', trace)
+
+    def test_permission_decision_uses_tool_result_rule_family(self):
+        for family in ("linked_path", "path_race"):
+            with self.subTest(family=family), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+                (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+                (root / "index.html").write_text(FIXED_HTML, encoding="utf-8")
+                llm = MockLLM(
+                    [
+                        {
+                            "schema_version": "1",
+                            "action": "read_file",
+                            "args": {"path": "TASK_SPEC.md"},
+                        }
+                    ]
+                )
+                policy = WorkspacePolicy(
+                    root,
+                    {"read_file"},
+                    {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                    set(),
+                )
+                runner = AgentRunner(root, llm, policy, max_steps=1)
+                runner.dispatcher.dispatch = mock.Mock(
+                    return_value=ToolResult(
+                        False,
+                        "read_file",
+                        "opaque tool rejection",
+                        blocked=True,
+                        rule_family=family,
+                    )
+                )
+
+                result = runner.run()
+
+                self.assertEqual(result.permission_decisions[0].rule_family, family)
+                trace = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+                self.assertIn(f'"rule_family": "{family}"', trace)
 
     def test_max_step_exhaustion_marks_metrics_and_failed_trust(self):
         with tempfile.TemporaryDirectory() as tmp:
