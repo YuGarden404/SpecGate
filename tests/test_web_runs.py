@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import specgate.web_runs as web_runs
+import specgate.run_storage as run_storage
 from specgate.run_storage import initialize_run_storage as initialize_run_storage_real
 from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
@@ -192,6 +193,82 @@ class WebRunsTests(unittest.TestCase):
             self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
         self.assertTrue(all(path.read_text(encoding="utf-8") == "keep" for path in sentinels))
 
+    def test_recovery_skips_locked_initialization_then_cleans_after_release(self):
+        db_path, data_root, user, project = self.make_context()
+        with closing(connect_db(db_path)) as conn:
+            run_id = conn.execute(
+                """
+                insert into runs (project_id, user_id, status, prompt, created_at)
+                values (?, ?, 'initializing', 'Interrupted run', '2026-07-13T00:00:00Z')
+                """,
+                (project["id"], user["id"]),
+            ).lastrowid
+            conn.commit()
+        paths = project_paths(data_root, user["id"], project["id"])
+        run = initialize_run_storage_real(paths, run_id)
+        owner_lock = run_storage.RunInitializationLock(paths, run_id)
+        owner_lock.acquire()
+        try:
+            web_runs.recover_interrupted_run_initializations(db_path, data_root)
+            with closing(connect_db(db_path)) as conn:
+                self.assertEqual(conn.execute("select status from runs").fetchone()[0], "initializing")
+            self.assertTrue(run.root.is_dir())
+        finally:
+            owner_lock.release()
+
+        web_runs.recover_interrupted_run_initializations(db_path, data_root)
+
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
+        self.assertFalse(run.root.exists())
+
+    def test_recovery_rechecks_initializing_status_after_lock_acquisition(self):
+        db_path, data_root, user, project = self.make_context()
+        with closing(connect_db(db_path)) as conn:
+            run_id = conn.execute(
+                """
+                insert into runs (project_id, user_id, status, prompt, created_at)
+                values (?, ?, 'initializing', 'Racing run', '2026-07-13T00:00:00Z')
+                """,
+                (project["id"], user["id"]),
+            ).lastrowid
+            conn.commit()
+        paths = project_paths(data_root, user["id"], project["id"])
+        run = initialize_run_storage_real(paths, run_id)
+        acquisition_started = threading.Event()
+        allow_acquisition = threading.Event()
+        original_try_acquire = run_storage.RunInitializationLock.try_acquire
+
+        def delayed_try_acquire(lock):
+            acquisition_started.set()
+            if not allow_acquisition.wait(timeout=5):
+                raise TimeoutError("test did not allow lock acquisition")
+            return original_try_acquire(lock)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            with patch.object(
+                run_storage.RunInitializationLock,
+                "try_acquire",
+                autospec=True,
+                side_effect=delayed_try_acquire,
+            ):
+                recovery = executor.submit(
+                    web_runs.recover_interrupted_run_initializations,
+                    db_path,
+                    data_root,
+                )
+                self.assertTrue(acquisition_started.wait(timeout=2))
+                with closing(connect_db(db_path)) as conn:
+                    conn.execute("update runs set status = 'queued' where id = ?", (run_id,))
+                    conn.commit()
+                allow_acquisition.set()
+                recovery.result(timeout=2)
+
+        with closing(connect_db(db_path)) as conn:
+            status = conn.execute("select status from runs where id = ?", (run_id,)).fetchone()[0]
+            self.assertEqual(status, "queued")
+        self.assertTrue(run.root.is_dir())
+
     def test_create_run_records_queued_status_and_user_message(self):
         db_path, data_root, user, project = self.make_context()
 
@@ -270,7 +347,7 @@ class WebRunsTests(unittest.TestCase):
                 self.assertEqual(run_count, 1)
                 self.assertEqual(message_count, 1)
                 self.assertEqual(
-                    sorted(path.name for path in project_run_root.iterdir()),
+                    sorted(path.name for path in project_run_root.iterdir() if path.is_dir()),
                     [str(first["id"])],
                 )
 
@@ -339,7 +416,7 @@ class WebRunsTests(unittest.TestCase):
             self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 1)
             self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 1)
         self.assertEqual(
-            sorted(path.name for path in paths.runs.iterdir()),
+            sorted(path.name for path in paths.runs.iterdir() if path.is_dir()),
             [str(successful_runs[0]["id"])],
         )
 
@@ -364,6 +441,9 @@ class WebRunsTests(unittest.TestCase):
             self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
             self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+        contender = run_storage.RunInitializationLock(paths, 1)
+        self.assertTrue(contender.try_acquire())
+        contender.release()
 
     def test_create_run_does_not_claim_preexisting_formal_storage_with_matching_marker(self):
         db_path, data_root, user, project = self.make_context()
@@ -414,7 +494,7 @@ class WebRunsTests(unittest.TestCase):
         with closing(connect_db(db_path)) as conn:
             self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
             self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
-        self.assertEqual(list(paths.runs.iterdir()), [])
+        self.assertEqual([path for path in paths.runs.iterdir() if path.is_dir()], [])
 
     def test_create_run_preserves_diagnostic_row_when_owned_storage_cleanup_fails(self):
         db_path, data_root, user, project = self.make_context()
@@ -543,6 +623,8 @@ class WebRunsTests(unittest.TestCase):
 
         def controlled_initialize(paths, run_id):
             initialization_started.set()
+            contender = run_storage.RunInitializationLock(paths, run_id)
+            self.assertFalse(contender.try_acquire())
             if not release_initialization.wait(timeout=5):
                 raise TimeoutError("test did not release initialization")
             return initialize_run_storage_real(paths, run_id)
@@ -580,7 +662,10 @@ class WebRunsTests(unittest.TestCase):
             self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 1)
             self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 1)
             self.assertEqual(conn.execute("select status from runs").fetchone()[0], "queued")
-        self.assertEqual(sorted(path.name for path in paths.runs.iterdir()), [str(run["id"])])
+        self.assertEqual(
+            sorted(path.name for path in paths.runs.iterdir() if path.is_dir()),
+            [str(run["id"])],
+        )
 
     def test_get_run_rejects_other_user(self):
         db_path, data_root, user, project = self.make_context()

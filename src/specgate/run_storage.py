@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import errno
 import json
+import os
 import shutil
 import tempfile
 import warnings
 from pathlib import Path
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 from specgate.web_projects import ProjectPaths, RunPaths, web_run_paths
 
@@ -21,8 +28,62 @@ class RunStorageTargetExists(FileExistsError):
     pass
 
 
+class RunInitializationLockError(RuntimeError):
+    pass
+
+
 _OWNERSHIP_MARKER = ".specgate-run-owner.json"
 _OWNERSHIP_SCHEMA_VERSION = 1
+
+
+class RunInitializationLock:
+    def __init__(self, project: ProjectPaths, run_id: int) -> None:
+        self.path = project.runs / f".{run_id}.init.lock"
+        self._handle = None
+
+    def acquire(self) -> None:
+        if not self.try_acquire():
+            raise RunInitializationLockError(f"run initialization lock is already held: {self.path}")
+
+    def try_acquire(self) -> bool:
+        if self._handle is not None:
+            return True
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self.path.open("a+b")
+        try:
+            handle.seek(0, 2)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            _lock_handle_nonblocking(handle)
+        except OSError as exc:
+            handle.close()
+            if _is_lock_contention(exc):
+                return False
+            raise
+        self._handle = handle
+        return True
+
+    def release(self) -> None:
+        handle = self._handle
+        if handle is None:
+            return
+        self._handle = None
+        try:
+            handle.seek(0)
+            _unlock_handle(handle)
+        finally:
+            handle.close()
+
+    def __enter__(self) -> RunInitializationLock:
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> bool:
+        self.release()
+        return False
 
 
 def initialize_run_storage(project: ProjectPaths, run_id: int) -> RunPaths:
@@ -185,3 +246,27 @@ def _add_cleanup_failure_note(error: Exception, path: Path, context: str) -> Non
         shutil.rmtree(path)
     except Exception as cleanup_error:
         error.add_note(f"{context}: {cleanup_error}")
+
+
+def _lock_handle_nonblocking(handle) -> None:
+    if os.name == "nt":
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_handle(handle) -> None:
+    if os.name == "nt":
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _is_lock_contention(exc: OSError) -> bool:
+    if isinstance(exc, BlockingIOError):
+        return True
+    return exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK} or getattr(
+        exc,
+        "winerror",
+        None,
+    ) in {33, 36}

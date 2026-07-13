@@ -12,6 +12,7 @@ from specgate.config import ContextConfig, WorkspaceConfig
 from specgate.llm import MockLLM
 from specgate.policy import WorkspacePolicy
 from specgate.run_storage import (
+    RunInitializationLock,
     RunStorageOwnershipError,
     RunStorageTargetExists,
     cleanup_interrupted_run_storage,
@@ -55,22 +56,30 @@ def recover_interrupted_run_initializations(db_path: Path, data_root: Path) -> N
     for run in interrupted_runs:
         paths = project_paths(data_root, int(run["user_id"]), int(run["project_id"]))
         run_id = int(run["id"])
+        initialization_lock = RunInitializationLock(paths, run_id)
+        if not initialization_lock.try_acquire():
+            continue
         try:
-            cleanup_interrupted_run_storage(paths, run_id)
-        except RunStorageOwnershipError:
-            _mark_interrupted_initialization_failed(
-                db_path,
-                run_id,
-                INTERRUPTED_RUN_UNOWNED_STORAGE_ERROR,
-            )
-        except Exception:
-            _mark_interrupted_initialization_failed(
-                db_path,
-                run_id,
-                INTERRUPTED_RUN_INITIALIZATION_ERROR,
-            )
-        else:
-            _delete_initializing_run(db_path, run_id)
+            if not _run_is_still_initializing(db_path, run_id):
+                continue
+            try:
+                cleanup_interrupted_run_storage(paths, run_id)
+            except RunStorageOwnershipError:
+                _mark_interrupted_initialization_failed(
+                    db_path,
+                    run_id,
+                    INTERRUPTED_RUN_UNOWNED_STORAGE_ERROR,
+                )
+            except Exception:
+                _mark_interrupted_initialization_failed(
+                    db_path,
+                    run_id,
+                    INTERRUPTED_RUN_INITIALIZATION_ERROR,
+                )
+            else:
+                _delete_initializing_run(db_path, run_id)
+        finally:
+            initialization_lock.release()
 
 
 def create_run(
@@ -82,7 +91,7 @@ def create_run(
     data_root: Path,
 ) -> sqlite3.Row:
     run_prompt = _require_text(prompt, "prompt")
-    run_id, paths, created_at = _reserve_initializing_run(
+    run_id, paths, created_at, initialization_lock = _reserve_initializing_run(
         db_path,
         data_root,
         project_id,
@@ -110,6 +119,8 @@ def create_run(
             error=exc,
         )
         raise
+    finally:
+        initialization_lock.release()
 
 
 def _reserve_initializing_run(
@@ -118,8 +129,9 @@ def _reserve_initializing_run(
     project_id: int,
     user_id: int,
     run_prompt: str,
-) -> tuple[int, ProjectPaths, str]:
+) -> tuple[int, ProjectPaths, str, RunInitializationLock]:
     conn = connect_db(db_path)
+    initialization_lock = None
     try:
         conn.execute("BEGIN IMMEDIATE")
         project = conn.execute(
@@ -150,8 +162,26 @@ def _reserve_initializing_run(
         )
         run_id = int(cursor.lastrowid)
         paths = project_paths(data_root, int(project["user_id"]), int(project["id"]))
+        initialization_lock = RunInitializationLock(paths, run_id)
+        initialization_lock.acquire()
         conn.commit()
-        return run_id, paths, now
+        return run_id, paths, now, initialization_lock
+    except Exception:
+        conn.rollback()
+        if initialization_lock is not None:
+            initialization_lock.release()
+        raise
+    finally:
+        conn.close()
+
+
+def _run_is_still_initializing(db_path: Path, run_id: int) -> bool:
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        run = conn.execute("select status from runs where id = ?", (run_id,)).fetchone()
+        conn.commit()
+        return run is not None and run["status"] == "initializing"
     except Exception:
         conn.rollback()
         raise

@@ -46,6 +46,33 @@ class RunStorageTests(unittest.TestCase):
             ),
         )
 
+    def test_run_initialization_lock_is_exclusive_across_instances(self):
+        project = self.make_project()
+        first = run_storage.RunInitializationLock(project, 11)
+        second = run_storage.RunInitializationLock(project, 11)
+        self.assertEqual(first.path, project.runs / ".11.init.lock")
+
+        first.acquire()
+        try:
+            self.assertFalse(second.try_acquire())
+        finally:
+            first.release()
+
+        self.assertTrue(second.try_acquire())
+        second.release()
+
+    def test_run_initialization_lock_context_releases_after_exception(self):
+        project = self.make_project()
+        lock = run_storage.RunInitializationLock(project, 11)
+
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            with lock:
+                raise RuntimeError("boom")
+
+        contender = run_storage.RunInitializationLock(project, 11)
+        self.assertTrue(contender.try_acquire())
+        contender.release()
+
     def test_run_paths_are_immutable(self):
         run = web_run_paths(project_paths(Path("data"), 2, 7), 11)
 
