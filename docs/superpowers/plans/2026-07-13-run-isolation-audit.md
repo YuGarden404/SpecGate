@@ -4,7 +4,7 @@
 
 **Goal:** 让每个 Web run 使用独立 workspace、审计、审批与产物目录，并只在成功后更新项目当前版本。
 
-**Architecture:** 新增 `RunPaths` 作为唯一目录边界；Web 创建 run 时快照项目 workspace，AgentRunner 接受显式 audit/approval 路径，执行完成后发布 run 专属 artifact 并原子提升项目 workspace。
+**Architecture:** 新增 `RunPaths` 作为唯一目录边界；Web 创建 run 时快照项目 workspace，AgentRunner 接受显式 audit/approval 路径，执行完成后发布 run 专属 artifact，并通过可恢复的两阶段目录切换提升项目 workspace。
 
 **Tech Stack:** Python 3.11+、SQLite、pathlib、shutil、unittest、FastAPI 现有服务层。
 
@@ -44,7 +44,8 @@ Run: `$env:PYTHONPATH='src'; python -m unittest tests.test_run_storage -v`
 
 - [ ] **Step 4: 增加提升成功与失败恢复测试并实现**
 
-测试 `promote_run_workspace()` 更新项目 workspace，且模拟第二次 rename 失败时恢复旧内容。
+测试 `promote_run_workspace()` 更新项目 workspace、第二次 rename 失败时恢复旧内容、发布后备份部分
+清理失败时保留完整新版本，以及下次调用能够恢复/清理上次中断状态。
 
 - [ ] **Step 5: 运行测试**
 

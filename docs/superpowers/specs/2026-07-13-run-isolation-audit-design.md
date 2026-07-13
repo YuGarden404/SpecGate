@@ -74,12 +74,15 @@ AgentRunner 在 run workspace 上执行。trace、evidence 和审批队列写入
 执行完成后，artifact 从 run workspace 的 `index.html` 复制到 run artifacts，并在同一目录
 打包 zip。数据库 artifact 路径只指向 run artifacts。
 
-只有状态为 `completed` 的 run 才提升项目 workspace。提升采用同一父目录下的临时副本：
+只有状态为 `completed` 的 run 才提升项目 workspace。提升采用同一父目录下可恢复的两阶段切换。
+跨平台文件系统无法原子替换一个已存在的非空目录，因此本设计不宣称整个目录切换严格原子，
+而是保证中断后可恢复，且不会为了清理旧备份而破坏已完整发布的新版本：
 
 1. 将 run workspace 复制为 `workspace.next-<run_id>`。
-2. 将当前 workspace 原子改名为备份。
-3. 将临时副本原子改名为 workspace。
-4. 成功后删除备份；失败则恢复备份。
+2. 将当前 workspace 改名为备份。
+3. 将临时副本改名为 workspace；若此步失败，立即恢复备份。
+4. 新 workspace 发布后即视为切换成功；备份清理失败不得回滚到可能已部分删除的备份。
+5. 每次提升前检查同 run 遗留的临时副本与备份，并根据 current 是否存在恢复上次中断状态。
 
 `needs_approval` 在恢复完成前不提升。`failed` 永不提升。
 
@@ -103,7 +106,8 @@ Web approvals 表通过 `run_id` 定位 run，然后只读写该 run 的
 - run 初始化失败：事务回滚并清理未发布目录。
 - Agent 失败：保留 audit，标记 failed，不提升 workspace。
 - artifact 发布失败：不写 artifact 数据库行，不提升 workspace。
-- workspace 提升失败：恢复旧 workspace，run 标记 failed，并保留 run 自身证据。
+- workspace 发布前提升失败：恢复旧 workspace，run 标记 failed，并保留 run 自身证据。
+- workspace 已发布但备份清理失败：保留完整新 workspace，记录清理错误并允许后续恢复流程清理残留。
 
 ## 10. 测试与验收
 
