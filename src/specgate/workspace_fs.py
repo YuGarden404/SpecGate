@@ -1404,42 +1404,51 @@ def _ensure_workspace_directory(
     if _binding is not None:
         _validate_root_binding(root_path, trusted_root, root_identity, _binding)
     if os.name == "nt":
-        current = root_path
-        for index, part in enumerate(parts, start=1):
-            current /= part
-            try:
-                file_stat = current.lstat()
-            except FileNotFoundError:
-                try:
-                    current.mkdir()
-                except FileExistsError:
-                    pass
-                file_stat = current.lstat()
-            _reject_link_like(current)
-            if not stat.S_ISDIR(file_stat.st_mode):
-                raise WorkspacePathError(
-                    f"workspace path is not a directory: {relative}",
-                    "unsafe_file_type",
+        with contextlib.ExitStack() as directory_locks:
+            directory_locks.enter_context(
+                _open_windows_directory_lock(
+                    root_path,
+                    trusted_root,
+                    root_identity,
                 )
-            with _open_windows_directory_lock(
-                current,
-                trusted_root.joinpath(*parts[:index]),
-                _stat_identity(file_stat),
-            ):
-                pass
-        expected = ntpath.normcase(ntpath.normpath(str(trusted_root.joinpath(*parts))))
-        try:
-            actual = ntpath.normcase(ntpath.normpath(str(current.resolve(strict=True))))
-        except OSError as exc:
-            raise WorkspacePathError(
-                "workspace directory changed while creating",
-                "path_race",
-            ) from exc
-        if actual != expected:
-            raise WorkspacePathError(
-                "workspace directory escaped while creating",
-                "path_race",
             )
+            current = root_path
+            for index, part in enumerate(parts, start=1):
+                current /= part
+                try:
+                    file_stat = current.lstat()
+                except FileNotFoundError:
+                    try:
+                        current.mkdir()
+                    except FileExistsError:
+                        pass
+                    file_stat = current.lstat()
+                _reject_link_like(current)
+                if not stat.S_ISDIR(file_stat.st_mode):
+                    raise WorkspacePathError(
+                        f"workspace path is not a directory: {relative}",
+                        "unsafe_file_type",
+                    )
+                directory_locks.enter_context(
+                    _open_windows_directory_lock(
+                        current,
+                        trusted_root.joinpath(*parts[:index]),
+                        _stat_identity(file_stat),
+                    )
+                )
+            expected = ntpath.normcase(ntpath.normpath(str(trusted_root.joinpath(*parts))))
+            try:
+                actual = ntpath.normcase(ntpath.normpath(str(current.resolve(strict=True))))
+            except OSError as exc:
+                raise WorkspacePathError(
+                    "workspace directory changed while creating",
+                    "path_race",
+                ) from exc
+            if actual != expected:
+                raise WorkspacePathError(
+                    "workspace directory escaped while creating",
+                    "path_race",
+                )
         return
     _ensure_posix_workspace_directory(root_path, root_identity, parts)
 

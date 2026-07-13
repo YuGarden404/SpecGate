@@ -8,6 +8,7 @@ import stat
 import tempfile
 import types
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -411,6 +412,112 @@ class WorkspaceFileIOTests(unittest.TestCase):
 
             self.assertEqual(raised.exception.rule_family, "path_race")
             self.assertEqual((ancestor / "sentinel.txt").read_text(encoding="utf-8"), "external sentinel")
+            self.assertFalse((ancestor / "nested").exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows directory lock lifetime")
+    def test_windows_ensure_holds_root_and_ancestor_locks_through_final_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first"
+            final = first / "final"
+            active = []
+            entered = []
+            active_at_final_validation = []
+            real_resolve = Path.resolve
+
+            @contextmanager
+            def tracking_lock(path, expected, expected_identity):
+                path = Path(path)
+                entered.append((path, Path(expected), expected_identity, tuple(active)))
+                active.append(path)
+                try:
+                    yield expected_identity
+                finally:
+                    active.remove(path)
+
+            def observe_final_validation(path, strict=False):
+                if Path(path) == final:
+                    active_at_final_validation.append(tuple(active))
+                return real_resolve(path, strict=strict)
+
+            with (
+                mock.patch.object(
+                    workspace_fs,
+                    "_open_windows_directory_lock",
+                    side_effect=tracking_lock,
+                ),
+                mock.patch.object(
+                    Path,
+                    "resolve",
+                    autospec=True,
+                    side_effect=observe_final_validation,
+                ),
+            ):
+                workspace_fs.ensure_workspace_directory(root, "first/final")
+
+            self.assertEqual([entry[0] for entry in entered], [root, first, final])
+            self.assertEqual([entry[1] for entry in entered], [root, first, final])
+            self.assertEqual(entered[0][2], workspace_fs._stat_identity(root.lstat()))
+            self.assertEqual(
+                [entry[3] for entry in entered],
+                [(), (root,), (root, first)],
+            )
+            self.assertEqual(active_at_final_validation, [(root, first, final)])
+
+    @unittest.skipUnless(os.name == "nt", "Windows directory lock replacement prevention")
+    def test_windows_ensure_prevents_ancestor_replacement_before_next_level(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "workspace"
+            ancestor = root / "ancestor"
+            displaced = base / "displaced-ancestor"
+            replacement = base / "replacement"
+            ancestor.mkdir(parents=True)
+            replacement.mkdir()
+            sentinel = replacement / "sentinel.txt"
+            sentinel.write_text("external sentinel", encoding="utf-8")
+            real_lstat = Path.lstat
+            active = []
+
+            @contextmanager
+            def tracking_lock(path, _expected, expected_identity):
+                path = Path(path)
+                active.append(path)
+                try:
+                    yield expected_identity
+                finally:
+                    active.remove(path)
+
+            def attempt_replacement_before_next_level(path):
+                if Path(path) == ancestor / "nested":
+                    if ancestor in active:
+                        raise WorkspacePathError(
+                            "workspace ancestor replacement was blocked",
+                            "path_race",
+                        )
+                    ancestor.rename(displaced)
+                    replacement.rename(ancestor)
+                return real_lstat(path)
+
+            with (
+                mock.patch.object(
+                    workspace_fs,
+                    "_open_windows_directory_lock",
+                    side_effect=tracking_lock,
+                ),
+                mock.patch.object(
+                    Path,
+                    "lstat",
+                    autospec=True,
+                    side_effect=attempt_replacement_before_next_level,
+                ),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    workspace_fs.ensure_workspace_directory(root, "ancestor/nested")
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
+            self.assertFalse((replacement / "nested").exists())
             self.assertFalse((ancestor / "nested").exists())
 
     def test_workspace_file_state_hashes_existing_and_reports_missing(self):
