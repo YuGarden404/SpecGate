@@ -160,6 +160,31 @@ class WebAppTests(unittest.TestCase):
         self.assertNotIn("index_artifact_path", fetched.json()["run"])
         self.assertNotIn("zip_artifact_path", fetched.json()["run"])
 
+    def test_post_run_returns_409_for_active_run_without_starting_thread(self):
+        client, _app = self.make_client()
+        self.register(client)
+        project = self.create_project(client)
+
+        with patch("specgate.web_app.start_run_background") as starter:
+            first = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "First run"},
+            )
+            self.assertEqual(first.status_code, 200, first.text)
+            starter.reset_mock()
+
+            conflict = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "Conflicting run"},
+            )
+
+        self.assertEqual(conflict.status_code, 409, conflict.text)
+        self.assertEqual(
+            conflict.json(),
+            {"detail": "该项目已有进行中的运行 / This project already has an active run"},
+        )
+        starter.assert_not_called()
+
     def test_run_debug_endpoint_returns_backend_audit_payload(self):
         client, app = self.make_client()
         self.register(client)

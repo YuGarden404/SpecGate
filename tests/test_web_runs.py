@@ -1,14 +1,17 @@
 import sqlite3
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
+from specgate.run_storage import initialize_run_storage as initialize_run_storage_real
 from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
-from specgate.web_projects import create_manual_project, project_paths
-from specgate.web_runs import create_run, execute_run_once, get_run
+from specgate.web_projects import create_manual_project, project_paths, web_run_paths
+from specgate.web_runs import ActiveRunConflict, create_run, execute_run_once, get_run
 from specgate.web_settings import update_settings
 
 
@@ -33,9 +36,15 @@ class WebRunsTests(unittest.TestCase):
         return db_path, data_root, user, project
 
     def test_create_run_records_queued_status_and_user_message(self):
-        db_path, _data_root, user, project = self.make_context()
+        db_path, data_root, user, project = self.make_context()
 
-        run = create_run(db_path, project["id"], user["id"], "Build the result")
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build the result",
+            data_root=data_root,
+        )
 
         self.assertIsInstance(run, sqlite3.Row)
         self.assertEqual(run["status"], "queued")
@@ -53,14 +62,117 @@ class WebRunsTests(unittest.TestCase):
         self.assertEqual(message["user_id"], user["id"])
         self.assertEqual(message["role"], "user")
         self.assertEqual(message["content"], "Build the result")
+        run_paths = web_run_paths(project_paths(data_root, user["id"], project["id"]), run["id"])
+        self.assertTrue(run_paths.workspace.is_dir())
+        self.assertTrue(run_paths.audit.is_dir())
+        self.assertTrue(run_paths.artifacts.is_dir())
 
         with self.assertRaises(ValueError):
-            create_run(db_path, project["id"], user["id"], "   ")
+            create_run(db_path, project["id"], user["id"], "   ", data_root=data_root)
+
+    def test_create_run_rejects_active_statuses_without_side_effects(self):
+        for status in ("queued", "running", "needs_approval"):
+            with self.subTest(status=status):
+                db_path, data_root, user, project = self.make_context()
+                first = create_run(
+                    db_path,
+                    project["id"],
+                    user["id"],
+                    "First run",
+                    data_root=data_root,
+                )
+                with closing(connect_db(db_path)) as conn:
+                    conn.execute("update runs set status = ? where id = ?", (status, first["id"]))
+                    conn.commit()
+
+                with self.assertRaises(ActiveRunConflict):
+                    create_run(
+                        db_path,
+                        project["id"],
+                        user["id"],
+                        "Conflicting run",
+                        data_root=data_root,
+                    )
+
+                project_run_root = project_paths(data_root, user["id"], project["id"]).runs
+                with closing(connect_db(db_path)) as conn:
+                    run_count = conn.execute(
+                        "select count(*) from runs where project_id = ?",
+                        (project["id"],),
+                    ).fetchone()[0]
+                    message_count = conn.execute(
+                        "select count(*) from messages where project_id = ?",
+                        (project["id"],),
+                    ).fetchone()[0]
+                self.assertEqual(run_count, 1)
+                self.assertEqual(message_count, 1)
+                self.assertEqual(
+                    sorted(path.name for path in project_run_root.iterdir()),
+                    [str(first["id"])],
+                )
+
+    def test_create_run_allows_different_projects_concurrently(self):
+        db_path, data_root, user, first_project = self.make_context()
+        second_project = create_manual_project(
+            db_path,
+            data_root,
+            user["id"],
+            name="Second Site",
+            spec_text="# Spec\nBuild another page.",
+            checklist_text="- Ship another HTML page.",
+            index_html=None,
+        )
+        barrier = threading.Barrier(2)
+
+        def create_for(project, prompt):
+            barrier.wait()
+            return create_run(
+                db_path,
+                project["id"],
+                user["id"],
+                prompt,
+                data_root=data_root,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(create_for, first_project, "First project run"),
+                executor.submit(create_for, second_project, "Second project run"),
+            ]
+            runs = [future.result() for future in futures]
+
+        self.assertEqual({run["project_id"] for run in runs}, {first_project["id"], second_project["id"]})
+        for run in runs:
+            paths = project_paths(data_root, user["id"], run["project_id"])
+            self.assertTrue(web_run_paths(paths, run["id"]).workspace.is_dir())
+
+    def test_create_run_rolls_back_database_and_storage_when_initialization_fails(self):
+        db_path, data_root, user, project = self.make_context()
+
+        def fail_after_initialization(paths, run_id):
+            initialize_run_storage_real(paths, run_id)
+            raise OSError("storage initialization failed")
+
+        with patch("specgate.web_runs.initialize_run_storage", side_effect=fail_after_initialization):
+            with self.assertRaisesRegex(OSError, "storage initialization failed"):
+                create_run(
+                    db_path,
+                    project["id"],
+                    user["id"],
+                    "Build the result",
+                    data_root=data_root,
+                )
+
+        paths = project_paths(data_root, user["id"], project["id"])
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
+            self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
+        self.assertEqual(list(paths.runs.iterdir()), [])
 
     def test_get_run_rejects_other_user(self):
-        db_path, _data_root, user, project = self.make_context()
+        db_path, data_root, user, project = self.make_context()
         other = create_user(db_path, "bob", "correct-password")
-        run = create_run(db_path, project["id"], user["id"], "Build the result")
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
 
         self.assertEqual(get_run(db_path, user["id"], run["id"])["id"], run["id"])
         with self.assertRaises(ValueError):
@@ -68,7 +180,7 @@ class WebRunsTests(unittest.TestCase):
 
     def test_execute_run_once_publishes_index_and_zip_artifacts(self):
         db_path, data_root, user, project = self.make_context()
-        run = create_run(db_path, project["id"], user["id"], "Build the result")
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
 
         execute_run_once(db_path, data_root, run["id"])
 
@@ -104,7 +216,7 @@ class WebRunsTests(unittest.TestCase):
             governance_profile="strict",
             context_strategy="rag-select",
         )
-        run = create_run(db_path, project["id"], user["id"], "Build the result")
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
 
         execute_run_once(db_path, data_root, run["id"])
 
@@ -115,7 +227,7 @@ class WebRunsTests(unittest.TestCase):
 
     def test_execute_run_once_failure_marks_run_failed_when_index_is_missing(self):
         db_path, data_root, user, project = self.make_context()
-        run = create_run(db_path, project["id"], user["id"], "Build the result")
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
 
         class FinishOnlyLLM:
             def __init__(self, responses):
@@ -138,7 +250,7 @@ class WebRunsTests(unittest.TestCase):
 
     def test_execute_run_once_does_not_publish_stale_index_from_previous_state(self):
         db_path, data_root, user, project = self.make_context()
-        run = create_run(db_path, project["id"], user["id"], "Build the result")
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
         paths = project_paths(data_root, user["id"], project["id"])
         old_html = """<!doctype html>
 <html lang="en">
@@ -197,13 +309,25 @@ class WebRunsTests(unittest.TestCase):
 
     def test_execute_run_once_ignores_runs_that_are_not_queued(self):
         db_path, data_root, user, project = self.make_context()
-        completed_run = create_run(db_path, project["id"], user["id"], "Build the result")
+        completed_run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build the result",
+            data_root=data_root,
+        )
         execute_run_once(db_path, data_root, completed_run["id"])
         completed_before = get_run(db_path, user["id"], completed_run["id"])
         paths = project_paths(data_root, user["id"], project["id"])
         index_before = (paths.artifacts / "latest-index.html").read_text(encoding="utf-8")
 
-        running_run = create_run(db_path, project["id"], user["id"], "Second result")
+        running_run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Second result",
+            data_root=data_root,
+        )
         with closing(connect_db(db_path)) as conn:
             conn.execute("update runs set status = 'running' where id = ?", (running_run["id"],))
             conn.commit()

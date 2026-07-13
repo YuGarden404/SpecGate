@@ -11,6 +11,7 @@ from specgate.approvals import ApprovalQueue, GovernanceConfig, approval_queue_p
 from specgate.config import ContextConfig, WorkspaceConfig
 from specgate.llm import MockLLM
 from specgate.policy import WorkspacePolicy
+from specgate.run_storage import initialize_run_storage, remove_run_storage
 from specgate.runner import AgentRunner, RunResult
 from specgate.trace import redact
 from specgate.web_auth import utc_now
@@ -19,16 +20,45 @@ from specgate.web_projects import ProjectPaths, package_result_zip, project_path
 from specgate.web_settings import get_settings
 
 
-def create_run(db_path: Path, project_id: int, user_id: int, prompt: str) -> sqlite3.Row:
+ACTIVE_RUN_CONFLICT_MESSAGE = "该项目已有进行中的运行 / This project already has an active run"
+
+
+class ActiveRunConflict(ValueError):
+    def __init__(self) -> None:
+        super().__init__(ACTIVE_RUN_CONFLICT_MESSAGE)
+
+
+def create_run(
+    db_path: Path,
+    project_id: int,
+    user_id: int,
+    prompt: str,
+    *,
+    data_root: Path | None = None,
+) -> sqlite3.Row:
     run_prompt = _require_text(prompt, "prompt")
     conn = connect_db(db_path)
+    paths: ProjectPaths | None = None
+    run_id: int | None = None
     try:
+        conn.execute("BEGIN IMMEDIATE")
         project = conn.execute(
             "select * from projects where id = ? and user_id = ?",
             (project_id, user_id),
         ).fetchone()
         if project is None:
             raise ValueError("project not found")
+
+        active_run = conn.execute(
+            """
+            select id from runs
+            where project_id = ? and status in ('queued', 'running', 'needs_approval')
+            limit 1
+            """,
+            (project_id,),
+        ).fetchone()
+        if active_run is not None:
+            raise ActiveRunConflict()
 
         now = utc_now().isoformat()
         cursor = conn.execute(
@@ -39,6 +69,9 @@ def create_run(db_path: Path, project_id: int, user_id: int, prompt: str) -> sql
             (project_id, user_id, "queued", run_prompt, now),
         )
         run_id = int(cursor.lastrowid)
+        if data_root is not None:
+            paths = project_paths(data_root, int(project["user_id"]), int(project["id"]))
+            initialize_run_storage(paths, run_id)
         conn.execute(
             """
             insert into messages (project_id, user_id, role, content, created_at)
@@ -46,10 +79,16 @@ def create_run(db_path: Path, project_id: int, user_id: int, prompt: str) -> sql
             """,
             (project_id, user_id, "user", run_prompt, now),
         )
+        run = conn.execute("select * from runs where id = ?", (run_id,)).fetchone()
         conn.commit()
-        return conn.execute("select * from runs where id = ?", (run_id,)).fetchone()
-    except Exception:
+        return run
+    except Exception as exc:
         conn.rollback()
+        if paths is not None and run_id is not None:
+            try:
+                remove_run_storage(paths, run_id)
+            except Exception as cleanup_error:
+                exc.add_note(f"run storage cleanup failed: {cleanup_error}")
         raise
     finally:
         conn.close()

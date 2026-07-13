@@ -21,7 +21,7 @@ from specgate.web_auth import (
 from specgate.web_db import connect_db, init_db
 from specgate.web_debug import build_run_debug
 from specgate.web_projects import create_manual_project, create_project_from_zip, project_paths
-from specgate.web_runs import create_run, get_run, resume_run_once, start_run_background
+from specgate.web_runs import ActiveRunConflict, create_run, get_run, resume_run_once, start_run_background
 from specgate.web_settings import clear_api_key, get_settings, update_settings, upsert_api_key
 
 
@@ -241,7 +241,15 @@ def create_app(
         user=Depends(current_user),
     ) -> dict[str, Any]:
         try:
-            run = create_run(app.state.db_path, project_id, int(user["id"]), payload.prompt)
+            run = create_run(
+                app.state.db_path,
+                project_id,
+                int(user["id"]),
+                payload.prompt,
+                data_root=app.state.data_root,
+            )
+        except ActiveRunConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise _http_error_for_value_error(exc) from exc
         start_run_background(app.state.db_path, app.state.data_root, int(run["id"]))
