@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
+import stat
+import tempfile
+import unicodedata
 import zipfile
 from dataclasses import dataclass
 from io import BytesIO
@@ -9,10 +12,47 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from specgate.web_auth import utc_now
 from specgate.web_db import connect_db
+from specgate.workspace_fs import (
+    WorkspacePathError,
+    bind_workspace_tree,
+    read_workspace_bytes,
+    rename_workspace_tree_noreplace,
+    write_workspace_bytes,
+    write_workspace_stream,
+)
 
 
 SPEC_FILENAMES = {"SPEC", "SPEC.md", "TASK_SPEC", "TASK_SPEC.md"}
 CHECKLIST_FILENAMES = {"CHECKLIST", "CHECKLIST.md"}
+MAX_ZIP_FILES = 1_000
+MAX_ZIP_DIRECTORIES = 1_000
+MAX_ZIP_FILE_BYTES = 10 * 1024 * 1024
+MAX_ZIP_TOTAL_BYTES = 50 * 1024 * 1024
+MAX_ZIP_COMPRESSION_RATIO = 100
+ZIP_READ_CHUNK_BYTES = 64 * 1024
+SUPPORTED_ZIP_COMPRESSION = frozenset(
+    {
+        zipfile.ZIP_STORED,
+        zipfile.ZIP_DEFLATED,
+        zipfile.ZIP_BZIP2,
+        zipfile.ZIP_LZMA,
+    }
+)
+INVALID_ARCHIVE_MESSAGE = "zip archive is invalid or unsafe"
+ARCHIVE_LIMIT_MESSAGE = "zip archive exceeds safety limits"
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CLOCK$"}
+    | {f"COM{number}" for number in range(1, 10)}
+    | {f"LPT{number}" for number in range(1, 10)}
+)
+
+
+class ArchiveValidationError(ValueError):
+    pass
+
+
+class ArchiveLimitError(ArchiveValidationError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -33,6 +73,19 @@ class RunPaths:
     artifacts: Path
     index_artifact: Path
     zip_artifact: Path
+
+
+@dataclass(frozen=True)
+class _ValidatedArchiveMember:
+    info: zipfile.ZipInfo
+    path: str
+
+
+@dataclass(frozen=True)
+class _ArchivePlan:
+    members: tuple[_ValidatedArchiveMember, ...]
+    spec_path: str
+    checklist_path: str
 
 
 def project_paths(data_root: Path, user_id: int, project_id: int) -> ProjectPaths:
@@ -107,47 +160,61 @@ def create_project_from_zip(
     zip_content: bytes,
 ) -> sqlite3.Row:
     project_name = _require_text(name, "name")
-    _reject_raw_backslash_paths(zip_content)
+    _reject_unsafe_raw_names(zip_content)
     try:
         archive = zipfile.ZipFile(BytesIO(zip_content))
-    except zipfile.BadZipFile as exc:
-        raise ValueError("zip_content must be a valid zip archive") from exc
+    except (zipfile.BadZipFile, UnicodeError, ValueError) as exc:
+        raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE) from exc
 
     with archive:
-        members = archive.infolist()
-        safe_names = [_safe_zip_name(member.filename) for member in members]
-        spec_path, checklist_path = _find_required_project_files(safe_names, members)
-        if spec_path is None:
-            raise ValueError("zip project requires SPEC or TASK_SPEC")
-        if checklist_path is None:
-            raise ValueError("zip project requires CHECKLIST")
+        plan = _preflight_archive(archive)
+        _verify_archive_contents(archive, plan.members)
 
         conn = connect_db(db_path)
-        paths = None
+        paths: ProjectPaths | None = None
+        staging_paths: ProjectPaths | None = None
+        published_identity: tuple[int, int] | None = None
         try:
             project_id = _insert_project(conn, user_id, project_name, "zip")
             paths = project_paths(data_root, user_id, project_id)
-            _make_project_dirs(paths, include_workspace=False)
+            paths.root.parent.mkdir(parents=True, exist_ok=True)
+            staging_root = Path(
+                tempfile.mkdtemp(
+                    prefix=f".{project_id}.specgate-upload-",
+                    dir=paths.root.parent,
+                )
+            )
+            staging_paths = _paths_for_root(staging_root)
+            for directory in (
+                staging_paths.original,
+                staging_paths.workspace,
+                staging_paths.artifacts,
+                staging_paths.runs,
+            ):
+                directory.mkdir(exist_ok=False)
 
-            for safe_name, member in zip(safe_names, members):
-                target = paths.original / safe_name
-                _guard_project_destination(target, paths.original)
-                if member.is_dir():
-                    target.mkdir(parents=True, exist_ok=True)
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(member) as source, target.open("wb") as destination:
-                    shutil.copyfileobj(source, destination)
+            _extract_archive(archive, plan.members, staging_paths.original)
+            _extract_archive(archive, plan.members, staging_paths.workspace)
+            _normalize_workspace_inputs(
+                staging_paths.original,
+                staging_paths.workspace,
+                plan.spec_path,
+                plan.checklist_path,
+            )
 
-            shutil.copytree(paths.original, paths.workspace)
-            _normalize_workspace_inputs(paths.original, paths.workspace, spec_path, checklist_path)
+            staging_binding = bind_workspace_tree(staging_paths.root)
+            published = rename_workspace_tree_noreplace(staging_binding, paths.root)
+            published_identity = published.identity
+            staging_paths = None
             row = _finalize_project(conn, project_id, paths.root)
             conn.commit()
             return row
         except Exception:
             conn.rollback()
-            if paths is not None:
-                shutil.rmtree(paths.root, ignore_errors=True)
+            if staging_paths is not None:
+                _remove_owned_upload_tree(staging_paths.root)
+            if paths is not None and published_identity is not None:
+                _remove_owned_upload_tree(paths.root, expected_identity=published_identity)
             raise
         finally:
             conn.close()
@@ -195,10 +262,194 @@ def _make_project_dirs(paths: ProjectPaths, *, include_workspace: bool = True) -
     paths.runs.mkdir(parents=True, exist_ok=False)
 
 
+def _paths_for_root(root: Path) -> ProjectPaths:
+    return ProjectPaths(
+        root=root,
+        original=root / "original",
+        workspace=root / "workspace",
+        artifacts=root / "artifacts",
+        runs=root / "runs",
+    )
+
+
 def _require_text(value: str, field_name: str) -> str:
     if value is None or not value.strip():
         raise ValueError(f"{field_name} is required")
     return value
+
+
+def _preflight_archive(archive: zipfile.ZipFile) -> _ArchivePlan:
+    validated: list[_ValidatedArchiveMember] = []
+    files: set[str] = set()
+    directories: set[str] = set()
+    normalized_paths: set[str] = set()
+    casefold_paths: dict[str, str] = {}
+    total_size = 0
+    total_compressed = 0
+
+    for info in archive.infolist():
+        path = _safe_zip_name(info.orig_filename)
+        _validate_member_type(info)
+        if info.flag_bits & 0x2041:
+            raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+        if info.compress_type not in SUPPORTED_ZIP_COMPRESSION:
+            raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+        if info.file_size < 0 or info.compress_size < 0:
+            raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+        if info.is_dir() and info.file_size != 0:
+            raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+
+        logical_path = path[:-1] if info.is_dir() else path
+        if logical_path in normalized_paths:
+            raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+        normalized_paths.add(logical_path)
+        parents = _parent_paths(logical_path)
+        for effective_path in (*parents, logical_path):
+            casefolded = effective_path.casefold()
+            existing_path = casefold_paths.get(casefolded)
+            if existing_path is not None and existing_path != effective_path:
+                raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+            casefold_paths[casefolded] = effective_path
+        directories.update(parents)
+        if info.is_dir():
+            directories.add(logical_path)
+        else:
+            files.add(logical_path)
+            if info.file_size > MAX_ZIP_FILE_BYTES:
+                raise ArchiveLimitError(ARCHIVE_LIMIT_MESSAGE)
+            total_size += info.file_size
+            total_compressed += info.compress_size
+            if _compression_ratio_exceeded(info.file_size, info.compress_size):
+                raise ArchiveLimitError(ARCHIVE_LIMIT_MESSAGE)
+
+        if len(files) > MAX_ZIP_FILES or len(directories) > MAX_ZIP_DIRECTORIES:
+            raise ArchiveLimitError(ARCHIVE_LIMIT_MESSAGE)
+        if total_size > MAX_ZIP_TOTAL_BYTES:
+            raise ArchiveLimitError(ARCHIVE_LIMIT_MESSAGE)
+        validated.append(_ValidatedArchiveMember(info=info, path=path))
+
+    if total_size and _compression_ratio_exceeded(total_size, total_compressed):
+        raise ArchiveLimitError(ARCHIVE_LIMIT_MESSAGE)
+
+    folded_files = {path.casefold() for path in files}
+    folded_directories = {path.casefold() for path in directories}
+    if folded_files & folded_directories:
+        raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+
+    spec_path, checklist_path = _find_required_project_files(
+        [member.path for member in validated],
+        [member.info for member in validated],
+    )
+    if spec_path is None:
+        raise ArchiveValidationError("zip project requires SPEC or TASK_SPEC")
+    if checklist_path is None:
+        raise ArchiveValidationError("zip project requires CHECKLIST")
+    return _ArchivePlan(tuple(validated), spec_path, checklist_path)
+
+
+def _validate_member_type(info: zipfile.ZipInfo) -> None:
+    unix_mode = (info.external_attr >> 16) & 0xFFFF
+    unix_type = stat.S_IFMT(unix_mode)
+    if unix_type:
+        expected_type = stat.S_IFDIR if info.is_dir() else stat.S_IFREG
+        if unix_type != expected_type:
+            raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+
+    dos_directory = bool(info.external_attr & 0x10)
+    if dos_directory and not info.is_dir():
+        raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+
+
+def _parent_paths(path: str) -> tuple[str, ...]:
+    parts = path.split("/")
+    return tuple("/".join(parts[:index]) for index in range(1, len(parts)))
+
+
+def _compression_ratio_exceeded(size: int, compressed_size: int) -> bool:
+    if size == 0:
+        return False
+    if compressed_size == 0:
+        return True
+    return size > compressed_size * MAX_ZIP_COMPRESSION_RATIO
+
+
+def _verify_archive_contents(
+    archive: zipfile.ZipFile,
+    members: tuple[_ValidatedArchiveMember, ...],
+) -> None:
+    actual_total = 0
+    try:
+        for member in members:
+            if member.info.is_dir():
+                continue
+            with archive.open(member.info, "r") as source:
+                actual_size = _consume_member(source, member.info.file_size)
+            if actual_size != member.info.file_size:
+                raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+            actual_total += actual_size
+            if actual_total > MAX_ZIP_TOTAL_BYTES:
+                raise ArchiveLimitError(ARCHIVE_LIMIT_MESSAGE)
+    except ArchiveValidationError:
+        raise
+    except (zipfile.BadZipFile, NotImplementedError, RuntimeError, EOFError, OSError) as exc:
+        raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE) from exc
+
+
+def _consume_member(source, declared_size: int) -> int:
+    actual_size = 0
+    while True:
+        chunk = source.read(min(ZIP_READ_CHUNK_BYTES, declared_size - actual_size + 1))
+        if not chunk:
+            return actual_size
+        actual_size += len(chunk)
+        if actual_size > declared_size:
+            raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+
+
+def _extract_archive(
+    archive: zipfile.ZipFile,
+    members: tuple[_ValidatedArchiveMember, ...],
+    destination: Path,
+) -> None:
+    extracted_total = 0
+    try:
+        for member in members:
+            if member.info.is_dir():
+                (destination / member.path[:-1]).mkdir(parents=True, exist_ok=True)
+                continue
+            with archive.open(member.info, "r") as source:
+                written = write_workspace_stream(
+                    destination,
+                    member.path,
+                    source,
+                    max_bytes=member.info.file_size,
+                    chunk_size=ZIP_READ_CHUNK_BYTES,
+                )
+            if written != member.info.file_size:
+                raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+            extracted_total += written
+            if extracted_total > MAX_ZIP_TOTAL_BYTES:
+                raise ArchiveLimitError(ARCHIVE_LIMIT_MESSAGE)
+    except (ArchiveValidationError, WorkspacePathError):
+        raise
+    except (zipfile.BadZipFile, NotImplementedError, RuntimeError, EOFError, OSError) as exc:
+        raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE) from exc
+
+
+def _remove_owned_upload_tree(
+    path: Path,
+    *,
+    expected_identity: tuple[int, int] | None = None,
+) -> None:
+    try:
+        file_stat = path.lstat()
+    except FileNotFoundError:
+        return
+    identity = (file_stat.st_dev, file_stat.st_ino)
+    if expected_identity is not None and identity != expected_identity:
+        return
+    if stat.S_ISDIR(file_stat.st_mode) and not stat.S_ISLNK(file_stat.st_mode):
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def _find_required_project_files(
@@ -224,18 +475,19 @@ def _normalize_workspace_inputs(
     spec_path: str,
     checklist_path: str,
 ) -> None:
-    (workspace / "TASK_SPEC.md").write_bytes((original / spec_path).read_bytes())
-    (workspace / "CHECKLIST.md").write_bytes((original / checklist_path).read_bytes())
+    write_workspace_bytes(
+        workspace,
+        "TASK_SPEC.md",
+        read_workspace_bytes(original, spec_path),
+    )
+    write_workspace_bytes(
+        workspace,
+        "CHECKLIST.md",
+        read_workspace_bytes(original, checklist_path),
+    )
 
 
-def _guard_project_destination(destination: Path, root: Path) -> None:
-    try:
-        destination.resolve().relative_to(root.resolve())
-    except ValueError as exc:
-        raise ValueError("zip archive contains an unsafe path") from exc
-
-
-def _reject_raw_backslash_paths(zip_content: bytes) -> None:
+def _reject_unsafe_raw_names(zip_content: bytes) -> None:
     eocd = zip_content.rfind(b"PK\x05\x06", max(0, len(zip_content) - 65_557))
     if eocd < 0 or eocd + 22 > len(zip_content):
         return
@@ -253,23 +505,42 @@ def _reject_raw_backslash_paths(zip_content: bytes) -> None:
         comment_length = int.from_bytes(zip_content[cursor + 32 : cursor + 34], "little")
         filename_start = cursor + 46
         filename_end = filename_start + filename_length
-        if b"\\" in zip_content[filename_start:filename_end]:
-            raise ValueError("zip archive contains an unsafe path")
+        raw_name = zip_content[filename_start:filename_end]
+        if b"\\" in raw_name or b"\x00" in raw_name:
+            raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
         cursor = filename_end + extra_length + comment_length
 
 
 def _safe_zip_name(name: str) -> str:
-    if "\\" in name:
-        raise ValueError("zip archive contains an unsafe path")
-    normalized = name
+    if not isinstance(name, str) or not name or "\x00" in name or "\\" in name:
+        raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+    if unicodedata.normalize("NFC", name) != name:
+        raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+
+    normalized = name[:-1] if name.endswith("/") else name
+    if not normalized or normalized.endswith("/"):
+        raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
     posix_path = PurePosixPath(normalized)
     windows_path = PureWindowsPath(name)
     if (
-        normalized in ("", ".")
+        normalized == "."
         or posix_path.is_absolute()
         or windows_path.is_absolute()
         or windows_path.drive
-        or any(part in ("", ".", "..") for part in posix_path.parts)
+        or name.startswith("//")
     ):
-        raise ValueError("zip archive contains an unsafe path")
-    return normalized
+        raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+
+    parts = normalized.split("/")
+    for part in parts:
+        stem = part.split(".", 1)[0].upper()
+        if (
+            part in {"", ".", ".."}
+            or part.endswith((".", " "))
+            or ":" in part
+            or any(character in '<>"|?*' for character in part)
+            or any(ord(character) < 32 for character in part)
+            or stem in _WINDOWS_RESERVED_NAMES
+        ):
+            raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
+    return name

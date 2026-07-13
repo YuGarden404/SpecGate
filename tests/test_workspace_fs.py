@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import shutil
 import stat
@@ -24,6 +25,7 @@ from specgate.workspace_fs import (
     read_workspace_text,
     workspace_file_state,
     write_workspace_bytes,
+    write_workspace_stream,
     write_workspace_text,
 )
 
@@ -245,6 +247,67 @@ class WorkspaceFileIOTests(unittest.TestCase):
             write_workspace_bytes(root, "assets/data.bin", b"\x00\xff\x10")
 
             self.assertEqual(read_workspace_bytes(root, "assets/data.bin"), b"\x00\xff\x10")
+
+    def test_streams_binary_content_with_a_hard_read_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = io.BytesIO(b"streamed content")
+
+            written = write_workspace_stream(
+                root,
+                "assets/data.bin",
+                source,
+                max_bytes=len(b"streamed content"),
+                chunk_size=4,
+            )
+
+            self.assertEqual(written, len(b"streamed content"))
+            self.assertEqual(read_workspace_bytes(root, "assets/data.bin"), b"streamed content")
+
+    def test_stream_write_reads_only_one_byte_past_the_limit(self):
+        class TrackingSource(io.BytesIO):
+            def __init__(self, content):
+                super().__init__(content)
+                self.requested = []
+
+            def read(self, size=-1):
+                self.requested.append(size)
+                return super().read(size)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = TrackingSource(b"abcdef")
+
+            with self.assertRaises(WorkspacePathError) as raised:
+                write_workspace_stream(root, "data.bin", source, max_bytes=4, chunk_size=3)
+
+            self.assertEqual(raised.exception.rule_family, "size_limit")
+            self.assertEqual(sum(source.requested), 5)
+
+    def test_stream_write_retries_short_destination_writes(self):
+        class ShortWriteHandle:
+            def __init__(self):
+                self.content = bytearray()
+
+            def write(self, content):
+                accepted = min(2, len(content))
+                self.content.extend(content[:accepted])
+                return accepted
+
+        handle = ShortWriteHandle()
+        opened = mock.MagicMock()
+        opened.__enter__.return_value = handle
+        opened.__exit__.return_value = None
+        with mock.patch.object(workspace_fs, "open_workspace_file", return_value=opened):
+            written = write_workspace_stream(
+                "unused",
+                "data.bin",
+                io.BytesIO(b"abcdef"),
+                max_bytes=6,
+            )
+
+        self.assertEqual(written, 6)
+        self.assertEqual(bytes(handle.content), b"abcdef")
 
     def test_workspace_file_state_hashes_existing_and_reports_missing(self):
         with tempfile.TemporaryDirectory() as tmp:

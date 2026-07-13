@@ -289,6 +289,45 @@ def write_workspace_bytes(
         ) from exc
 
 
+def write_workspace_stream(
+    root: str | os.PathLike[str],
+    relative: str,
+    source: BinaryIO,
+    *,
+    max_bytes: int,
+    chunk_size: int = 64 * 1024,
+) -> int:
+    if max_bytes < 0 or chunk_size <= 0:
+        raise ValueError("stream limits must be positive")
+
+    written = 0
+    try:
+        with open_workspace_file(root, relative, "write", create=True) as handle:
+            while True:
+                chunk = source.read(min(chunk_size, max_bytes - written + 1))
+                if not chunk:
+                    return written
+                if written + len(chunk) > max_bytes:
+                    raise WorkspacePathError(
+                        "workspace stream exceeds its size limit",
+                        "size_limit",
+                    )
+                remaining = memoryview(chunk)
+                while remaining:
+                    accepted = handle.write(remaining)
+                    if accepted is None or accepted <= 0 or accepted > len(remaining):
+                        raise OSError("workspace stream write made no progress")
+                    remaining = remaining[accepted:]
+                written += len(chunk)
+    except WorkspacePathError:
+        raise
+    except OSError as exc:
+        raise WorkspacePathError(
+            f"workspace file could not be written: {relative}",
+            "path_race",
+        ) from exc
+
+
 def workspace_file_state(
     root: str | os.PathLike[str],
     relative: str,
@@ -442,7 +481,24 @@ def rename_workspace_tree_noreplace(
         )
 
     try:
-        _platform_rename_noreplace(binding.path, destination_path)
+        for attempt in range(3):
+            try:
+                _platform_rename_noreplace(binding.path, destination_path)
+                break
+            except PermissionError as exc:
+                if os.name != "nt" or getattr(exc, "winerror", None) != 5 or attempt == 2:
+                    raise
+                _verify_workspace_tree_binding(binding)
+                try:
+                    destination_path.lstat()
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise WorkspacePathError(
+                        "workspace tree rename destination appeared",
+                        "path_race",
+                    ) from exc
+                time.sleep(0.01 * (attempt + 1))
     except WorkspacePathError:
         raise
     except OSError as exc:

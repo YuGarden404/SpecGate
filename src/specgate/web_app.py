@@ -24,6 +24,7 @@ from specgate.web_auth import (
 from specgate.web_db import connect_db, init_db
 from specgate.web_debug import build_run_debug
 from specgate.web_projects import (
+    ArchiveLimitError,
     create_manual_project,
     create_project_from_zip,
     project_paths,
@@ -217,6 +218,8 @@ def create_app(
                 name,
                 content,
             )
+        except ArchiveLimitError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"project": _project_dict(project)}

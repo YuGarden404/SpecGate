@@ -878,7 +878,45 @@ class WebAppTests(unittest.TestCase):
             files={"file": ("too-big.zip", oversized, "application/zip")},
         )
 
-        self.assertIn(response.status_code, {400, 413})
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(response.json()["detail"], "upload exceeds 5 MiB limit")
+
+    def test_upload_maps_archive_expansion_limit_to_413(self):
+        client, _app = self.make_client()
+        self.register(client)
+        compressed = BytesIO()
+        with zipfile.ZipFile(compressed, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("SPEC.md", "Spec")
+            archive.writestr("CHECKLIST.md", "Checklist")
+            archive.writestr("data.txt", b"x" * (1024 * 1024))
+
+        response = client.post(
+            "/api/projects/upload",
+            data={"name": "Expanded"},
+            files={"file": ("expanded.zip", compressed.getvalue(), "application/zip")},
+        )
+
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(response.json()["detail"], "zip archive exceeds safety limits")
+
+    def test_upload_maps_unsafe_archive_to_stable_400_without_internal_paths(self):
+        client, app = self.make_client()
+        self.register(client)
+        unsafe = BytesIO()
+        with zipfile.ZipFile(unsafe, "w") as archive:
+            archive.writestr("SPEC.md", "Spec")
+            archive.writestr("CHECKLIST.md", "Checklist")
+            archive.writestr("../escape.txt", "unsafe")
+
+        response = client.post(
+            "/api/projects/upload",
+            data={"name": "Unsafe"},
+            files={"file": ("unsafe.zip", unsafe.getvalue(), "application/zip")},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "zip archive is invalid or unsafe")
+        self.assertNotIn(str(app.state.data_root), response.text)
 
     def test_users_cannot_access_each_others_projects_or_runs(self):
         client_a, app = self.make_client()
