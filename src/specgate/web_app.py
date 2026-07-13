@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import stat
 import threading
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
@@ -40,6 +39,7 @@ from specgate.web_runs import (
     start_run_background,
 )
 from specgate.web_settings import clear_api_key, get_settings, update_settings, upsert_api_key
+from specgate.workspace_fs import read_workspace_bytes
 
 
 SESSION_COOKIE_NAME = "specgate_session"
@@ -487,60 +487,11 @@ def _artifact_response(
     if not path_value or Path(path_value) != expected_path:
         raise HTTPException(status_code=404, detail="artifact not found")
     try:
-        content = _read_trusted_artifact(data_root, expected_path)
+        relative = expected_path.relative_to(data_root).as_posix()
+        content = read_workspace_bytes(data_root, relative)
     except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="artifact not found") from exc
     return Response(content=content, media_type=media_type, headers=headers)
-
-
-def _read_trusted_artifact(data_root: Path, expected_path: Path) -> bytes:
-    trusted_path = _validate_trusted_path(data_root, expected_path)
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(trusted_path, flags)
-    try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise OSError("artifact is not a regular file")
-        with os.fdopen(descriptor, "rb") as handle:
-            descriptor = -1
-            return handle.read()
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-
-
-def _validate_trusted_path(data_root: Path, expected_path: Path) -> Path:
-    root = Path(os.path.abspath(data_root))
-    expected = Path(os.path.abspath(expected_path))
-    relative = expected.relative_to(root)
-    trusted_root = root.resolve(strict=True)
-    resolved_expected = expected.resolve(strict=False)
-    resolved_expected.relative_to(trusted_root)
-
-    for current in (root, *(root / part for part in _cumulative_parts(relative))):
-        try:
-            file_stat = os.lstat(current)
-        except FileNotFoundError:
-            break
-        if _is_link_or_reparse(current, file_stat):
-            raise ValueError("artifact path contains an untrusted link")
-    return expected
-
-
-def _cumulative_parts(relative: Path):
-    current = Path()
-    for part in relative.parts:
-        current /= part
-        yield current
-
-
-def _is_link_or_reparse(path: Path, file_stat) -> bool:
-    if stat.S_ISLNK(file_stat.st_mode) or path.is_symlink():
-        return True
-    is_junction = getattr(path, "is_junction", None)
-    if is_junction is not None and is_junction():
-        return True
-    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    return bool(getattr(file_stat, "st_file_attributes", 0) & reparse_flag)
 
 
 def _is_sqlite_lock_error(exc: sqlite3.OperationalError) -> bool:

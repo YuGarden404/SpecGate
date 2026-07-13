@@ -10,6 +10,7 @@ from unittest.mock import patch
 from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
 from specgate.web_debug import build_run_debug
+from specgate.workspace_fs import WorkspacePathError
 from specgate.web_projects import create_manual_project, project_paths, web_run_paths
 from specgate.web_runs import create_run, execute_run_once
 
@@ -268,6 +269,76 @@ class WebDebugTests(unittest.TestCase):
         self.assertTrue(payload["artifacts"])
         self.assertTrue(all(not item["exists"] for item in payload["artifacts"]))
         self.assertTrue(all(item["size_bytes"] == 0 for item in payload["artifacts"]))
+
+    def test_audit_reads_reject_link_like_directory_and_files_without_leaking_content(self):
+        db_path, data_root, user, project, run = self.make_completed_run()
+        paths = web_run_paths(
+            project_paths(data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        audit_files = (
+            paths.audit / "trace.jsonl",
+            paths.audit / "retrieval.json",
+            paths.audit / "compression.json",
+            paths.audit / "isolation.json",
+            paths.audit / "security.json",
+        )
+        sentinel = "EXTERNAL_AUDIT_SENTINEL"
+        original_is_symlink = Path.is_symlink
+
+        for linked_path in (paths.audit, *audit_files):
+            with self.subTest(linked_path=linked_path.name):
+                audit_files[0].write_text(
+                    json.dumps({
+                        "event_type": "audit",
+                        "value": sentinel if linked_path in {paths.audit, audit_files[0]} else "safe",
+                    }) + "\n",
+                    encoding="utf-8",
+                )
+                for evidence_path in audit_files[1:]:
+                    evidence_path.write_text(
+                        json.dumps({
+                            "value": sentinel
+                            if linked_path in {paths.audit, evidence_path}
+                            else "safe",
+                        }),
+                        encoding="utf-8",
+                    )
+                with patch.object(
+                    Path,
+                    "is_symlink",
+                    autospec=True,
+                    side_effect=lambda path: path == linked_path or original_is_symlink(path),
+                ):
+                    payload = build_run_debug(db_path, data_root, user["id"], run["id"])
+
+                self.assertNotIn(sentinel, json.dumps(payload))
+
+    def test_audit_read_race_does_not_retry_by_path_or_leak_replacement(self):
+        db_path, data_root, user, project, run = self.make_completed_run()
+        paths = web_run_paths(
+            project_paths(data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        sentinel = "REPLACED_AUDIT_SENTINEL"
+        target = paths.audit / "retrieval.json"
+        target.write_text(json.dumps({"value": "original"}), encoding="utf-8")
+        error = WorkspacePathError("audit changed while opening", "path_race")
+
+        def fail_after_replacement(root, relative):
+            if Path(root) == paths.audit and relative == "retrieval.json":
+                target.write_text(json.dumps({"value": sentinel}), encoding="utf-8")
+                raise error
+            return (Path(root) / relative).read_bytes()
+
+        with patch(
+            "specgate.web_debug.read_workspace_bytes",
+            side_effect=fail_after_replacement,
+        ) as safe_read:
+            payload = build_run_debug(db_path, data_root, user["id"], run["id"])
+
+        self.assertTrue(safe_read.called)
+        self.assertNotIn(sentinel, json.dumps(payload))
 
     def test_junction_patch_supports_path_type_without_is_junction(self):
         class LegacyPath:

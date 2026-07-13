@@ -1,6 +1,5 @@
 import os
 import sqlite3
-import stat
 from contextlib import closing
 from io import BytesIO
 import tempfile
@@ -17,13 +16,11 @@ warnings.filterwarnings(
 )
 
 from fastapi.testclient import TestClient
-from fastapi.responses import FileResponse
-
-from specgate import web_app as web_app_module
 from specgate.web_app import create_app
 from specgate.web_db import connect_db
 from specgate.web_projects import project_paths, web_run_paths
 from specgate.web_runs import execute_run_once
+from specgate.workspace_fs import WorkspacePathError, read_workspace_bytes
 
 
 def patch_is_junction(predicate, *, path_type=Path):
@@ -478,19 +475,29 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(response.status_code, 404, response.text)
             self.assertEqual(response.json(), {"detail": "artifact not found"})
 
-    def test_artifact_reparse_attribute_is_rejected(self):
-        checker = getattr(web_app_module, "_is_link_or_reparse", lambda _path, _stat: False)
-        file_stat = type(
-            "ReparseStat",
-            (),
-            {
-                "st_mode": stat.S_IFREG,
-                "st_file_attributes": stat.FILE_ATTRIBUTE_REPARSE_POINT,
-            },
-        )()
+    def test_artifact_safe_read_rejection_returns_nonleaking_404(self):
+        client, app = self.make_client()
+        self.register(client)
+        project = self.create_project(client)
+        with patch("specgate.web_app.start_run_background"):
+            run = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "Build the result"},
+            ).json()["run"]
+        execute_run_once(app.state.db_path, app.state.data_root, run["id"])
+        sentinel = "EXTERNAL_ARTIFACT_SENTINEL"
 
-        with patch_is_junction(lambda _path: False):
-            self.assertTrue(checker(Path("artifact"), file_stat))
+        for endpoint in ("index", "zip"):
+            with self.subTest(endpoint=endpoint), patch(
+                "specgate.web_app.read_workspace_bytes",
+                side_effect=WorkspacePathError(sentinel, "path_race"),
+            ) as safe_read:
+                response = client.get(f"/api/runs/{run['id']}/artifacts/{endpoint}")
+
+            self.assertTrue(safe_read.called)
+            self.assertEqual(response.status_code, 404, response.text)
+            self.assertEqual(response.json(), {"detail": "artifact not found"})
+            self.assertNotIn(sentinel, response.text)
 
     def test_junction_patch_supports_path_type_without_is_junction(self):
         class LegacyPath:
@@ -521,32 +528,22 @@ class WebAppTests(unittest.TestCase):
         replacement = paths.artifacts / "replacement.html"
         replacement_content = b"replacement artifact"
         replacement.write_bytes(replacement_content)
-        real_os_open = os.open
-        real_file_response = FileResponse
 
-        def open_then_replace(path, flags):
-            descriptor = real_os_open(path, flags)
-            try:
-                replacement.replace(paths.index_artifact)
-            except OSError:
-                os.close(descriptor)
-                raise
-            return descriptor
-
-        def legacy_file_response(path, *args, **kwargs):
+        def read_then_replace(root, relative):
+            content = read_workspace_bytes(root, relative)
             replacement.replace(paths.index_artifact)
-            return real_file_response(path, *args, **kwargs)
+            return content
 
-        with (
-            patch("specgate.web_app.os.open", side_effect=open_then_replace),
-            patch("specgate.web_app.FileResponse", side_effect=legacy_file_response, create=True),
-        ):
+        with patch(
+            "specgate.web_app.read_workspace_bytes",
+            side_effect=read_then_replace,
+        ) as safe_read:
             response = client.get(f"/api/runs/{run['id']}/artifacts/index")
 
-        self.assertIn(response.status_code, {200, 404}, response.text)
-        if response.status_code == 200:
-            self.assertEqual(response.content, original_content)
-            self.assertNotEqual(response.content, replacement_content)
+        safe_read.assert_called_once()
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.content, original_content)
+        self.assertNotEqual(response.content, replacement_content)
 
     def test_artifact_download_rejects_run_directory_symlink_to_external(self):
         client, app = self.make_client()

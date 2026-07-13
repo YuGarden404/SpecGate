@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
-import stat
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -11,6 +9,7 @@ from typing import Any
 from specgate.trace import redact
 from specgate.web_db import connect_db
 from specgate.web_projects import RunPaths, project_paths, web_run_paths
+from specgate.workspace_fs import WorkspacePathError, read_workspace_bytes
 
 
 DEFAULT_MAX_TRACE_EVENTS = 200
@@ -59,12 +58,12 @@ def build_run_debug(
     )
     artifact_payloads = [_artifact_dict(row, run_id, paths, data_root) for row in artifacts]
     approval_payloads = [_approval_dict(row) for row in approvals]
-    trace = _read_trace(paths.audit / "trace.jsonl", max_trace_events, max_event_chars)
+    trace = _read_trace(paths.audit, "trace.jsonl", max_trace_events, max_event_chars)
     evidence = {
-        "retrieval": _read_json_evidence(paths.audit / "retrieval.json"),
-        "compression": _read_json_evidence(paths.audit / "compression.json"),
-        "isolation": _read_json_evidence(paths.audit / "isolation.json"),
-        "security": _read_json_evidence(paths.audit / "security.json"),
+        "retrieval": _read_json_evidence(paths.audit, "retrieval.json"),
+        "compression": _read_json_evidence(paths.audit, "compression.json"),
+        "isolation": _read_json_evidence(paths.audit, "isolation.json"),
+        "security": _read_json_evidence(paths.audit, "security.json"),
     }
 
     return {
@@ -146,48 +145,11 @@ def _artifact_dict(row: sqlite3.Row, run_id: int, paths: RunPaths, data_root: Pa
 
 def _trusted_file_metadata(data_root: Path, expected_path: Path) -> tuple[bool, int]:
     try:
-        trusted_path = _validate_trusted_path(data_root, expected_path)
-        file_stat = os.stat(trusted_path, follow_symlinks=False)
+        relative = expected_path.relative_to(data_root).as_posix()
+        content = read_workspace_bytes(data_root, relative)
     except (OSError, RuntimeError, ValueError):
         return False, 0
-    if not stat.S_ISREG(file_stat.st_mode):
-        return False, 0
-    return True, file_stat.st_size
-
-
-def _validate_trusted_path(data_root: Path, expected_path: Path) -> Path:
-    root = Path(os.path.abspath(data_root))
-    expected = Path(os.path.abspath(expected_path))
-    relative = expected.relative_to(root)
-    trusted_root = root.resolve(strict=True)
-    resolved_expected = expected.resolve(strict=False)
-    resolved_expected.relative_to(trusted_root)
-
-    for current in (root, *(root / part for part in _cumulative_parts(relative))):
-        try:
-            file_stat = os.lstat(current)
-        except FileNotFoundError:
-            break
-        if _is_link_or_reparse(current, file_stat):
-            raise ValueError("artifact path contains an untrusted link")
-    return expected
-
-
-def _cumulative_parts(relative: Path):
-    current = Path()
-    for part in relative.parts:
-        current /= part
-        yield current
-
-
-def _is_link_or_reparse(path: Path, file_stat) -> bool:
-    if stat.S_ISLNK(file_stat.st_mode) or path.is_symlink():
-        return True
-    is_junction = getattr(path, "is_junction", None)
-    if is_junction is not None and is_junction():
-        return True
-    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    return bool(getattr(file_stat, "st_file_attributes", 0) & reparse_flag)
+    return True, len(content)
 
 
 def _approval_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -207,8 +169,15 @@ def _approval_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def _read_trace(path: Path, max_events: int, max_event_chars: int) -> dict[str, Any]:
-    if not path.is_file():
+def _read_trace(
+    audit_root: Path,
+    relative: str,
+    max_events: int,
+    max_event_chars: int,
+) -> dict[str, Any]:
+    try:
+        content = read_workspace_bytes(audit_root, relative).decode("utf-8")
+    except (OSError, UnicodeDecodeError, WorkspacePathError):
         return {
             "events": [],
             "truncated": False,
@@ -216,7 +185,7 @@ def _read_trace(path: Path, max_events: int, max_event_chars: int) -> dict[str, 
             "max_event_chars": max_event_chars,
         }
 
-    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    lines = [line for line in content.splitlines() if line.strip()]
     selected = lines[-max_events:]
     events = [_parse_trace_line(line, max_event_chars) for line in selected]
     return {
@@ -260,10 +229,12 @@ def _truncate_value(value: Any, max_chars: int) -> Any:
     return value
 
 
-def _read_json_evidence(path: Path) -> Any:
-    if not path.is_file():
+def _read_json_evidence(audit_root: Path, relative: str) -> Any:
+    try:
+        content = read_workspace_bytes(audit_root, relative).decode("utf-8")
+    except (OSError, UnicodeDecodeError, WorkspacePathError):
         return None
     try:
-        return redact(json.loads(path.read_text(encoding="utf-8")))
+        return redact(json.loads(content))
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
         return {"error": str(redact(str(exc)))}
