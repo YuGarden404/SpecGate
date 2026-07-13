@@ -7,6 +7,7 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+import specgate.web_debug as web_debug_module
 from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
 from specgate.web_debug import build_run_debug
@@ -103,6 +104,95 @@ class WebDebugTests(unittest.TestCase):
         self.assertEqual([event["event"] for event in payload["trace"]["events"]], [3, 4])
         self.assertTrue(payload["trace"]["events"][0]["truncated"])
 
+    def test_trace_only_parses_records_retained_by_the_tail_window(self):
+        db_path, data_root, user, project, run = self.make_completed_run()
+        paths = web_run_paths(
+            project_paths(data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        (paths.audit / "trace.jsonl").write_text(
+            "\n".join(json.dumps({"event": index}) for index in range(1000)),
+            encoding="utf-8",
+        )
+
+        with patch(
+            "specgate.web_debug._parse_trace_line",
+            wraps=web_debug_module._parse_trace_line,
+        ) as parse_line:
+            payload = build_run_debug(
+                db_path,
+                data_root,
+                user["id"],
+                run["id"],
+                max_trace_events=7,
+            )
+
+        self.assertLessEqual(parse_line.call_count, 7)
+        self.assertEqual(payload["trace"]["total_events"], 1000)
+        self.assertEqual(
+            [event["event"] for event in payload["trace"]["events"]],
+            list(range(993, 1000)),
+        )
+        self.assertTrue(payload["trace"]["truncated"])
+
+    def test_trace_event_truncation_is_linear_and_output_bounded(self):
+        event = {
+            "event_type": "tool_result",
+            "status": "failed",
+            **{f"field_{index}": "value" * 8 for index in range(4000)},
+        }
+        real_dumps = json.dumps
+
+        with patch.object(
+            web_debug_module.json,
+            "dumps",
+            wraps=real_dumps,
+        ) as dumps:
+            truncated = web_debug_module._truncate_event(event, 200)
+
+        self.assertLessEqual(dumps.call_count, 2)
+        self.assertTrue(truncated["truncated"])
+        self.assertEqual(truncated["event_type"], "tool_result")
+        self.assertEqual(truncated["status"], "failed")
+        self.assertIn("preview", truncated)
+        self.assertLessEqual(
+            len(real_dumps(truncated, ensure_ascii=False, sort_keys=True)),
+            200 + 768,
+        )
+
+    def test_trace_tail_preserves_parse_and_decode_error_semantics(self):
+        db_path, data_root, user, project, run = self.make_completed_run()
+        paths = web_run_paths(
+            project_paths(data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        historical = b"".join(
+            json.dumps({"event": index}).encode("utf-8") + b"\n"
+            for index in range(10)
+        )
+        (paths.audit / "trace.jsonl").write_bytes(
+            historical
+            + b"{invalid json}\n"
+            + b"\xff\n"
+            + json.dumps({"event": "final"}).encode("utf-8")
+            + b"\n"
+        )
+
+        payload = build_run_debug(
+            db_path,
+            data_root,
+            user["id"],
+            run["id"],
+            max_trace_events=3,
+        )
+
+        events = payload["trace"]["events"]
+        self.assertEqual(events[0]["event_type"], "trace_parse_error")
+        self.assertEqual(events[1]["event_type"], "trace_decode_error")
+        self.assertEqual(events[2]["event"], "final")
+        self.assertEqual(payload["trace"]["total_events"], 13)
+        self.assertTrue(payload["trace"]["truncated"])
+
     def test_debug_limits_reject_unbounded_trace_options(self):
         db_path, data_root, user, _project, run = self.make_completed_run()
         cases = (
@@ -172,10 +262,17 @@ class WebDebugTests(unittest.TestCase):
                 user["id"],
                 run["id"],
                 max_trace_events=2,
+                max_event_chars=100,
             )
 
         self.assertTrue(safe_open.called)
         self.assertTrue(any(call[:2] == ("trace.jsonl", "readline") for call in calls))
+        trace_read_sizes = [
+            size
+            for relative, operation, size in calls
+            if relative == "trace.jsonl" and operation == "readline"
+        ]
+        self.assertLessEqual(max(trace_read_sizes), 4 * 100 + 512 + 1)
         self.assertTrue(any(call[:2] == ("retrieval.json", "read") for call in calls))
         self.assertEqual(payload["trace"]["total_events"], 2)
         self.assertEqual(payload["trace"]["events"][0]["event"], "kept")

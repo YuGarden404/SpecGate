@@ -22,6 +22,7 @@ DEFAULT_MAX_EVENT_CHARS = 4000
 MAX_TRACE_EVENTS = 1000
 MAX_EVENT_CHARS = 16_000
 MAX_TRACE_LINE_BYTES = 64 * 1024
+TRACE_RECORD_OVERHEAD_BYTES = 512
 MAX_EVIDENCE_BYTES = 256 * 1024
 SAFE_WORKSPACE_RULE_FAMILIES = frozenset(
     {
@@ -32,6 +33,18 @@ SAFE_WORKSPACE_RULE_FAMILIES = frozenset(
         "reparse_point",
         "unsafe_file_type",
     }
+)
+TRACE_SUMMARY_FIELDS = (
+    "event_type",
+    "event",
+    "action",
+    "status",
+    "name",
+    "tool",
+    "tool_name",
+    "phase",
+    "timestamp",
+    "message",
 )
 
 
@@ -195,35 +208,31 @@ def _read_trace(
     max_event_chars: int,
 ) -> dict[str, Any]:
     try:
-        events: deque[dict[str, Any]] = deque(maxlen=max_events)
+        records: deque[bytes | dict[str, Any]] = deque(maxlen=max_events)
         total_events = 0
+        record_limit = min(
+            MAX_TRACE_LINE_BYTES,
+            max_event_chars * 4 + TRACE_RECORD_OVERHEAD_BYTES,
+        )
         with open_workspace_file(audit_root, relative, "read") as handle:
             while True:
-                raw_line = handle.readline(MAX_TRACE_LINE_BYTES + 1)
+                raw_line = handle.readline(record_limit + 1)
                 if not raw_line:
                     break
-                line_too_long = len(raw_line) > MAX_TRACE_LINE_BYTES
+                line_too_long = len(raw_line) > record_limit
                 if line_too_long:
                     while raw_line and not raw_line.endswith(b"\n"):
-                        raw_line = handle.readline(MAX_TRACE_LINE_BYTES + 1)
-                    event = {
+                        raw_line = handle.readline(record_limit + 1)
+                    record: bytes | dict[str, Any] = {
                         "event_type": "trace_line_truncated",
                         "truncated": True,
                     }
                 else:
-                    try:
-                        line = raw_line.decode("utf-8")
-                    except UnicodeDecodeError:
-                        event = {
-                            "event_type": "trace_decode_error",
-                            "truncated": True,
-                        }
-                    else:
-                        if not line.strip():
-                            continue
-                        event = _parse_trace_line(line, max_event_chars)
+                    if not raw_line.strip():
+                        continue
+                    record = raw_line
                 total_events += 1
-                events.append(event)
+                records.append(record)
     except WorkspacePathError as exc:
         error = None if _is_optional_missing(exc, relative) else _audit_error(
             "audit trace unavailable",
@@ -237,7 +246,7 @@ def _read_trace(
             error=_audit_error("audit trace unavailable", "path_race"),
         )
 
-    selected = list(events)
+    selected = [_parse_trace_record(record, max_event_chars) for record in records]
     return {
         "events": selected,
         "truncated": total_events > max_events
@@ -246,6 +255,22 @@ def _read_trace(
         "max_event_chars": max_event_chars,
         "total_events": total_events,
     }
+
+
+def _parse_trace_record(
+    record: bytes | dict[str, Any],
+    max_event_chars: int,
+) -> dict[str, Any]:
+    if isinstance(record, dict):
+        return record
+    try:
+        line = record.decode("utf-8")
+    except UnicodeDecodeError:
+        return {
+            "event_type": "trace_decode_error",
+            "truncated": True,
+        }
+    return _parse_trace_line(line, max_event_chars)
 
 
 def _empty_trace(
@@ -280,25 +305,21 @@ def _truncate_event(event: dict[str, Any], max_event_chars: int) -> dict[str, An
     serialized = json.dumps(event, ensure_ascii=False, sort_keys=True)
     if len(serialized) <= max_event_chars:
         return event
-    truncated: dict[str, Any] = {"truncated": True}
-    serialized_limit = max_event_chars + 256
-    for key, value in event.items():
-        candidate = dict(truncated)
-        candidate[key] = _truncate_value(value, max_event_chars)
-        if len(json.dumps(candidate, ensure_ascii=False, sort_keys=True)) > serialized_limit:
-            continue
-        truncated = candidate
-    return truncated
-
-
-def _truncate_value(value: Any, max_chars: int) -> Any:
-    if isinstance(value, str):
-        return value if len(value) <= max_chars else value[:max_chars] + "...[truncated]"
-    if isinstance(value, list):
-        return [_truncate_value(item, max_chars) for item in value]
-    if isinstance(value, dict):
-        return {key: _truncate_value(item, max_chars) for key, item in value.items()}
-    return value
+    summary: dict[str, Any] = {"truncated": True}
+    field_chars = min(128, max(16, max_event_chars // 8))
+    for key in TRACE_SUMMARY_FIELDS:
+        value = event.get(key)
+        if isinstance(value, str):
+            summary[key] = (
+                value
+                if len(value) <= field_chars
+                else value[:field_chars] + "...[truncated]"
+            )
+        elif value is None or isinstance(value, (bool, int, float)):
+            if key in event:
+                summary[key] = value
+    summary["preview"] = serialized[:max_event_chars] + "...[truncated]"
+    return summary
 
 
 def _read_json_evidence(audit_root: Path, relative: str) -> Any:
