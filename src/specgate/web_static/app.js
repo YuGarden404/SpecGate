@@ -234,6 +234,10 @@ function openProjectMenu() {
   toggleMenu("project-menu-button", "project-menu");
 }
 
+function openSidebarHelpMenu() {
+  toggleMenu("sidebar-help-button", "sidebar-help-menu");
+}
+
 function runCommand(command) {
   closeAllMenus();
   if (command === "new-window") {
@@ -252,6 +256,8 @@ function runCommand(command) {
     openSearchDialog();
   } else if (command === "about") {
     openAboutDialog();
+  } else if (command === "sidebar-help") {
+    return;
   }
 }
 
@@ -298,7 +304,7 @@ function closeCurrentProject() {
   resetViewHistory("conversation");
   renderProjects();
   renderWorkspaceView();
-  setMessage("Project closed.");
+  setMessage("项目已关闭。");
 }
 
 function openAboutDialog() {
@@ -374,7 +380,14 @@ function bindEvents() {
   on("new-project-button", "click", () => runCommand("new-project"));
   on("search-project-button", "click", () => runCommand("search"));
   on("sidebar-settings-button", "click", () => pushView("detail-settings"));
+  on("sidebar-help-button", "click", (event) => {
+    event.stopPropagation();
+    openSidebarHelpMenu();
+  });
   on("sidebar-edge-hotzone", "mouseenter", showSidebarPeek);
+  on("sidebar-edge-hotzone", "pointerenter", showSidebarPeek);
+  on("sidebar-edge-hotzone", "mousemove", showSidebarPeek);
+  on("sidebar-edge-hotzone", "click", showSidebarPeek);
   on("project-sidebar", "mouseleave", hideSidebarPeek);
   on("close-project-dialog", "click", closeProjectDialog);
   on("cancel-project-button", "click", closeProjectDialog);
@@ -402,7 +415,6 @@ function bindEvents() {
       pushView(`detail-${state.activeTab}`);
     });
   });
-  document.addEventListener("keydown", handleGlobalShortcut);
   document.addEventListener("click", (event) => {
     if (
       event.target instanceof Element &&
@@ -413,49 +425,6 @@ function bindEvents() {
     }
   });
   applySidebarState();
-}
-
-function handleGlobalShortcut(event) {
-  if (!event.ctrlKey || event.altKey || event.metaKey) {
-    return;
-  }
-  const key = event.key.toLowerCase();
-  const target = event.target;
-  const isEditable =
-    target instanceof Element &&
-    (target.matches("input, textarea, select") || target.isContentEditable);
-  let command = null;
-  if (event.shiftKey && key === "n") {
-    command = "new-window";
-  } else if (!event.shiftKey && key === "n") {
-    command = "new-project";
-  } else if (!event.shiftKey && key === "g") {
-    command = "search";
-  } else if (!event.shiftKey && key === "q") {
-    command = "exit";
-  } else if (!event.shiftKey && key === ",") {
-    command = "settings";
-  } else if (!event.shiftKey && key === "w") {
-    command = "close-project";
-  } else if (!event.shiftKey && key === "b") {
-    event.preventDefault();
-    toggleSidebar();
-    return;
-  } else if (!event.shiftKey && key === "[") {
-    event.preventDefault();
-    goBack();
-    return;
-  } else if (!event.shiftKey && key === "]") {
-    event.preventDefault();
-    goForward();
-    return;
-  } else if (isEditable) {
-    return;
-  }
-  if (command) {
-    event.preventDefault();
-    runCommand(command);
-  }
 }
 
 async function login() {
@@ -506,8 +475,8 @@ async function logout() {
     clearAuthForm();
     renderProjects();
     renderWorkspaceView();
-    setText("project-title", "Select a project");
-    setRunPill("Idle");
+    setText("project-title", "选择项目");
+    setRunPill("idle");
     setMessage("");
     showView(false);
   }
@@ -547,7 +516,7 @@ function renderProjects() {
   }
   list.replaceChildren();
   if (!state.projects.length) {
-    list.append(el("p", { className: "muted" }, ["No projects yet."]));
+    list.append(el("p", { className: "muted" }, ["暂无项目。"]));
     return;
   }
   for (const project of state.projects) {
@@ -561,7 +530,7 @@ function renderProjects() {
       },
       [
         el("strong", {}, [project.name]),
-        el("small", {}, [project.last_run_status || "no runs"]),
+        el("small", {}, [project.last_run_status ? translateRunStatus(project.last_run_status) : "暂无运行"]),
       ],
     );
     button.addEventListener("click", () => selectProject(project.id));
@@ -604,7 +573,7 @@ async function loadLatestProjectRun(project) {
     state.currentRun = payload.run;
     state.runDebug = null;
   } catch (error) {
-    setMessage(`Latest run could not be loaded: ${error.message}`, true);
+    setMessage(`最近一次运行加载失败：${error.message}`, true);
   }
 }
 
@@ -615,25 +584,37 @@ function renderConversation() {
   }
   list.replaceChildren();
   if (!state.selectedProject) {
-    list.append(el("li", { className: "message" }, ["Create or select a project to begin."]));
-    setText("project-title", "Select a project");
-    setRunPill("Idle");
+    list.append(el("li", { className: "message" }, ["创建或选择一个项目后开始。"]));
+    setText("project-title", "选择项目");
+    setRunPill("idle");
+    scrollConversationToLatest();
     return;
   }
   if (!state.messages.length) {
-    list.append(el("li", { className: "message" }, ["No messages yet. Start a run from the composer."]));
+    list.append(el("li", { className: "message" }, ["暂无消息。请在下方输入指令开始运行。"]));
   }
   for (const message of state.messages) {
     list.append(el("li", { className: `message ${message.role || ""}` }, [message.content]));
   }
-  const status = state.currentRun ? state.currentRun.status : state.selectedProject.last_run_status || "Idle";
+  const status = state.currentRun ? state.currentRun.status : state.selectedProject.last_run_status || "idle";
   setRunPill(status);
+  scrollConversationToLatest();
+}
+
+function scrollConversationToLatest() {
+  const frame = document.querySelector(".messages-frame");
+  if (!frame) {
+    return;
+  }
+  window.requestAnimationFrame(() => {
+    frame.scrollTop = frame.scrollHeight;
+  });
 }
 
 function setRunPill(status) {
   const pill = byId("run-status-pill");
   if (pill) {
-    pill.textContent = status || "Idle";
+    pill.textContent = translateRunStatus(status);
     pill.classList.toggle("warning", status === "needs_approval");
     pill.classList.toggle("danger", status === "failed");
   }
@@ -712,13 +693,13 @@ function renderSearchResults() {
   });
   results.replaceChildren();
   if (!matches.length) {
-    results.append(el("p", { className: "muted" }, ["No projects found."]));
+    results.append(el("p", { className: "muted" }, ["没有匹配的项目。"]));
     return;
   }
   for (const project of matches) {
     const button = el("button", { type: "button", className: "project-item" }, [
       el("strong", {}, [project.name]),
-      el("small", {}, [project.last_run_status || "no runs"]),
+      el("small", {}, [project.last_run_status ? translateRunStatus(project.last_run_status) : "暂无运行"]),
     ]);
     button.addEventListener("click", async () => {
       closeSearchDialog();
@@ -759,7 +740,7 @@ async function createManualProject(event) {
     closeProjectDialog();
     await loadProjects();
     await selectProject(payload.project.id);
-    setMessage("Project created.");
+    setMessage("项目已创建。");
   } catch (error) {
     setMessage(error.message, true);
   }
@@ -768,7 +749,7 @@ async function createManualProject(event) {
 async function startRun(event) {
   event.preventDefault();
   if (!state.selectedProject) {
-    setMessage("Select a project before starting a run.", true);
+    setMessage("请先选择一个项目再开始运行。", true);
     return;
   }
   const promptInput = byId("run-prompt");
@@ -795,7 +776,7 @@ async function startRun(event) {
     await loadMessages(state.selectedProject.id);
     renderWorkspaceView();
     pollRun(state.currentRun.id);
-    setMessage("Run started.");
+    setMessage("运行已开始。");
   } catch (error) {
     setMessage(error.message, true);
   } finally {
@@ -905,14 +886,14 @@ function renderStatusDetail(content) {
 
 function renderBasicRunRows(run) {
   const rows = [
-    ["Project", state.selectedProject ? state.selectedProject.name : "None"],
-    ["Run", run ? `#${run.id}` : "No active run"],
-    ["Status", run ? run.status : state.selectedProject?.last_run_status || "Idle"],
-    ["Trust", run ? run.trust_level || "pending" : "n/a"],
-    ["Error", run ? run.error_message || "None" : "None"],
-    ["Created", run ? run.created_at || "n/a" : "n/a"],
-    ["Started", run ? run.started_at || "n/a" : "n/a"],
-    ["Finished", run ? run.finished_at || "n/a" : "n/a"],
+    ["项目", state.selectedProject ? state.selectedProject.name : "无"],
+    ["运行", run ? `#${run.id}` : "暂无运行"],
+    ["状态", run ? translateRunStatus(run.status) : translateRunStatus(state.selectedProject?.last_run_status || "idle")],
+    ["信任", run ? translateTrustLevel(run.trust_level || "pending") : "不适用"],
+    ["错误", run ? run.error_message || "无" : "无"],
+    ["创建时间", run ? run.created_at || "不适用" : "不适用"],
+    ["开始时间", run ? run.started_at || "不适用" : "不适用"],
+    ["结束时间", run ? run.finished_at || "不适用" : "不适用"],
   ];
   const dl = el("dl", { className: "detail-grid" });
   for (const [label, value] of rows) {
@@ -1045,17 +1026,17 @@ function formatBytes(value) {
 
 function renderReportDetail(content) {
   const card = el("section", { className: "detail-card stack" });
-  card.append(el("h2", {}, ["Report summary"]));
+  card.append(el("h2", {}, ["报告摘要"]));
   const run = state.currentRun;
   const rows = [
-    ["Project", state.selectedProject ? state.selectedProject.name : "None"],
-    ["Run", run ? `#${run.id}` : "No active run"],
-    ["Status", run ? run.status : state.selectedProject?.last_run_status || "Idle"],
-    ["Trust", run ? run.trust_level || "pending" : "n/a"],
-    ["Error", run ? run.error_message || "None" : "None"],
-    ["Created", run ? run.created_at || "n/a" : "n/a"],
-    ["Started", run ? run.started_at || "n/a" : "n/a"],
-    ["Finished", run ? run.finished_at || "n/a" : "n/a"],
+    ["项目", state.selectedProject ? state.selectedProject.name : "无"],
+    ["运行", run ? `#${run.id}` : "暂无运行"],
+    ["状态", run ? translateRunStatus(run.status) : translateRunStatus(state.selectedProject?.last_run_status || "idle")],
+    ["信任", run ? translateTrustLevel(run.trust_level || "pending") : "不适用"],
+    ["错误", run ? run.error_message || "无" : "无"],
+    ["创建时间", run ? run.created_at || "不适用" : "不适用"],
+    ["开始时间", run ? run.started_at || "不适用" : "不适用"],
+    ["结束时间", run ? run.finished_at || "不适用" : "不适用"],
   ];
   const dl = el("dl", { className: "detail-grid" });
   for (const [label, value] of rows) {
@@ -1065,13 +1046,13 @@ function renderReportDetail(content) {
 
   const links = el("div", { className: "stack" });
   if (run && run.index_artifact_url) {
-    links.append(el("a", { href: run.index_artifact_url, download: "index.html" }, ["Download index.html"]));
+    links.append(el("a", { href: run.index_artifact_url, download: "index.html" }, ["下载 index.html"]));
   }
   if (run && run.zip_artifact_url) {
-    links.append(el("a", { href: run.zip_artifact_url, download: "result.zip" }, ["Download result.zip"]));
+    links.append(el("a", { href: run.zip_artifact_url, download: "result.zip" }, ["下载 result.zip"]));
   }
   if (!links.childElementCount) {
-    links.append(el("p", { className: "muted" }, ["No artifacts are available for this run yet."]));
+    links.append(el("p", { className: "muted" }, ["本次运行还没有可用产物。"]));
   }
   card.append(links);
   content.append(card);
@@ -1079,19 +1060,19 @@ function renderReportDetail(content) {
 
 function renderPreviewDetail(content) {
   const card = el("section", { className: "detail-card stack" });
-  card.append(el("h2", {}, ["HTML source"]));
-  const pre = el("pre", { className: "source-view" }, ["Loading source..."]);
+  card.append(el("h2", {}, ["HTML 源码"]));
+  const pre = el("pre", { className: "source-view" }, ["正在加载源码..."]);
   card.append(pre);
 
   const runUrl = state.currentRun && state.currentRun.index_artifact_url;
   if (runUrl) {
-    card.append(el("a", { href: runUrl, download: "index.html" }, ["Download generated index.html"]));
+    card.append(el("a", { href: runUrl, download: "index.html" }, ["下载生成的 index.html"]));
     apiText(runUrl)
       .then((source) => {
         pre.textContent = source;
       })
       .catch((error) => {
-        pre.textContent = `Generated source is not available: ${error.message}`;
+        pre.textContent = `生成源码暂不可用：${error.message}`;
       });
   } else if (state.selectedProject) {
     apiText(`/api/projects/${state.selectedProject.id}/preview`)
@@ -1099,10 +1080,10 @@ function renderPreviewDetail(content) {
         pre.textContent = source;
       })
       .catch(() => {
-        pre.textContent = "No project preview source is available yet.";
+        pre.textContent = "当前项目还没有可预览源码。";
       });
   } else {
-    pre.textContent = "Select a project to inspect source.";
+    pre.textContent = "请选择项目后查看源码。";
   }
   content.append(card);
 }
@@ -1294,6 +1275,7 @@ function latestRunSummary(debug) {
 function translateRunStatus(status) {
   const values = {
     completed: "已完成",
+    idle: "空闲",
     running: "运行中",
     queued: "排队中",
     failed: "失败",
@@ -1305,6 +1287,7 @@ function translateRunStatus(status) {
 function translateTrustLevel(level) {
   const values = {
     trusted: "可信",
+    pending: "待定",
     warning: "警告",
     failed: "失败",
   };
@@ -1360,15 +1343,15 @@ function describeTraceEvent(event) {
 
 function renderApprovalsDetail(content) {
   const wrapper = el("section", { className: "stack" });
-  wrapper.append(el("h2", {}, ["Approvals"]));
+  wrapper.append(el("h2", {}, ["审批"]));
   if (!state.approvals.length) {
-    wrapper.append(el("p", { className: "muted" }, ["No approvals are waiting."]));
+    wrapper.append(el("p", { className: "muted" }, ["当前没有待处理审批。"]));
     content.append(wrapper);
     return;
   }
   for (const approval of state.approvals) {
     const item = el("article", { className: "approval-item" });
-    item.append(el("strong", {}, [`${approval.action_name || "action"} on ${approval.target_path || "workspace"}`]));
+    item.append(el("strong", {}, [`${approval.action_name || "动作"}：${approval.target_path || "工作区"}`]));
     item.append(el("span", { className: "pill" }, [approval.status]));
     if (approval.reason) {
       item.append(el("p", {}, [approval.reason]));
@@ -1377,13 +1360,13 @@ function renderApprovalsDetail(content) {
       item.append(el("pre", { className: "source-view" }, [approval.preview_json]));
     }
     const actions = el("div", { className: "approval-actions" });
-    const approve = el("button", { type: "button" }, ["Approve"]);
+    const approve = el("button", { type: "button" }, ["通过"]);
     approve.disabled = approval.status !== "pending";
     approve.addEventListener("click", () => approveApproval(approval.id));
-    const deny = el("button", { type: "button", className: "secondary" }, ["Deny"]);
+    const deny = el("button", { type: "button", className: "secondary" }, ["拒绝"]);
     deny.disabled = approval.status !== "pending";
     deny.addEventListener("click", () => denyApproval(approval.id));
-    const resume = el("button", { type: "button", className: "secondary" }, ["Resume run"]);
+    const resume = el("button", { type: "button", className: "secondary" }, ["恢复运行"]);
     resume.addEventListener("click", () => resumeRun(approval.run_id));
     actions.append(approve, deny, resume);
     item.append(actions);
@@ -1394,18 +1377,18 @@ function renderApprovalsDetail(content) {
 
 function renderSettingsDetail(content) {
   const card = el("section", { className: "detail-card stack" });
-  card.append(el("h2", {}, ["Settings"]));
+  card.append(el("h2", {}, ["设置"]));
   const settings = state.settings;
   if (!settings) {
-    card.append(el("p", { className: "muted" }, ["Settings have not loaded yet."]));
+    card.append(el("p", { className: "muted" }, ["设置尚未加载。"]));
   } else {
     const dl = el("dl", { className: "detail-grid" });
     for (const [label, value] of [
-      ["Governance", settings.governance_profile],
-      ["Context", settings.context_strategy],
-      ["LLM mode", settings.llm_mode],
-      ["API key", settings.api_key_configured ? "configured" : "not configured"],
-      ["Storage", settings.api_key_storage],
+      ["治理策略", settings.governance_profile],
+      ["上下文策略", settings.context_strategy],
+      ["LLM 模式", settings.llm_mode],
+      ["API Key", settings.api_key_configured ? "已配置" : "未配置"],
+      ["存储方式", settings.api_key_storage],
     ]) {
       dl.append(el("dt", {}, [label]), el("dd", {}, [value]));
     }
@@ -1424,14 +1407,14 @@ async function approveApproval(approvalId) {
     await apiJson(`/api/approvals/${approvalId}/approve`, { method: "POST" });
     await loadApprovals();
     renderDetail();
-    setMessage("Approval accepted.");
+    setMessage("审批已通过。");
   } catch (error) {
     setMessage(error.message, true);
   }
 }
 
 async function denyApproval(approvalId) {
-  const reason = window.prompt("Reason for denial");
+  const reason = window.prompt("请输入拒绝原因");
   if (!reason || !reason.trim()) {
     return;
   }
@@ -1442,7 +1425,7 @@ async function denyApproval(approvalId) {
     });
     await loadApprovals();
     renderDetail();
-    setMessage("Approval denied.");
+    setMessage("审批已拒绝。");
   } catch (error) {
     setMessage(error.message, true);
   }
@@ -1451,14 +1434,14 @@ async function denyApproval(approvalId) {
 async function resumeRun(runId = null) {
   const id = runId || (state.currentRun && state.currentRun.id);
   if (!id) {
-    setMessage("No run is available to resume.", true);
+    setMessage("当前没有可恢复的运行。", true);
     return;
   }
   try {
     const payload = await apiJson(`/api/runs/${id}/resume`, { method: "POST" });
     state.currentRun = payload.run;
     pollRun(state.currentRun.id);
-    setMessage("Run resumed.");
+    setMessage("运行已恢复。");
   } catch (error) {
     setMessage(error.message, true);
   }
@@ -1477,7 +1460,7 @@ async function loadSettings() {
   }
   setText(
     "settings-api-state",
-    state.settings.api_key_configured ? "API key: configured" : "API key: not configured",
+    state.settings.api_key_configured ? "API Key：已配置" : "API Key：未配置",
   );
 }
 
@@ -1499,7 +1482,7 @@ async function updateSettings(event) {
     state.settings = payload.settings;
     await loadSettings();
     renderDetail();
-    setMessage("Settings saved.");
+    setMessage("设置已保存。");
   } catch (error) {
     setMessage(error.message, true);
   }
@@ -1510,7 +1493,7 @@ async function saveApiKey(event) {
   const apiKeyInput = byId("api-key-input");
   const apiKey = apiKeyInput ? apiKeyInput.value : "";
   if (!apiKey.trim()) {
-    setMessage("Enter an API key first.", true);
+    setMessage("请先输入 API Key。", true);
     return;
   }
   try {
@@ -1524,7 +1507,7 @@ async function saveApiKey(event) {
     }
     await loadSettings();
     renderDetail();
-    setMessage("API key stored.");
+    setMessage("API Key 已保存。");
   } catch (error) {
     setMessage(error.message, true);
   }
@@ -1536,7 +1519,7 @@ async function clearApiKey() {
     state.settings = payload.settings;
     await loadSettings();
     renderDetail();
-    setMessage("API key cleared.");
+    setMessage("API Key 已清除。");
   } catch (error) {
     setMessage(error.message, true);
   }
@@ -1564,6 +1547,7 @@ window.SpecGateWeb = {
   clearAuthForm,
   renderWorkspaceView,
   openProjectMenu,
+  openSidebarHelpMenu,
   readProjectFile,
   escapeHtml,
 };

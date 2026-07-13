@@ -11,6 +11,10 @@
   --danger: #9c2d24;
   --warning: #8a5d13;
   --shadow: 0 12px 34px rgba(31, 37, 34, 0.08);
+  --shell-chrome: #F4F2F5;
+  --shell-muted: #8C8D8E;
+  --shell-ink: #1D1F22;
+  --shell-hover: #EEEEEF;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -18,8 +22,13 @@
   box-sizing: border-box;
 }
 
+html,
 body {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
+}
+
+body {
   margin: 0;
   color: var(--ink);
   background: var(--bg);
@@ -67,7 +76,7 @@ button.ghost:hover {
 
 button.ghost,
 .icon-button {
-  color: var(--muted);
+  color: var(--shell-muted);
   border-color: transparent;
   background: transparent;
 }
@@ -97,6 +106,7 @@ label {
 
 .auth-view {
   min-height: 100vh;
+  overflow: auto;
   display: grid;
   place-items: center;
   padding: 2rem;
@@ -117,10 +127,11 @@ label {
 }
 
 .workspace-view {
-  min-height: 100vh;
+  height: 100vh;
   display: grid;
   grid-template-rows: 34px minmax(0, 1fr);
   background: var(--panel);
+  overflow: hidden;
 }
 
 .app-menu-bar {
@@ -130,9 +141,9 @@ label {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.8rem;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid transparent;
   padding: 0 0.75rem;
-  background: #f8f8f5;
+  background: var(--shell-chrome);
 }
 
 .window-controls,
@@ -151,9 +162,54 @@ label {
 }
 
 .window-controls .icon-button {
-  min-height: 1.75rem;
-  padding: 0.25rem 0.5rem;
-  font-size: 0.78rem;
+  min-width: 30px;
+  min-height: 28px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  color: var(--shell-muted);
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.window-controls .icon-button:hover {
+  color: var(--shell-ink);
+  background: var(--shell-hover);
+}
+
+.sidebar-toggle-button {
+  font-size: 0;
+}
+
+.sidebar-toggle-icon {
+  position: relative;
+  width: 18px;
+  height: 16px;
+  display: block;
+  border: 1.5px solid currentColor;
+  border-radius: 5px;
+}
+
+.sidebar-toggle-icon::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 6px;
+  width: 1.5px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+body.sidebar-collapsed .sidebar-toggle-icon::before {
+  top: 0;
+  bottom: 0;
+  border-radius: 0;
+}
+
+.history-button {
+  font-size: 1.25rem;
+  font-weight: 400;
 }
 
 .menu-bar {
@@ -169,13 +225,14 @@ label {
   min-height: 1.75rem;
   border-color: transparent;
   padding: 0.25rem 0.55rem;
-  color: var(--ink);
+  color: var(--shell-muted);
   background: transparent;
 }
 
 .menu-button:hover,
 .menu-button[aria-expanded="true"] {
-  background: var(--panel-soft);
+  color: var(--shell-ink);
+  background: var(--shell-hover);
 }
 
 .menu-popover {
@@ -259,8 +316,8 @@ kbd {
   gap: 0.7rem;
   border-right: 1px solid var(--line);
   padding: 0.8rem;
-  background: #f3f4f0;
-  overflow: auto;
+  background: var(--shell-chrome);
+  overflow: hidden;
 }
 
 .project-sidebar > button,
@@ -297,7 +354,76 @@ body.sidebar-peeking .project-sidebar {
   box-shadow: var(--shadow);
 }
 
-.sidebar-settings,
+.sidebar-settings {
+  margin-top: auto;
+  border-top: 1px solid var(--line);
+  padding-top: 0.8rem;
+}
+
+.sidebar-settings-row {
+  position: relative;
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.35rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.7rem;
+}
+
+.sidebar-settings-button {
+  min-width: 0;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.65rem;
+  border-color: transparent;
+  padding: 0.45rem 0.55rem;
+  color: var(--shell-ink);
+  background: transparent;
+  font-size: 1.15rem;
+  text-align: left;
+}
+
+.settings-gear {
+  width: 1.2rem;
+  display: inline-grid;
+  place-items: center;
+  color: var(--shell-ink);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.sidebar-help-button {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border-color: transparent;
+  border-radius: 8px;
+  padding: 0;
+  color: var(--shell-muted);
+  background: transparent;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.sidebar-settings-button:hover,
+.sidebar-help-button:hover,
+.sidebar-help-button[aria-expanded="true"] {
+  color: var(--shell-ink);
+  background: var(--shell-hover);
+}
+
+.sidebar-help-menu {
+  top: auto;
+  right: -12.1rem;
+  bottom: calc(100% + 0.45rem);
+  left: auto;
+  min-width: 9rem;
+}
+
 .settings-detail {
   margin-top: auto;
   border-top: 1px solid var(--line);
@@ -309,7 +435,7 @@ body.sidebar-peeking .project-sidebar {
   position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
-  background: var(--panel);
+  background: #fff;
   overflow: hidden;
 }
 
@@ -320,7 +446,7 @@ body.sidebar-peeking .project-sidebar {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid transparent;
   padding: 0.85rem 1.1rem;
 }
 
@@ -342,6 +468,8 @@ body.sidebar-peeking .project-sidebar {
 }
 
 .project-list {
+  flex: 1 1 auto;
+  min-height: 0;
   display: grid;
   gap: 0.45rem;
   overflow: auto;
@@ -380,7 +508,9 @@ body.sidebar-peeking .project-sidebar {
   min-height: 0;
   display: grid;
   justify-items: center;
-  overflow: auto;
+  background: #fff;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .shell-detail,
@@ -412,15 +542,15 @@ body.sidebar-peeking .project-sidebar {
 
 .message.user {
   align-self: flex-end;
-  color: #fff;
-  border-color: var(--accent);
-  background: var(--accent);
+  color: #1D1F22;
+  border-color: #F4F2F5;
+  background: #F4F2F5;
 }
 
 .composer {
-  border-top: 1px solid var(--line);
+  border-top: 1px solid transparent;
   padding: 0.85rem 1.1rem;
-  background: #fbfbf9;
+  background: #fff;
 }
 
 .composer-frame {
