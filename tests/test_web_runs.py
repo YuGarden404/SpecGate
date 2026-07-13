@@ -7,6 +7,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
+import specgate.web_runs as web_runs
 from specgate.run_storage import initialize_run_storage as initialize_run_storage_real
 from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
@@ -34,6 +35,160 @@ class WebRunsTests(unittest.TestCase):
             index_html=None,
         )
         return db_path, data_root, user, project
+
+    def test_recover_interrupted_initializations_removes_partial_and_complete_storage(self):
+        db_path, data_root, user, partial_project = self.make_context()
+        complete_project = create_manual_project(
+            db_path,
+            data_root,
+            user["id"],
+            name="Complete Site",
+            spec_text="# Spec\nBuild another page.",
+            checklist_text="- Ship HTML.",
+            index_html=None,
+        )
+        with closing(connect_db(db_path)) as conn:
+            partial_run_id = conn.execute(
+                """
+                insert into runs (project_id, user_id, status, prompt, created_at)
+                values (?, ?, 'initializing', 'Partial run', '2026-07-13T00:00:00Z')
+                """,
+                (partial_project["id"], user["id"]),
+            ).lastrowid
+            complete_run_id = conn.execute(
+                """
+                insert into runs (project_id, user_id, status, prompt, created_at)
+                values (?, ?, 'initializing', 'Complete run', '2026-07-13T00:00:00Z')
+                """,
+                (complete_project["id"], user["id"]),
+            ).lastrowid
+            conn.commit()
+
+        partial_paths = project_paths(data_root, user["id"], partial_project["id"])
+        partial_storage = web_run_paths(partial_paths, partial_run_id)
+        partial_storage.root.mkdir(parents=True)
+        (partial_storage.root / "partial.tmp").write_text("partial", encoding="utf-8")
+        complete_paths = project_paths(data_root, user["id"], complete_project["id"])
+        initialize_run_storage_real(complete_paths, complete_run_id)
+
+        web_runs.recover_interrupted_run_initializations(db_path, data_root)
+
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
+            self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
+        self.assertFalse(partial_storage.root.exists())
+        self.assertFalse(web_run_paths(complete_paths, complete_run_id).root.exists())
+        partial_run = create_run(
+            db_path,
+            partial_project["id"],
+            user["id"],
+            "Replacement partial run",
+            data_root=data_root,
+        )
+        complete_run = create_run(
+            db_path,
+            complete_project["id"],
+            user["id"],
+            "Replacement complete run",
+            data_root=data_root,
+        )
+        self.assertEqual((partial_run["status"], complete_run["status"]), ("queued", "queued"))
+
+    def test_recover_interrupted_initialization_marks_failed_when_storage_cleanup_fails(self):
+        db_path, data_root, user, project = self.make_context()
+        with closing(connect_db(db_path)) as conn:
+            run_id = conn.execute(
+                """
+                insert into runs (project_id, user_id, status, prompt, created_at)
+                values (?, ?, 'initializing', 'Interrupted run', '2026-07-13T00:00:00Z')
+                """,
+                (project["id"], user["id"]),
+            ).lastrowid
+            conn.commit()
+        paths = project_paths(data_root, user["id"], project["id"])
+        run_storage = web_run_paths(paths, run_id)
+        run_storage.root.mkdir(parents=True)
+        sentinel = run_storage.root / "sentinel.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+
+        with patch(
+            "specgate.web_runs.remove_run_storage",
+            side_effect=OSError("cleanup failed with secret sk-do-not-store"),
+        ):
+            web_runs.recover_interrupted_run_initializations(db_path, data_root)
+
+        with closing(connect_db(db_path)) as conn:
+            interrupted = conn.execute("select * from runs where id = ?", (run_id,)).fetchone()
+            self.assertEqual(interrupted["status"], "failed")
+            self.assertEqual(interrupted["trust_level"], "failed")
+            self.assertEqual(
+                interrupted["error_message"],
+                "Interrupted run initialization cleanup failed",
+            )
+            self.assertIsNotNone(interrupted["finished_at"])
+            self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+        replacement = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Replacement run",
+            data_root=data_root,
+        )
+        self.assertEqual(replacement["status"], "queued")
+
+    def test_recover_interrupted_initializations_leaves_other_active_statuses_unchanged(self):
+        db_path, data_root, user, queued_project = self.make_context()
+        running_project = create_manual_project(
+            db_path,
+            data_root,
+            user["id"],
+            name="Running Site",
+            spec_text="# Spec\nBuild a running page.",
+            checklist_text="- Ship HTML.",
+            index_html=None,
+        )
+        approval_project = create_manual_project(
+            db_path,
+            data_root,
+            user["id"],
+            name="Approval Site",
+            spec_text="# Spec\nBuild an approval page.",
+            checklist_text="- Ship HTML.",
+            index_html=None,
+        )
+        cases = (
+            (queued_project, "queued"),
+            (running_project, "running"),
+            (approval_project, "needs_approval"),
+        )
+        expected = []
+        with closing(connect_db(db_path)) as conn:
+            for project, status in cases:
+                run_id = conn.execute(
+                    """
+                    insert into runs (project_id, user_id, status, prompt, created_at)
+                    values (?, ?, ?, ?, '2026-07-13T00:00:00Z')
+                    """,
+                    (project["id"], user["id"], status, f"{status} run"),
+                ).lastrowid
+                expected.append((run_id, status))
+            conn.commit()
+        sentinels = []
+        for (project, _status), (run_id, _expected_status) in zip(cases, expected):
+            run_storage = web_run_paths(project_paths(data_root, user["id"], project["id"]), run_id)
+            run_storage.root.mkdir(parents=True)
+            sentinel = run_storage.root / "sentinel.txt"
+            sentinel.write_text("keep", encoding="utf-8")
+            sentinels.append(sentinel)
+
+        web_runs.recover_interrupted_run_initializations(db_path, data_root)
+
+        with closing(connect_db(db_path)) as conn:
+            actual = conn.execute("select id, status from runs order by id").fetchall()
+            self.assertEqual([(row["id"], row["status"]) for row in actual], expected)
+            self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
+        self.assertTrue(all(path.read_text(encoding="utf-8") == "keep" for path in sentinels))
 
     def test_create_run_records_queued_status_and_user_message(self):
         db_path, data_root, user, project = self.make_context()

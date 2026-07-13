@@ -365,6 +365,16 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(app.state.db_path, override / "web.sqlite3")
             self.assertEqual(app.state.api_key_encryption_secret, "server-secret")
 
+    def test_create_app_recovers_interrupted_run_initializations_after_database_setup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data_root = base / "data"
+            db_path = base / "web.sqlite3"
+            with patch("specgate.web_app.recover_interrupted_run_initializations") as recover:
+                app = create_app(data_root=data_root, db_path=db_path)
+
+        recover.assert_called_once_with(app.state.db_path, app.state.data_root)
+
     def test_upload_rejects_files_over_limit(self):
         client, _app = self.make_client()
         self.register(client)

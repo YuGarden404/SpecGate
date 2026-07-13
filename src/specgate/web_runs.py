@@ -21,11 +21,37 @@ from specgate.web_settings import get_settings
 
 
 ACTIVE_RUN_CONFLICT_MESSAGE = "该项目已有进行中的运行 / This project already has an active run"
+INTERRUPTED_RUN_INITIALIZATION_ERROR = "Interrupted run initialization cleanup failed"
 
 
 class ActiveRunConflict(ValueError):
     def __init__(self) -> None:
         super().__init__(ACTIVE_RUN_CONFLICT_MESSAGE)
+
+
+def recover_interrupted_run_initializations(db_path: Path, data_root: Path) -> None:
+    conn = connect_db(db_path)
+    try:
+        interrupted_runs = conn.execute(
+            """
+            select id, project_id, user_id
+            from runs
+            where status = 'initializing'
+            order by id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    for run in interrupted_runs:
+        paths = project_paths(data_root, int(run["user_id"]), int(run["project_id"]))
+        run_id = int(run["id"])
+        try:
+            remove_run_storage(paths, run_id)
+        except Exception:
+            _mark_interrupted_initialization_failed(db_path, run_id)
+        else:
+            _delete_initializing_run(db_path, run_id)
 
 
 def create_run(
@@ -183,6 +209,26 @@ def _delete_initializing_run(db_path: Path, run_id: int) -> None:
     try:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("delete from runs where id = ? and status = 'initializing'", (run_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _mark_interrupted_initialization_failed(db_path: Path, run_id: int) -> None:
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            update runs
+            set status = 'failed', trust_level = 'failed', error_message = ?, finished_at = ?
+            where id = ? and status = 'initializing'
+            """,
+            (INTERRUPTED_RUN_INITIALIZATION_ERROR, utc_now().isoformat(), run_id),
+        )
         conn.commit()
     except Exception:
         conn.rollback()

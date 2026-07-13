@@ -22,7 +22,14 @@ from specgate.web_auth import (
 from specgate.web_db import connect_db, init_db
 from specgate.web_debug import build_run_debug
 from specgate.web_projects import create_manual_project, create_project_from_zip, project_paths
-from specgate.web_runs import ActiveRunConflict, create_run, get_run, resume_run_once, start_run_background
+from specgate.web_runs import (
+    ActiveRunConflict,
+    create_run,
+    get_run,
+    recover_interrupted_run_initializations,
+    resume_run_once,
+    start_run_background,
+)
 from specgate.web_settings import clear_api_key, get_settings, update_settings, upsert_api_key
 
 
@@ -83,6 +90,7 @@ def create_app(
     )
     resolved_data_root.mkdir(parents=True, exist_ok=True)
     init_db(resolved_db_path)
+    recover_interrupted_run_initializations(resolved_db_path, resolved_data_root)
     resolved_secure_cookies = (
         os.environ.get("SPECGATE_WEB_SECURE_COOKIES") == "1"
         if secure_cookies is None
