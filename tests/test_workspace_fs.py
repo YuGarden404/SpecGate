@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import io
 import os
@@ -1070,6 +1071,55 @@ class WorkspaceScanAndCopyTests(unittest.TestCase):
                 expected,
             ) as actual:
                 self.assertEqual(actual, expected)
+
+    @unittest.skipUnless(os.name == "nt", "Windows directory handle sharing policy")
+    def test_windows_directory_lock_fails_closed_without_delete_sharing_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            invalid_handle = ctypes.c_void_p(-1).value
+
+            with mock.patch.object(
+                ctypes.windll.kernel32,
+                "CreateFileW",
+                return_value=invalid_handle,
+            ) as create_file:
+                with self.assertRaises(WorkspacePathError) as raised:
+                    with workspace_fs._open_windows_directory_lock(
+                        root,
+                        root.resolve(),
+                        workspace_fs._stat_identity(root.lstat()),
+                    ):
+                        pass
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            create_file.assert_called_once()
+            share_flags = create_file.call_args.args[2]
+            self.assertEqual(share_flags & 0x00000004, 0)
+
+    @unittest.skipUnless(os.name == "nt", "Windows sharing failure side effects")
+    def test_windows_directory_lock_sharing_failure_creates_no_file(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            sentinel = Path(outside) / "sentinel.txt"
+            sentinel.write_text("external sentinel", encoding="utf-8")
+            invalid_handle = ctypes.c_void_p(-1).value
+
+            with mock.patch.object(
+                ctypes.windll.kernel32,
+                "CreateFileW",
+                return_value=invalid_handle,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    write_workspace_stream(
+                        root,
+                        "nested/data.bin",
+                        io.BytesIO(b"content"),
+                        max_bytes=7,
+                    )
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertFalse((root / "nested").exists())
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
 
     def test_publishes_workspace_bytes_atomically(self):
         with tempfile.TemporaryDirectory() as tmp:

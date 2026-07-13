@@ -175,20 +175,20 @@ def create_project_from_zip(
         plan = _preflight_archive(archive)
         _verify_archive_contents(archive, plan.members)
 
-        conn = connect_db(db_path)
+        conn: sqlite3.Connection | None = None
         paths: ProjectPaths | None = None
         staging_paths: ProjectPaths | None = None
         staging_binding: WorkspaceTreeBinding | None = None
         staging_identity: tuple[int, int] | None = None
         published_identity: tuple[int, int] | None = None
         try:
-            project_id = _insert_project(conn, user_id, project_name, "zip")
-            paths = project_paths(data_root, user_id, project_id)
-            paths.root.parent.mkdir(parents=True, exist_ok=True)
+            projects_relative = f"users/{user_id}/projects"
+            ensure_workspace_directory(data_root, projects_relative)
+            projects_root = data_root.joinpath(*projects_relative.split("/"))
             staging_root = Path(
                 tempfile.mkdtemp(
-                    prefix=f".{project_id}.specgate-upload-",
-                    dir=paths.root.parent,
+                    prefix=f".specgate-upload-{secrets.token_hex(16)}-",
+                    dir=projects_root,
                 )
             )
             staging_binding = bind_workspace_tree(staging_root)
@@ -223,6 +223,10 @@ def create_project_from_zip(
             )
             verify_workspace_tree_binding(staging_binding)
 
+            conn = connect_db(db_path)
+            conn.execute("BEGIN IMMEDIATE")
+            project_id = _insert_project(conn, user_id, project_name, "zip")
+            paths = project_paths(data_root, user_id, project_id)
             published = rename_workspace_tree_noreplace(staging_binding, paths.root)
             published_identity = published.identity
             staging_paths = None
@@ -230,7 +234,8 @@ def create_project_from_zip(
             conn.commit()
             return row
         except Exception as project_error:
-            conn.rollback()
+            if conn is not None:
+                conn.rollback()
             cleanup_errors: list[Exception] = []
             cleanup_targets: list[tuple[Path, tuple[int, int] | None]] = []
             if staging_paths is not None:
@@ -247,7 +252,8 @@ def create_project_from_zip(
                 raise project_error from cleanup_errors[0]
             raise
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
 
 def package_result_zip(source: Path, zip_path: Path | None = None) -> Path:

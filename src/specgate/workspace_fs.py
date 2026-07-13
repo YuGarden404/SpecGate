@@ -1743,7 +1743,6 @@ def _open_windows_directory_lock(
 
     file_share_read = 0x00000001
     file_share_write = 0x00000002
-    file_share_delete = 0x00000004
     open_existing = 3
     file_flag_backup_semantics = 0x02000000
     file_flag_open_reparse_point = 0x00200000
@@ -1757,39 +1756,10 @@ def _open_windows_directory_lock(
         None,
     )
     if handle == ctypes.c_void_p(-1).value:
-        handle = create_file(
-            str(path),
-            0,
-            file_share_read | file_share_write | file_share_delete,
-            None,
-            open_existing,
-            file_flag_backup_semantics,
-            None,
+        raise WorkspacePathError(
+            "Windows directory handle could not be opened safely",
+            "path_race",
         )
-        if handle == ctypes.c_void_p(-1).value:
-            fallback_stat = path.lstat()
-            _reject_link_like(path)
-            if not stat.S_ISDIR(fallback_stat.st_mode):
-                raise WorkspacePathError(
-                    "workspace scan path is not a directory",
-                    "unsafe_file_type",
-                )
-            fallback_identity = _stat_identity(fallback_stat)
-            if fallback_identity != expected_identity:
-                raise WorkspacePathError(
-                    "workspace directory identity changed during scan",
-                    "path_race",
-                )
-            if ntpath.normcase(ntpath.normpath(str(path))) != ntpath.normcase(
-                ntpath.normpath(str(expected))
-            ):
-                raise WorkspacePathError(
-                    "workspace directory changed location during scan",
-                    "path_race",
-                )
-            yield fallback_identity
-            _verify_tree_identity(path, expected_identity)
-            return
 
     try:
         information = ByHandleFileInformation()

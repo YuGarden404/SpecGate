@@ -2,9 +2,11 @@ import io
 import sqlite3
 import stat
 import tempfile
+import threading
 import unittest
 import warnings
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 from unittest import mock
@@ -29,6 +31,7 @@ class WebProjectsTests(unittest.TestCase):
         base = Path(tmp.name)
         db_path = base / "web.sqlite3"
         data_root = base / "data"
+        data_root.mkdir()
         init_db(db_path)
         user = create_user(db_path, "alice", "correct-password")
         return db_path, data_root, user
@@ -142,10 +145,10 @@ class WebProjectsTests(unittest.TestCase):
         paths = project_paths(data_root, user["id"], project["id"])
         self.assertTrue((paths.original / "empty" / "nested").is_dir())
         self.assertTrue((paths.workspace / "empty" / "nested").is_dir())
-        self.assertEqual(safe_directory.call_count, 4)
+        self.assertEqual(safe_directory.call_count, 5)
         self.assertEqual(
             [call.args[1] for call in safe_directory.call_args_list],
-            ["original", "artifacts", "runs", "empty/nested"],
+            ["users/1/projects", "original", "artifacts", "runs", "empty/nested"],
         )
 
     def test_create_project_from_zip_extracts_once_then_uses_safe_workspace_copy(self):
@@ -184,6 +187,74 @@ class WebProjectsTests(unittest.TestCase):
         self.assertEqual(copied_destination.name, "workspace")
         self.assertEqual(copied_source.parent, copied_destination.parent)
         self.assertEqual((paths.workspace / "site" / "index.html").read_text(encoding="utf-8"), "index")
+
+    def test_zip_file_preparation_does_not_hold_project_database_write_transaction(self):
+        db_path, data_root, user = self.make_context()
+        zip_content = self.zip_bytes({"SPEC.md": "Spec", "CHECKLIST.md": "Checklist"})
+        entered_extract = threading.Event()
+        release_extract = threading.Event()
+        real_extract = web_projects._extract_archive
+
+        def slow_extract(*args, **kwargs):
+            entered_extract.set()
+            if not release_extract.wait(timeout=5):
+                raise AssertionError("test did not release archive extraction")
+            return real_extract(*args, **kwargs)
+
+        with mock.patch.object(web_projects, "_extract_archive", side_effect=slow_extract):
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    create_project_from_zip,
+                    db_path,
+                    data_root,
+                    user["id"],
+                    "Slow upload",
+                    zip_content,
+                )
+                self.assertTrue(entered_extract.wait(timeout=2))
+                try:
+                    concurrent = sqlite3.connect(db_path, timeout=0.1)
+                    try:
+                        concurrent.execute(
+                            """
+                            insert into projects (
+                              user_id, name, create_mode, root_path, created_at, updated_at
+                            ) values (?, ?, ?, ?, ?, ?)
+                            """,
+                            (user["id"], "Concurrent", "manual", "", "now", "now"),
+                        )
+                        concurrent.commit()
+                    finally:
+                        concurrent.close()
+                finally:
+                    release_extract.set()
+                project = future.result(timeout=5)
+
+        self.assertEqual(project["id"], 2)
+        self.assertEqual(project["root_path"], str(project_paths(data_root, user["id"], 2).root))
+
+    def test_zip_staging_parent_is_created_safely_relative_to_data_root(self):
+        db_path, data_root, user = self.make_context()
+        zip_content = self.zip_bytes({"SPEC.md": "Spec", "CHECKLIST.md": "Checklist"})
+        real_ensure = workspace_fs.ensure_workspace_directory
+
+        with mock.patch.object(
+            web_projects,
+            "ensure_workspace_directory",
+            wraps=real_ensure,
+        ) as ensure_directory:
+            create_project_from_zip(
+                db_path,
+                data_root,
+                user["id"],
+                "Safe parent",
+                zip_content,
+            )
+
+        self.assertIn(
+            mock.call(data_root, f"users/{user['id']}/projects"),
+            ensure_directory.call_args_list,
+        )
 
     def test_staging_replacement_during_extraction_stops_before_next_write(self):
         db_path, data_root, user = self.make_context()
@@ -226,7 +297,6 @@ class WebProjectsTests(unittest.TestCase):
         db_path, data_root, user = self.make_context()
         base = data_root.parent
         replacement = base / "replacement"
-        displaced = base / "displaced-staging"
         replacement.mkdir()
         sentinel = replacement / "sentinel.txt"
         sentinel.write_text("external sentinel", encoding="utf-8")
@@ -238,7 +308,9 @@ class WebProjectsTests(unittest.TestCase):
             nonlocal staging_root
             real_normalize(original, workspace, spec_path, checklist_path)
             staging_root = Path(original).parent
-            staging_root.rename(displaced)
+            safe_displaced = staging_root.parent / ".displaced-staging"
+            binding = workspace_fs.bind_workspace_tree(staging_root)
+            workspace_fs.rename_workspace_tree_noreplace(binding, safe_displaced)
             replacement.rename(staging_root)
 
         with mock.patch.object(
