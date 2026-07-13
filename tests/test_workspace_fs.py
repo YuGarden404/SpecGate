@@ -187,6 +187,21 @@ class WorkspaceFileIOTests(unittest.TestCase):
 
             self.assertEqual(raised.exception.rule_family, "unsafe_file_type")
 
+    def test_open_permission_error_uses_stable_path_race_family(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a.txt").write_text("content", encoding="utf-8")
+
+            with mock.patch.object(
+                workspace_fs if os.name == "nt" else os,
+                "_open_windows_fd" if os.name == "nt" else "open",
+                side_effect=PermissionError("denied"),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    read_workspace_bytes(root, "a.txt")
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+
     def test_rejects_mocked_reparse_parent_before_missing_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -363,20 +378,98 @@ class WorkspaceScanAndCopyTests(unittest.TestCase):
             self.assertEqual((destination / "data.bin").read_bytes(), b"\x00\xff")
             self.assertTrue((destination / "empty").is_dir())
 
-    def test_iter_rejects_mocked_reparse_entry(self):
+    def test_copy_failure_removes_destination_and_partial_files(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            entry = root / "entry.txt"
-            entry.write_text("content", encoding="utf-8")
-            real_is_link_like = workspace_fs.is_link_like
+            base = Path(tmp)
+            source = base / "source"
+            destination = base / "destination"
+            source.mkdir()
+            (source / "a.txt").write_text("a", encoding="utf-8")
+            (source / "b.txt").write_text("b", encoding="utf-8")
+            real_write = workspace_fs.write_workspace_bytes
+            writes = 0
 
-            def mocked_is_link_like(path):
-                return Path(path) == entry or real_is_link_like(path)
+            def fail_second_write(root, relative, content):
+                nonlocal writes
+                writes += 1
+                if writes == 2:
+                    raise OSError("copy interrupted")
+                real_write(root, relative, content)
 
             with mock.patch.object(
                 workspace_fs,
-                "is_link_like",
-                side_effect=mocked_is_link_like,
+                "write_workspace_bytes",
+                side_effect=fail_second_write,
+            ):
+                with self.assertRaises(OSError):
+                    copy_workspace_tree(source, destination)
+
+            self.assertFalse(destination.exists())
+
+    def test_iter_does_not_accept_entries_from_replaced_ancestor(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            nested = root / "nested"
+            nested.mkdir()
+            (nested / "inside.txt").write_text("inside", encoding="utf-8")
+            external = Path(outside)
+            (external / "sentinel.txt").write_text("external sentinel", encoding="utf-8")
+            real_scandir = os.scandir
+
+            def redirect_nested_scan(path):
+                if not isinstance(path, int) and Path(path) == nested:
+                    return real_scandir(external)
+                return real_scandir(path)
+
+            with mock.patch.object(os, "scandir", side_effect=redirect_nested_scan):
+                try:
+                    files = list(iter_workspace_files(root))
+                except WorkspacePathError as exc:
+                    self.assertEqual(exc.rule_family, "path_race")
+                else:
+                    self.assertEqual(files, ["nested/inside.txt"])
+
+    def test_iter_permission_error_uses_stable_path_race_family(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            with mock.patch.object(os, "scandir", side_effect=PermissionError("denied")):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    list(iter_workspace_files(root))
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+
+    def test_iter_rejects_mocked_reparse_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+
+            class FakeEntry:
+                name = "entry.txt"
+
+                def stat(self, *, follow_symlinks=True):
+                    if follow_symlinks:
+                        raise AssertionError("scan followed a reparse entry")
+                    return types.SimpleNamespace(
+                        st_mode=stat.S_IFREG,
+                        st_file_attributes=reparse_flag,
+                    )
+
+            class FakeScandir:
+                def __enter__(self):
+                    return iter([FakeEntry()])
+
+                def __exit__(self, *_args):
+                    return None
+
+            with (
+                mock.patch.object(
+                    stat,
+                    "FILE_ATTRIBUTE_REPARSE_POINT",
+                    reparse_flag,
+                    create=True,
+                ),
+                mock.patch.object(os, "scandir", return_value=FakeScandir()),
             ):
                 with self.assertRaises(WorkspacePathError) as raised:
                     list(iter_workspace_files(root))
