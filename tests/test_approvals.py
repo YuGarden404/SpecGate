@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from specgate import approvals as approvals_module
 from specgate.actions import Action
 from specgate.approvals import (
     ApprovalQueue,
@@ -24,6 +25,26 @@ class ApprovalTests(unittest.TestCase):
             link.symlink_to(target, target_is_directory=directory)
         except OSError as exc:
             self.skipTest(f"symlink creation unavailable: {exc}")
+
+    def test_read_existing_queue_fails_when_final_file_is_missing(self):
+        self.assertTrue(hasattr(approvals_module, "read_existing_approval_queue"))
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+
+            with self.assertRaises(WorkspacePathError):
+                approvals_module.read_existing_approval_queue(queue_path)
+
+    def test_read_queue_if_present_safely_handles_missing_parent(self):
+        self.assertTrue(hasattr(approvals_module, "read_approval_queue_if_present"))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            queue = approvals_module.read_approval_queue_if_present(
+                root,
+                root / "runs" / "latest" / "pending_approvals.json",
+            )
+
+            self.assertIsNone(queue)
 
     def test_allowed_write_to_normal_artifact_is_safe(self):
         policy = WorkspacePolicy(Path("."), {"write_file"}, set(), {"index.html"})

@@ -4,12 +4,13 @@ import json
 from html import escape
 from pathlib import Path
 
-from specgate.approvals import ApprovalQueue, approval_queue_path
+from specgate.approvals import approval_queue_path, read_approval_queue_if_present
 from specgate.gate import GateResult
 from specgate.memory import load_memory_summary
 from specgate.metrics import PermissionDecision, RunMetrics, TrustSummary
 from specgate.tool_registry import default_tool_registry
 from specgate.trace import redact
+from specgate.workspace_fs import WorkspacePathError
 
 
 def _render_trust_summary(trust: TrustSummary | None, profile: str = "strict") -> str:
@@ -79,14 +80,19 @@ def _safe_text(value: object) -> str:
 
 def _render_approval_history(root: Path) -> str:
     try:
-        queue = ApprovalQueue.read(approval_queue_path(root))
+        queue = read_approval_queue_if_present(root, approval_queue_path(root))
+    except WorkspacePathError as exc:
+        return (
+            "<h2>Approval History</h2>"
+            f"<p>could not read approval history safely: {escape(exc.rule_family)}</p>"
+        )
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         return (
             "<h2>Approval History</h2>"
             f"<p>could not read approval history: {escape(str(redact(str(exc))))}</p>"
         )
 
-    if not queue.approvals:
+    if queue is None or not queue.approvals:
         return "<h2>Approval History</h2><p>No approvals recorded.</p>"
 
     rows = "\n".join(

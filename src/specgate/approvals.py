@@ -114,31 +114,12 @@ class ApprovalQueue:
 
     @classmethod
     def read(cls, path: Path) -> "ApprovalQueue":
-        root, relative_path = _approval_queue_location(path)
         try:
-            content = workspace_fs.read_workspace_text(
-                root,
-                relative_path,
-                encoding="utf-8-sig",
-            )
+            return read_existing_approval_queue(path)
         except workspace_fs.WorkspacePathError as exc:
             if _is_missing_queue_file(exc, path):
                 return cls()
             raise
-
-        payload = json.loads(content)
-        if not isinstance(payload, dict):
-            raise ValueError("pending approvals payload must be an object")
-
-        raw_approvals = payload.get("approvals", [])
-        if not isinstance(raw_approvals, list):
-            raise ValueError("pending approvals must be a list")
-
-        if not all(isinstance(approval, dict) for approval in raw_approvals):
-            raise ValueError("pending approval entries must be objects")
-
-        approvals = [_parse_pending_approval(approval) for approval in raw_approvals]
-        return cls(approvals)
 
     def append(self, approval: PendingApproval) -> "ApprovalQueue":
         return ApprovalQueue([*self.approvals, approval])
@@ -243,6 +224,66 @@ def _is_missing_queue_file(
         return False
     _, expected_relative = _approval_queue_location(path)
     return error.missing_path == expected_relative
+
+
+def read_existing_approval_queue(path: Path) -> ApprovalQueue:
+    root, relative_path = _approval_queue_location(path)
+    content = workspace_fs.read_workspace_text(
+        root,
+        relative_path,
+        encoding="utf-8-sig",
+    )
+    return _parse_approval_queue_content(content)
+
+
+def read_approval_queue_if_present(
+    workspace_root: Path,
+    path: Path,
+) -> ApprovalQueue | None:
+    root = Path(os.path.abspath(workspace_root))
+    absolute_path = Path(os.path.abspath(path))
+    try:
+        relative_path = workspace_fs.normalize_workspace_relative(
+            absolute_path.relative_to(root).as_posix()
+        )
+    except ValueError as exc:
+        raise workspace_fs.WorkspacePathError(
+            "approval queue is outside the workspace",
+            "invalid_path",
+        ) from exc
+
+    scan = workspace_fs.scan_workspace_files(root)
+    for rejection in scan.rejections:
+        if relative_path == rejection.path or relative_path.startswith(f"{rejection.path}/"):
+            if rejection.rule_family == "path_race":
+                state = workspace_fs.workspace_file_state(root, relative_path)
+                if not state.exists:
+                    return None
+                return read_existing_approval_queue(absolute_path)
+            raise workspace_fs.WorkspacePathError(
+                "approval queue path could not be inspected safely",
+                rejection.rule_family,
+            )
+
+    if relative_path not in scan.files:
+        return None
+    return read_existing_approval_queue(absolute_path)
+
+
+def _parse_approval_queue_content(content: str) -> ApprovalQueue:
+    payload = json.loads(content)
+    if not isinstance(payload, dict):
+        raise ValueError("pending approvals payload must be an object")
+
+    raw_approvals = payload.get("approvals", [])
+    if not isinstance(raw_approvals, list):
+        raise ValueError("pending approvals must be a list")
+
+    if not all(isinstance(approval, dict) for approval in raw_approvals):
+        raise ValueError("pending approval entries must be objects")
+
+    approvals = [_parse_pending_approval(approval) for approval in raw_approvals]
+    return ApprovalQueue(approvals)
 
 
 def _parse_pending_approval(approval: dict[str, Any]) -> PendingApproval:

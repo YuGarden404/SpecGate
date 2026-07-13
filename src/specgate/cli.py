@@ -6,7 +6,12 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from specgate.approvals import ApprovalQueue, GovernanceConfig, approval_queue_path
+from specgate.approvals import (
+    GovernanceConfig,
+    approval_queue_path,
+    read_approval_queue_if_present,
+    read_existing_approval_queue,
+)
 from specgate.benchmark import summarize_benchmark
 from specgate.config import WorkspaceConfig, load_workspace_config
 from specgate.context import VALID_CONTEXT_STRATEGIES
@@ -18,6 +23,7 @@ from specgate.policy import WorkspacePolicy
 from specgate.report import generate_report
 from specgate.runner import AgentRunner
 from specgate.trace import redact
+from specgate.workspace_fs import WorkspacePathError
 
 
 GOVERNANCE_PROFILES = ("strict", "demo", "review")
@@ -409,9 +415,9 @@ def _load_workspace_settings(root: Path) -> WorkspaceConfig:
 
 def list_approvals(root: Path) -> int:
     try:
-        queue = ApprovalQueue.read(approval_queue_path(root))
+        queue = read_approval_queue_if_present(root, approval_queue_path(root))
 
-        if not queue.approvals:
+        if queue is None or not queue.approvals:
             print("no pending approvals")
             return 0
 
@@ -450,6 +456,9 @@ def list_approvals(root: Path) -> int:
         print("id\tstatus\taction\tpath\treason\tdecision_reason")
         for row in rows:
             print(row)
+    except WorkspacePathError as exc:
+        print(f"could not read pending approvals safely: {exc.rule_family}")
+        return 1
     except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
         print("could not read pending approvals: malformed queue")
         return 1
@@ -463,7 +472,7 @@ def _utc_now() -> str:
 def update_approval(root: Path, approval_id: str, decision: str, reason: str | None = None) -> int:
     try:
         queue_path = approval_queue_path(root)
-        queue = ApprovalQueue.read(queue_path)
+        queue = read_existing_approval_queue(queue_path)
         if decision == "approve":
             updated = queue.approve(approval_id, decided_at=_utc_now())
             message = f"approved {approval_id}"

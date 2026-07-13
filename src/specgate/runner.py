@@ -14,6 +14,7 @@ from specgate.approvals import (
     capture_target_state,
     classify_action_risk,
     preview_args,
+    read_existing_approval_queue,
     target_state_matches,
 )
 from specgate.context import build_context_pack_with_metadata, build_role_context_pack_with_metadata
@@ -102,9 +103,7 @@ class AgentRunner:
                 path.unlink()
 
     def _reset_approval_queue(self) -> None:
-        queue_path = self.approval_queue_file
-        if queue_path.exists():
-            queue_path.unlink()
+        ApprovalQueue().write(self.approval_queue_file)
 
     def _run_gate_with_feedback(
         self,
@@ -360,7 +359,7 @@ class AgentRunner:
         risk = classify_action_risk(action, self.policy, self.governance_config)
         queue_path = self.approval_queue_file
         if risk.level == "review" and self.governance_profile == "review":
-            queue = ApprovalQueue.read(queue_path)
+            queue = read_existing_approval_queue(queue_path)
             approval = PendingApproval(
                 id=_unique_approval_id(queue, step),
                 step=step,
@@ -692,7 +691,7 @@ class AgentRunner:
             action_path = action_path_value if isinstance(action_path_value, str) else None
             risk = classify_action_risk(action, self.policy, self.governance_config)
             if risk.level == "review" and self.governance_profile == "review":
-                queue = ApprovalQueue.read(queue_path)
+                queue = read_existing_approval_queue(queue_path)
                 approval = PendingApproval(
                     id=_unique_approval_id(queue, step),
                     step=step,
@@ -807,7 +806,7 @@ class AgentRunner:
 
     def resume_from_approval(self) -> RunResult:
         queue_path = self.approval_queue_file
-        queue = ApprovalQueue.read(queue_path)
+        queue = read_existing_approval_queue(queue_path)
         approval = queue.next_resume_candidate()
         if approval is None:
             raise ValueError("no approved or denied approval to resume")
@@ -836,7 +835,7 @@ class AgentRunner:
             redacted_event = redact(event)
             runtime_feedback.append(redacted_event)
             self.trace.append("approval_denied", redacted_event)
-            ApprovalQueue.read(queue_path).resolve(
+            read_existing_approval_queue(queue_path).resolve(
                 approval.id,
                 "rejected",
                 resolved_at=_utc_now_for_runner(),
@@ -883,7 +882,7 @@ class AgentRunner:
             redacted_event = redact(event)
             runtime_feedback.append(redacted_event)
             self.trace.append("approval_failed", redacted_event)
-            ApprovalQueue.read(queue_path).resolve(
+            read_existing_approval_queue(queue_path).resolve(
                 approval.id,
                 "failed",
                 resolved_at=_utc_now_for_runner(),
@@ -933,7 +932,7 @@ class AgentRunner:
             redacted_event = redact(event)
             runtime_feedback.append(redacted_event)
             self.trace.append("approval_failed", redacted_event)
-            ApprovalQueue.read(queue_path).resolve(
+            read_existing_approval_queue(queue_path).resolve(
                 approval.id,
                 "failed",
                 resolved_at=_utc_now_for_runner(),
@@ -991,7 +990,7 @@ class AgentRunner:
         redacted_event = redact(event)
         runtime_feedback.append(redacted_event)
         self.trace.append(event_type, redacted_event)
-        ApprovalQueue.read(queue_path).resolve(
+        read_existing_approval_queue(queue_path).resolve(
             approval.id,
             status,
             resolved_at=_utc_now_for_runner(),

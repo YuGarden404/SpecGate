@@ -10,6 +10,7 @@ from specgate.policy import WorkspacePolicy
 from specgate.runner import AgentRunner
 from specgate.approvals import ActionRisk, ApprovalQueue, GovernanceConfig, PendingApproval, approval_queue_path
 from specgate.tools import ToolResult
+from specgate.workspace_fs import WorkspacePathError
 
 
 BROKEN_HTML = "<html><head><title>x</title></head><body></body></html>"
@@ -90,6 +91,57 @@ class ApprovalFeedbackLLM:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_new_run_writes_empty_queue_at_custom_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            queue_file = Path(tmp) / "custom" / "approvals" / "queue.json"
+            root.mkdir()
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            policy = WorkspacePolicy(root, {"finish"}, {"TASK_SPEC.md", "CHECKLIST.md"}, set())
+
+            AgentRunner(
+                root,
+                MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}]),
+                policy,
+                max_steps=1,
+                approval_queue_file=queue_file,
+            ).run()
+
+            self.assertTrue(queue_file.is_file())
+            self.assertEqual(ApprovalQueue.read(queue_file), ApprovalQueue())
+
+    def test_new_run_replaces_stale_queue_with_explicit_empty_queue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            queue_path = approval_queue_path(root)
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="stale-approval",
+                        step=1,
+                        action="finish",
+                        path=None,
+                        risk_level="review",
+                        reason="stale",
+                        profile="review",
+                    )
+                ]
+            ).write(queue_path)
+            policy = WorkspacePolicy(root, {"finish"}, {"TASK_SPEC.md", "CHECKLIST.md"}, set())
+
+            AgentRunner(
+                root,
+                MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}]),
+                policy,
+                max_steps=1,
+            ).run()
+
+            self.assertTrue(queue_path.is_file())
+            self.assertEqual(ApprovalQueue.read(queue_path), ApprovalQueue())
+
     def test_runner_uses_explicit_audit_and_approval_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
@@ -160,6 +212,40 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual((audit_dir / "trace.jsonl").read_bytes(), trace_bytes)
             for name in ("retrieval.json", "compression.json", "isolation.json"):
                 self.assertEqual((audit_dir / name).read_bytes(), f"existing-{name}".encode())
+
+    def test_resume_fails_closed_when_queue_file_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            queue_path = approval_queue_path(root)
+            queue_path.parent.mkdir(parents=True)
+            policy = WorkspacePolicy(root, {"finish"}, {"TASK_SPEC.md"}, set())
+            runner = AgentRunner(root, MockLLM([]), policy, reset_audit=False)
+
+            with self.assertRaises(WorkspacePathError):
+                runner.resume_from_approval()
+
+    def test_resume_fails_closed_when_queue_disappears_during_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            queue_path = approval_queue_path(root)
+            queue_path.parent.mkdir(parents=True)
+            policy = WorkspacePolicy(root, {"finish"}, {"TASK_SPEC.md"}, set())
+            runner = AgentRunner(root, MockLLM([]), policy, reset_audit=False)
+            absolute_queue_path = queue_path.absolute()
+            relative_path = absolute_queue_path.relative_to(absolute_queue_path.anchor).as_posix()
+            error = WorkspacePathError(
+                "queue disappeared",
+                "path_race",
+                missing_path=relative_path,
+            )
+
+            with mock.patch("specgate.workspace_fs.read_workspace_text", side_effect=error):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    runner.resume_from_approval()
+
+            self.assertIs(raised.exception, error)
 
     def test_multi_agent_isolated_runs_planner_implementer_reviewer_in_order(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1941,7 +2027,7 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("blocked path: .env", trace_text)
             self.assertNotIn("sk-test-secret", trace_text)
 
-    def test_strict_profile_blocks_review_action_without_creating_approval(self):
+    def test_strict_profile_blocks_review_action_without_pending_approval(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
@@ -1965,7 +2051,9 @@ class RunnerTests(unittest.TestCase):
             ).run()
 
             self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "original")
-            self.assertFalse(approval_queue_path(root).exists())
+            queue_path = approval_queue_path(root)
+            self.assertTrue(queue_path.is_file())
+            self.assertEqual(ApprovalQueue.read(queue_path), ApprovalQueue())
             self.assertEqual(result.metrics.blocked_actions, 1)
             self.assertEqual(len(llm.contexts), 2)
             self.assertIn("Runtime Feedback", llm.contexts[1])

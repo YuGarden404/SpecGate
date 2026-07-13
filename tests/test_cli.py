@@ -16,6 +16,7 @@ from specgate.llm import LLMProviderError
 from specgate.llm import MockLLM
 from specgate.policy import WorkspacePolicy
 from specgate.runner import AgentRunner
+from specgate.workspace_fs import WorkspacePathError
 
 
 class CliTests(unittest.TestCase):
@@ -238,6 +239,31 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("no pending approvals", output.getvalue())
 
+    def test_approvals_list_reports_safe_missing_queue_with_existing_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            approval_queue_path(Path(tmp)).parent.mkdir(parents=True)
+
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["approvals", "list", tmp])
+
+            self.assertEqual(code, 0)
+            self.assertIn("no pending approvals", output.getvalue())
+
+    def test_approvals_list_fails_closed_without_leaking_unsafe_queue_error(self):
+        sentinel = "EXTERNAL_APPROVAL_SENTINEL"
+        for family in ("linked_path", "reparse_point", "path_race"):
+            with self.subTest(family=family), tempfile.TemporaryDirectory() as tmp:
+                ApprovalQueue().write(approval_queue_path(Path(tmp)))
+                error = WorkspacePathError(f"unsafe queue: {sentinel}", family)
+                with patch("specgate.workspace_fs.read_workspace_text", side_effect=error):
+                    with redirect_stdout(io.StringIO()) as output:
+                        code = main(["approvals", "list", tmp])
+
+                text = output.getvalue()
+                self.assertEqual(code, 1)
+                self.assertIn(family, text)
+                self.assertNotIn(sentinel, text)
+
     def test_approvals_list_prints_pending_approval_details(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -375,6 +401,19 @@ class CliTests(unittest.TestCase):
             self.assertNotEqual(code, 0)
             self.assertIn("could not update approval", output.getvalue())
             self.assertNotIn("Traceback", output.getvalue())
+
+    def test_approvals_deny_rejects_missing_queue_without_creating_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queue_path = approval_queue_path(root)
+            queue_path.parent.mkdir(parents=True)
+
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(["approvals", "deny", tmp, "missing", "--reason", "no"])
+
+            self.assertEqual(code, 1)
+            self.assertIn("could not update approval", output.getvalue())
+            self.assertFalse(queue_path.is_file())
 
     def test_approvals_list_prints_decision_reason_without_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
