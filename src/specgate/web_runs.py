@@ -34,7 +34,7 @@ def create_run(
     user_id: int,
     prompt: str,
     *,
-    data_root: Path | None = None,
+    data_root: Path,
 ) -> sqlite3.Row:
     run_prompt = _require_text(prompt, "prompt")
     conn = connect_db(db_path)
@@ -69,9 +69,8 @@ def create_run(
             (project_id, user_id, "queued", run_prompt, now),
         )
         run_id = int(cursor.lastrowid)
-        if data_root is not None:
-            paths = project_paths(data_root, int(project["user_id"]), int(project["id"]))
-            initialize_run_storage(paths, run_id)
+        paths = project_paths(data_root, int(project["user_id"]), int(project["id"]))
+        initialize_run_storage(paths, run_id)
         conn.execute(
             """
             insert into messages (project_id, user_id, role, content, created_at)

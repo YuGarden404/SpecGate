@@ -70,6 +70,12 @@ class WebRunsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             create_run(db_path, project["id"], user["id"], "   ", data_root=data_root)
 
+    def test_create_run_requires_data_root(self):
+        db_path, _data_root, user, project = self.make_context()
+
+        with self.assertRaises(TypeError):
+            create_run(db_path, project["id"], user["id"], "Build the result")
+
     def test_create_run_rejects_active_statuses_without_side_effects(self):
         for status in ("queued", "running", "needs_approval"):
             with self.subTest(status=status):
@@ -145,6 +151,40 @@ class WebRunsTests(unittest.TestCase):
         for run in runs:
             paths = project_paths(data_root, user["id"], run["project_id"])
             self.assertTrue(web_run_paths(paths, run["id"]).workspace.is_dir())
+
+    def test_create_run_serializes_same_project_competitors(self):
+        db_path, data_root, user, project = self.make_context()
+        barrier = threading.Barrier(2)
+
+        def compete(prompt):
+            barrier.wait()
+            try:
+                return create_run(
+                    db_path,
+                    project["id"],
+                    user["id"],
+                    prompt,
+                    data_root=data_root,
+                )
+            except ActiveRunConflict as exc:
+                return exc
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(compete, ("First competitor", "Second competitor")))
+
+        successful_runs = [result for result in results if isinstance(result, sqlite3.Row)]
+        conflicts = [result for result in results if isinstance(result, ActiveRunConflict)]
+        self.assertEqual(len(successful_runs), 1)
+        self.assertEqual(len(conflicts), 1)
+
+        paths = project_paths(data_root, user["id"], project["id"])
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 1)
+            self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 1)
+        self.assertEqual(
+            sorted(path.name for path in paths.runs.iterdir()),
+            [str(successful_runs[0]["id"])],
+        )
 
     def test_create_run_rolls_back_database_and_storage_when_initialization_fails(self):
         db_path, data_root, user, project = self.make_context()

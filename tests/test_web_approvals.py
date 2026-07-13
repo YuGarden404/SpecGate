@@ -59,7 +59,13 @@ class WebApprovalsTests(unittest.TestCase):
         run_status="needs_approval",
         approval_status="pending",
     ):
-        run = create_run(db_path, project["id"], user["id"], "Build the result")
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build the result",
+            data_root=data_root,
+        )
         approval = PendingApproval(
             id=approval_id,
             step=1,
@@ -248,6 +254,24 @@ class WebApprovalsTests(unittest.TestCase):
 
     def test_resume_run_once_only_resumes_needs_approval_runs(self):
         db_path, data_root, alice, _bob, alice_project, _bob_project = self.make_context()
+        completed_project = create_manual_project(
+            db_path,
+            data_root,
+            alice["id"],
+            name="Completed Site",
+            spec_text="# Spec\nBuild a completed page.",
+            checklist_text="- Ship HTML.",
+            index_html=None,
+        )
+        queued_project = create_manual_project(
+            db_path,
+            data_root,
+            alice["id"],
+            name="Queued Site",
+            spec_text="# Spec\nBuild a queued page.",
+            checklist_text="- Ship HTML.",
+            index_html=None,
+        )
         needs_run, _approval = self.add_web_approval(
             db_path,
             data_root,
@@ -255,11 +279,23 @@ class WebApprovalsTests(unittest.TestCase):
             alice_project,
             approval_status="approved",
         )
-        completed_run = create_run(db_path, alice_project["id"], alice["id"], "Completed run")
-        queued_run = create_run(db_path, alice_project["id"], alice["id"], "Queued run")
+        completed_run = create_run(
+            db_path,
+            completed_project["id"],
+            alice["id"],
+            "Completed run",
+            data_root=data_root,
+        )
         with closing(connect_db(db_path)) as conn:
             conn.execute("update runs set status = 'completed' where id = ?", (completed_run["id"],))
             conn.commit()
+        queued_run = create_run(
+            db_path,
+            queued_project["id"],
+            alice["id"],
+            "Queued run",
+            data_root=data_root,
+        )
 
         def fake_resume(paths, settings):
             self.assertEqual(settings["governance_profile"], "review")

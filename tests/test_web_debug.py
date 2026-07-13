@@ -30,7 +30,13 @@ class WebDebugTests(unittest.TestCase):
             checklist_text="- Ship index.html",
             index_html=None,
         )
-        run = create_run(db_path, project["id"], user["id"], "Build it")
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build it",
+            data_root=data_root,
+        )
         execute_run_once(db_path, data_root, run["id"])
         return db_path, data_root, user, project, run
 
