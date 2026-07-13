@@ -178,6 +178,7 @@ class ToolDispatcherTests(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertTrue(result.blocked)
             self.assertEqual(result.data["rule_family"], "path_race")
+            self.assertEqual(getattr(result, "rule_family", None), "path_race")
 
     def test_safe_write_link_rejection_is_a_blocked_tool_decision(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -195,6 +196,7 @@ class ToolDispatcherTests(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertTrue(result.blocked)
             self.assertEqual(result.data["rule_family"], "linked_path")
+            self.assertEqual(getattr(result, "rule_family", None), "linked_path")
 
     def test_safe_list_link_rejection_is_a_blocked_tool_decision(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -211,6 +213,24 @@ class ToolDispatcherTests(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertTrue(result.blocked)
             self.assertEqual(result.data["rule_family"], "linked_path")
+            self.assertEqual(getattr(result, "rule_family", None), "linked_path")
+
+    def test_guardrail_rule_family_is_directly_exposed_on_tool_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = WorkspacePolicy(
+                Path(tmp),
+                {"read_file"},
+                {"docs/index.html"},
+                set(),
+            )
+
+            result = ToolDispatcher(policy).dispatch(
+                Action("1", "read_file", {"path": r"docs\index.html"})
+            )
+
+            self.assertFalse(result.ok)
+            self.assertTrue(result.blocked)
+            self.assertEqual(getattr(result, "rule_family", None), "invalid_path")
 
     def test_snapshot_blocks_write_after_external_change(self):
         with tempfile.TemporaryDirectory() as tmp:

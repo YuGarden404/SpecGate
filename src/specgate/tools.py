@@ -17,6 +17,7 @@ class ToolResult:
     message: str
     data: dict[str, Any] = field(default_factory=dict)
     blocked: bool = False
+    rule_family: str = "none"
 
 
 class ToolDispatcher:
@@ -32,7 +33,13 @@ class ToolDispatcher:
 
     def dispatch(self, action: Action) -> ToolResult:
         if action.action not in self.registry:
-            return ToolResult(False, action.action, f"unknown action: {action.action}", blocked=True)
+            return ToolResult(
+                False,
+                action.action,
+                f"unknown action: {action.action}",
+                blocked=True,
+                rule_family="action",
+            )
 
         decision = check_action(action, self.policy)
         if not decision.allowed:
@@ -45,6 +52,7 @@ class ToolDispatcher:
                 decision.reason,
                 data,
                 blocked=True,
+                rule_family=decision.rule_family,
             )
 
         if action.action == "write_file":
@@ -63,7 +71,13 @@ class ToolDispatcher:
                 {"summary": action.args.get("summary", "")},
             )
 
-        return ToolResult(False, action.action, f"unimplemented action: {action.action}", blocked=True)
+        return ToolResult(
+            False,
+            action.action,
+            f"unimplemented action: {action.action}",
+            blocked=True,
+            rule_family="action",
+        )
 
     def _write_file(self, action: Action) -> ToolResult:
         relative_path = action.args["path"]
@@ -79,6 +93,7 @@ class ToolDispatcher:
                     snapshot_decision.reason,
                     data,
                     blocked=True,
+                    rule_family=snapshot_decision.rule_family,
                 )
 
         content = action.args.get("content", "")
@@ -142,4 +157,5 @@ class ToolDispatcher:
             f"{error.rule_family}: {error.message}",
             data,
             blocked=True,
+            rule_family=error.rule_family,
         )

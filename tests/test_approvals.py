@@ -78,6 +78,22 @@ class ApprovalTests(unittest.TestCase):
 
         self.assertEqual(risk.level, "blocked")
         self.assertIn("path escapes workspace", risk.reason)
+        self.assertEqual(getattr(risk, "rule_family", None), "path_escape")
+        self.assertEqual(risk.to_dict().get("rule_family"), "path_escape")
+
+    def test_invalid_path_rule_family_survives_risk_classification(self):
+        policy = WorkspacePolicy(
+            Path("."),
+            {"read_file"},
+            {"docs/index.html"},
+            set(),
+        )
+        action = Action("1", "read_file", {"path": r"docs\index.html"})
+
+        risk = classify_action_risk(action, policy, GovernanceConfig(profile="review"))
+
+        self.assertEqual(risk.level, "blocked")
+        self.assertEqual(getattr(risk, "rule_family", None), "invalid_path")
 
     def test_target_state_capture_rejects_external_link(self):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
@@ -151,6 +167,103 @@ class ApprovalTests(unittest.TestCase):
             self.assertEqual(len(loaded.approvals), 1)
             self.assertEqual(loaded.approvals[0].id, "approval-step-2")
             self.assertEqual(loaded.approvals[0].status, "pending")
+
+    def test_queue_write_propagates_reparse_rejection_without_overwriting_sentinel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+            sentinel = "EXTERNAL_QUEUE_WRITE_SENTINEL"
+            queue_path.write_text(sentinel, encoding="utf-8")
+
+            with mock.patch(
+                "specgate.workspace_fs.write_workspace_text",
+                side_effect=WorkspacePathError("reparse queue", "reparse_point"),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    ApprovalQueue().write(queue_path)
+
+            self.assertEqual(raised.exception.rule_family, "reparse_point")
+            self.assertEqual(queue_path.read_text(encoding="utf-8"), sentinel)
+
+    def test_queue_read_propagates_link_rejection_without_reading_sentinel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+            sentinel = "EXTERNAL_QUEUE_READ_SENTINEL"
+            queue_path.write_text(
+                json.dumps({"approvals": [], "sentinel": sentinel}),
+                encoding="utf-8",
+            )
+
+            with mock.patch(
+                "specgate.workspace_fs.read_workspace_text",
+                side_effect=WorkspacePathError("linked queue", "linked_path"),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    ApprovalQueue.read(queue_path)
+
+            self.assertEqual(raised.exception.rule_family, "linked_path")
+
+    def test_queue_write_propagates_ancestor_path_race(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "runs" / "latest" / "pending_approvals.json"
+
+            with mock.patch(
+                "specgate.workspace_fs.write_workspace_text",
+                side_effect=WorkspacePathError("ancestor replaced", "path_race"),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    ApprovalQueue().write(queue_path)
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+
+    def test_queue_read_propagates_ancestor_path_race(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+            queue_path.write_text('{"approvals": []}', encoding="utf-8")
+
+            with mock.patch(
+                "specgate.workspace_fs.read_workspace_text",
+                side_effect=WorkspacePathError("ancestor replaced", "path_race"),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    ApprovalQueue.read(queue_path)
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+
+    def test_queue_file_link_does_not_overwrite_external_sentinel(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            external = Path(outside) / "pending_approvals.json"
+            sentinel = "EXTERNAL_QUEUE_FILE_SENTINEL"
+            external.write_text(sentinel, encoding="utf-8")
+            self._symlink_or_skip(root / "pending_approvals.json", external)
+
+            with self.assertRaises(WorkspacePathError):
+                ApprovalQueue().write(root / "pending_approvals.json")
+
+            self.assertEqual(external.read_text(encoding="utf-8"), sentinel)
+
+    def test_queue_ancestor_link_does_not_create_external_queue(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            external = Path(outside)
+            self._symlink_or_skip(root / "runs", external, directory=True)
+            queue_path = root / "runs" / "latest" / "pending_approvals.json"
+
+            with self.assertRaises(WorkspacePathError):
+                ApprovalQueue().write(queue_path)
+
+            self.assertFalse((external / "latest" / "pending_approvals.json").exists())
+
+    def test_queue_file_link_does_not_read_external_sentinel(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            external = Path(outside) / "pending_approvals.json"
+            sentinel = "EXTERNAL_QUEUE_READ_SENTINEL"
+            external.write_text(sentinel, encoding="utf-8")
+            self._symlink_or_skip(root / "pending_approvals.json", external)
+
+            with self.assertRaises(WorkspacePathError):
+                ApprovalQueue.read(root / "pending_approvals.json")
 
     def test_queue_round_trip_preserves_action_payload_and_decision_fields(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any
@@ -43,11 +44,13 @@ class GovernanceConfig:
 class ActionRisk:
     level: str
     reason: str
+    rule_family: str = "none"
 
     def to_dict(self) -> dict[str, str]:
         return {
             "level": self.level,
             "reason": self.reason,
+            "rule_family": self.rule_family,
         }
 
 
@@ -101,18 +104,29 @@ class ApprovalQueue:
         return {"approvals": [approval.to_dict() for approval in self.approvals]}
 
     def write(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        root, relative_path = _approval_queue_location(path)
+        workspace_fs.write_workspace_text(
+            root,
+            relative_path,
             json.dumps(self.to_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
     @classmethod
     def read(cls, path: Path) -> "ApprovalQueue":
-        if not path.exists():
-            return cls()
+        root, relative_path = _approval_queue_location(path)
+        try:
+            content = workspace_fs.read_workspace_text(
+                root,
+                relative_path,
+                encoding="utf-8-sig",
+            )
+        except workspace_fs.WorkspacePathError as exc:
+            if _caused_by_file_not_found(exc):
+                return cls()
+            raise
 
-        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        payload = json.loads(content)
         if not isinstance(payload, dict):
             raise ValueError("pending approvals payload must be an object")
 
@@ -212,6 +226,22 @@ def _replace_approval(
 
 def approval_queue_path(root: Path) -> Path:
     return root / "runs" / "latest" / "pending_approvals.json"
+
+
+def _approval_queue_location(path: Path) -> tuple[Path, str]:
+    absolute_path = Path(os.path.abspath(path))
+    root = Path(absolute_path.anchor)
+    relative_path = absolute_path.relative_to(root).as_posix()
+    return root, workspace_fs.normalize_workspace_relative(relative_path)
+
+
+def _caused_by_file_not_found(error: BaseException) -> bool:
+    cause = error.__cause__
+    while cause is not None:
+        if isinstance(cause, FileNotFoundError):
+            return True
+        cause = cause.__cause__
+    return False
 
 
 def _parse_pending_approval(approval: dict[str, Any]) -> PendingApproval:
@@ -326,11 +356,11 @@ def classify_action_risk(
 ) -> ActionRisk:
     decision = check_action(action, policy)
     if not decision.allowed:
-        return ActionRisk("blocked", decision.reason)
+        return ActionRisk("blocked", decision.reason, decision.rule_family)
 
     path = _action_path(action)
     if path is not None and _matches_any(path, config.blocked_paths | HARD_BLOCKED_PATHS):
-        return ActionRisk("blocked", f"blocked path: {path}")
+        return ActionRisk("blocked", f"blocked path: {path}", "allowlist")
 
     if action.action in config.review_actions:
         return ActionRisk("review", f"{action.action} requires human review")
