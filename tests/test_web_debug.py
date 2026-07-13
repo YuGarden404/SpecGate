@@ -14,6 +14,20 @@ from specgate.web_projects import create_manual_project, project_paths, web_run_
 from specgate.web_runs import create_run, execute_run_once
 
 
+def patch_is_junction(predicate, *, path_type=Path):
+    original = getattr(path_type, "is_junction", None)
+
+    def mocked(path):
+        return predicate(path) or (original(path) if original is not None else False)
+
+    return patch.object(
+        path_type,
+        "is_junction",
+        new=mocked,
+        create=original is None,
+    )
+
+
 class WebDebugTests(unittest.TestCase):
     def make_completed_run(self):
         tmp = tempfile.TemporaryDirectory()
@@ -248,19 +262,23 @@ class WebDebugTests(unittest.TestCase):
             project_paths(data_root, user["id"], project["id"]),
             run["id"],
         )
-        original_is_junction = Path.is_junction
-
-        with patch.object(
-            Path,
-            "is_junction",
-            autospec=True,
-            side_effect=lambda path: path == paths.root or original_is_junction(path),
-        ):
+        with patch_is_junction(lambda path: path == paths.root):
             payload = build_run_debug(db_path, data_root, user["id"], run["id"])
 
         self.assertTrue(payload["artifacts"])
         self.assertTrue(all(not item["exists"] for item in payload["artifacts"]))
         self.assertTrue(all(item["size_bytes"] == 0 for item in payload["artifacts"]))
+
+    def test_junction_patch_supports_path_type_without_is_junction(self):
+        class LegacyPath:
+            pass
+
+        path = LegacyPath()
+
+        with patch_is_junction(lambda candidate: candidate is path, path_type=LegacyPath):
+            self.assertTrue(path.is_junction())
+
+        self.assertFalse(hasattr(LegacyPath, "is_junction"))
 
     def test_build_run_debug_rejects_other_user(self):
         db_path, data_root, user, _project, run = self.make_completed_run()

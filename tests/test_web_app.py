@@ -26,6 +26,20 @@ from specgate.web_projects import project_paths, web_run_paths
 from specgate.web_runs import execute_run_once
 
 
+def patch_is_junction(predicate, *, path_type=Path):
+    original = getattr(path_type, "is_junction", None)
+
+    def mocked(path):
+        return predicate(path) or (original(path) if original is not None else False)
+
+    return patch.object(
+        path_type,
+        "is_junction",
+        new=mocked,
+        create=original is None,
+    )
+
+
 class WebAppTests(unittest.TestCase):
     @contextmanager
     def temporary_cwd(self, path):
@@ -448,15 +462,9 @@ class WebAppTests(unittest.TestCase):
             project_paths(app.state.data_root, user["id"], project["id"]),
             run["id"],
         )
-        original_is_junction = Path.is_junction
         original_is_symlink = Path.is_symlink
 
-        with patch.object(
-            Path,
-            "is_junction",
-            autospec=True,
-            side_effect=lambda path: path == paths.root or original_is_junction(path),
-        ):
+        with patch_is_junction(lambda path: path == paths.root):
             junction = client.get(f"/api/runs/{run['id']}/artifacts/index")
         with patch.object(
             Path,
@@ -481,8 +489,19 @@ class WebAppTests(unittest.TestCase):
             },
         )()
 
-        with patch.object(Path, "is_junction", return_value=False):
+        with patch_is_junction(lambda _path: False):
             self.assertTrue(checker(Path("artifact"), file_stat))
+
+    def test_junction_patch_supports_path_type_without_is_junction(self):
+        class LegacyPath:
+            pass
+
+        path = LegacyPath()
+
+        with patch_is_junction(lambda candidate: candidate is path, path_type=LegacyPath):
+            self.assertTrue(path.is_junction())
+
+        self.assertFalse(hasattr(LegacyPath, "is_junction"))
 
     def test_artifact_download_uses_opened_file_when_path_is_replaced(self):
         client, app = self.make_client()
