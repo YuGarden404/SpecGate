@@ -239,6 +239,118 @@ class HtmlGateTests(unittest.TestCase):
             self.assertNotIn(sentinel, result.summary)
             self.assertNotIn(sentinel, repr(result.issues))
 
+    def test_index_ancestor_cannot_be_replaced_between_state_and_read(self):
+        sentinel = "EXTERNAL_INDEX_SENTINEL"
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            artifact_root = base / "artifact"
+            displaced_root = base / "artifact-original"
+            external_root = base / "external-artifact"
+            artifact_root.mkdir()
+            external_root.mkdir()
+            (artifact_root / "index.html").write_text(
+                "<html><head><title>x</title></head><body></body></html>",
+                encoding="utf-8",
+            )
+            (external_root / "index.html").write_text(
+                VALID_HTML.replace("</body>", f"{sentinel}</body>"),
+                encoding="utf-8",
+            )
+            (base / "CHECKLIST.md").write_text("", encoding="utf-8")
+            real_state = workspace_fs.workspace_file_state
+
+            def replace_after_state(root, relative):
+                state = real_state(root, relative)
+                if Path(root) == artifact_root and relative == "index.html":
+                    artifact_root.rename(displaced_root)
+                    external_root.rename(artifact_root)
+                return state
+
+            with mock.patch.object(
+                workspace_fs,
+                "workspace_file_state",
+                side_effect=replace_after_state,
+            ) as state_mock:
+                result = run_html_gate(artifact_root / "index.html", base / "CHECKLIST.md")
+
+            self.assertFalse(result.passed)
+            self.assertTrue(any(issue.code == "doctype" for issue in result.issues))
+            self.assertNotIn(sentinel, result.summary)
+            self.assertNotIn(sentinel, repr(result.issues))
+            self.assertNotIn(sentinel, repr(result))
+            state_mock.assert_not_called()
+
+    def test_checklist_ancestor_cannot_be_replaced_between_state_and_read(self):
+        sentinel = "EXTERNAL_CHECKLIST_SENTINEL"
+        internal_term = "INTERNAL_ONLY_TERM"
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            checklist_root = base / "checklist"
+            displaced_root = base / "checklist-original"
+            external_root = base / "external-checklist"
+            checklist_root.mkdir()
+            external_root.mkdir()
+            (base / "index.html").write_text(VALID_HTML, encoding="utf-8")
+            (checklist_root / "CHECKLIST.md").write_text(
+                f"- 必须包含 {internal_term}\n",
+                encoding="utf-8",
+            )
+            (external_root / "CHECKLIST.md").write_text(
+                f"- 必须包含 {sentinel}\n",
+                encoding="utf-8",
+            )
+            real_state = workspace_fs.workspace_file_state
+
+            def replace_after_state(root, relative):
+                state = real_state(root, relative)
+                if Path(root) == checklist_root and relative == "CHECKLIST.md":
+                    checklist_root.rename(displaced_root)
+                    external_root.rename(checklist_root)
+                return state
+
+            with mock.patch.object(
+                workspace_fs,
+                "workspace_file_state",
+                side_effect=replace_after_state,
+            ) as state_mock:
+                result = run_html_gate(base / "index.html", checklist_root / "CHECKLIST.md")
+
+            self.assertFalse(result.passed)
+            self.assertIn(internal_term, repr(result.issues))
+            self.assertNotIn(sentinel, result.summary)
+            self.assertNotIn(sentinel, repr(result.issues))
+            self.assertNotIn(sentinel, repr(result))
+            state_mock.assert_not_called()
+
+    def test_missing_inputs_use_safe_open_missing_path_semantics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+
+            with mock.patch.object(
+                workspace_fs,
+                "workspace_file_state",
+                side_effect=AssertionError("Gate must not check state before reading"),
+            ) as state_mock:
+                result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
+
+            self.assertFalse(result.passed)
+            self.assertTrue(any(issue.code == "missing_artifact" for issue in result.issues))
+            state_mock.assert_not_called()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "index.html").write_text(VALID_HTML, encoding="utf-8")
+
+            with mock.patch.object(
+                workspace_fs,
+                "workspace_file_state",
+                side_effect=AssertionError("Gate must not check state before reading"),
+            ) as state_mock:
+                result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
+
+            self.assertTrue(result.passed)
+            state_mock.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

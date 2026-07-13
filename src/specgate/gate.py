@@ -70,10 +70,12 @@ def _check(code: str, passed: bool, message: str) -> GateCheck:
 def _read_gate_file(path: Path) -> str | None:
     root = path.parent
     relative = path.name
-    state = workspace_fs.workspace_file_state(root, relative)
-    if not state.exists:
-        return None
-    return workspace_fs.read_workspace_text(root, relative, encoding="utf-8-sig")
+    try:
+        return workspace_fs.read_workspace_text(root, relative, encoding="utf-8-sig")
+    except workspace_fs.WorkspacePathError as exc:
+        if exc.missing_path == relative:
+            return None
+        raise
 
 
 def _checklist_terms(checklist_text: str) -> list[str]:
