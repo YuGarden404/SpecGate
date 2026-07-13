@@ -35,6 +35,11 @@ class WorkspaceFileState:
 
 
 @dataclass(frozen=True)
+class WorkspaceFileMetadata:
+    size_bytes: int
+
+
+@dataclass(frozen=True)
 class WorkspaceScanRejection:
     path: str
     rule_family: str
@@ -166,6 +171,30 @@ def read_workspace_bytes(root: str | os.PathLike[str], relative: str) -> bytes:
             f"workspace file could not be read: {relative}",
             "path_race",
         ) from exc
+
+
+def workspace_file_metadata(
+    root: str | os.PathLike[str],
+    relative: str,
+) -> WorkspaceFileMetadata:
+    normalized = normalize_workspace_relative(relative)
+    try:
+        with open_workspace_file(root, normalized, "read") as handle:
+            try:
+                file_stat = os.fstat(handle.fileno())
+            except OSError as exc:
+                raise WorkspacePathError(
+                    f"workspace file metadata could not be read: {normalized}",
+                    "path_race",
+                ) from exc
+    except WorkspacePathError:
+        raise
+    except OSError as exc:
+        raise WorkspacePathError(
+            f"workspace file metadata could not be read: {normalized}",
+            "path_race",
+        ) from exc
+    return WorkspaceFileMetadata(size_bytes=file_stat.st_size)
 
 
 def read_workspace_text(

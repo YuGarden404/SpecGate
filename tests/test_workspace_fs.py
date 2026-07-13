@@ -136,6 +136,10 @@ class LinkLikeTests(unittest.TestCase):
 
 
 class WorkspaceFileIOTests(unittest.TestCase):
+    def _metadata(self, root, relative):
+        self.assertTrue(hasattr(workspace_fs, "workspace_file_metadata"))
+        return workspace_fs.workspace_file_metadata(root, relative)
+
     def _read_optional_text(self, root, relative, **kwargs):
         self.assertTrue(hasattr(workspace_fs, "read_optional_workspace_text"))
         return workspace_fs.read_optional_workspace_text(root, relative, **kwargs)
@@ -252,6 +256,50 @@ class WorkspaceFileIOTests(unittest.TestCase):
             self.assertEqual(existing.sha256, hashlib.sha256(b"content").hexdigest())
             self.assertFalse(missing.exists)
             self.assertIsNone(missing.sha256)
+
+    def test_file_metadata_uses_fstat_on_verified_handle_without_reading_content(self):
+        handle = mock.Mock()
+        handle.fileno.return_value = 41
+        opened = mock.MagicMock()
+        opened.__enter__.return_value = handle
+        opened.__exit__.return_value = None
+
+        with (
+            mock.patch.object(workspace_fs, "open_workspace_file", return_value=opened) as safe_open,
+            mock.patch.object(
+                workspace_fs.os,
+                "fstat",
+                return_value=types.SimpleNamespace(st_size=987654321),
+            ) as fstat,
+        ):
+            metadata = self._metadata("unused", "artifacts/result.zip")
+
+        self.assertEqual(metadata.size_bytes, 987654321)
+        safe_open.assert_called_once_with("unused", "artifacts/result.zip", "read")
+        fstat.assert_called_once_with(41)
+        handle.read.assert_not_called()
+
+    def test_file_metadata_preserves_missing_link_and_ancestor_race_errors(self):
+        errors = (
+            WorkspacePathError(
+                "missing",
+                "path_race",
+                missing_path="artifacts/result.zip",
+            ),
+            WorkspacePathError("linked", "linked_path"),
+            WorkspacePathError("ancestor changed", "path_race", missing_path="artifacts"),
+        )
+        for error in errors:
+            with self.subTest(family=error.rule_family, missing_path=error.missing_path):
+                with mock.patch.object(
+                    workspace_fs,
+                    "open_workspace_file",
+                    side_effect=error,
+                ):
+                    with self.assertRaises(WorkspacePathError) as raised:
+                        self._metadata("unused", "artifacts/result.zip")
+
+                self.assertIs(raised.exception, error)
 
     def test_open_workspace_file_closes_handle_after_context(self):
         with tempfile.TemporaryDirectory() as tmp:

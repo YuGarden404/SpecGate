@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections import deque
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -9,11 +10,29 @@ from typing import Any
 from specgate.trace import redact
 from specgate.web_db import connect_db
 from specgate.web_projects import RunPaths, project_paths, web_run_paths
-from specgate.workspace_fs import WorkspacePathError, read_workspace_bytes
+from specgate.workspace_fs import (
+    WorkspacePathError,
+    open_workspace_file,
+    workspace_file_metadata,
+)
 
 
 DEFAULT_MAX_TRACE_EVENTS = 200
 DEFAULT_MAX_EVENT_CHARS = 4000
+MAX_TRACE_EVENTS = 1000
+MAX_EVENT_CHARS = 16_000
+MAX_TRACE_LINE_BYTES = 64 * 1024
+MAX_EVIDENCE_BYTES = 256 * 1024
+SAFE_WORKSPACE_RULE_FAMILIES = frozenset(
+    {
+        "invalid_path",
+        "linked_path",
+        "path_escape",
+        "path_race",
+        "reparse_point",
+        "unsafe_file_type",
+    }
+)
 
 
 def build_run_debug(
@@ -25,10 +44,10 @@ def build_run_debug(
     max_trace_events: int = DEFAULT_MAX_TRACE_EVENTS,
     max_event_chars: int = DEFAULT_MAX_EVENT_CHARS,
 ) -> dict[str, Any]:
-    if max_trace_events < 1:
-        raise ValueError("max_trace_events must be positive")
-    if max_event_chars < 1:
-        raise ValueError("max_event_chars must be positive")
+    if not 1 <= max_trace_events <= MAX_TRACE_EVENTS:
+        raise ValueError(f"max_trace_events must be between 1 and {MAX_TRACE_EVENTS}")
+    if not 1 <= max_event_chars <= MAX_EVENT_CHARS:
+        raise ValueError(f"max_event_chars must be between 1 and {MAX_EVENT_CHARS}")
 
     with closing(connect_db(db_path)) as conn:
         run = conn.execute(
@@ -146,10 +165,10 @@ def _artifact_dict(row: sqlite3.Row, run_id: int, paths: RunPaths, data_root: Pa
 def _trusted_file_metadata(data_root: Path, expected_path: Path) -> tuple[bool, int]:
     try:
         relative = expected_path.relative_to(data_root).as_posix()
-        content = read_workspace_bytes(data_root, relative)
+        metadata = workspace_file_metadata(data_root, relative)
     except (OSError, RuntimeError, ValueError):
         return False, 0
-    return True, len(content)
+    return True, metadata.size_bytes
 
 
 def _approval_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -176,25 +195,74 @@ def _read_trace(
     max_event_chars: int,
 ) -> dict[str, Any]:
     try:
-        content = read_workspace_bytes(audit_root, relative).decode("utf-8")
-    except (OSError, UnicodeDecodeError, WorkspacePathError):
-        return {
-            "events": [],
-            "truncated": False,
-            "max_events": max_events,
-            "max_event_chars": max_event_chars,
-        }
+        events: deque[dict[str, Any]] = deque(maxlen=max_events)
+        total_events = 0
+        with open_workspace_file(audit_root, relative, "read") as handle:
+            while True:
+                raw_line = handle.readline(MAX_TRACE_LINE_BYTES + 1)
+                if not raw_line:
+                    break
+                line_too_long = len(raw_line) > MAX_TRACE_LINE_BYTES
+                if line_too_long:
+                    while raw_line and not raw_line.endswith(b"\n"):
+                        raw_line = handle.readline(MAX_TRACE_LINE_BYTES + 1)
+                    event = {
+                        "event_type": "trace_line_truncated",
+                        "truncated": True,
+                    }
+                else:
+                    try:
+                        line = raw_line.decode("utf-8")
+                    except UnicodeDecodeError:
+                        event = {
+                            "event_type": "trace_decode_error",
+                            "truncated": True,
+                        }
+                    else:
+                        if not line.strip():
+                            continue
+                        event = _parse_trace_line(line, max_event_chars)
+                total_events += 1
+                events.append(event)
+    except WorkspacePathError as exc:
+        error = None if _is_optional_missing(exc, relative) else _audit_error(
+            "audit trace unavailable",
+            exc.rule_family,
+        )
+        return _empty_trace(max_events, max_event_chars, error=error)
+    except OSError:
+        return _empty_trace(
+            max_events,
+            max_event_chars,
+            error=_audit_error("audit trace unavailable", "path_race"),
+        )
 
-    lines = [line for line in content.splitlines() if line.strip()]
-    selected = lines[-max_events:]
-    events = [_parse_trace_line(line, max_event_chars) for line in selected]
+    selected = list(events)
     return {
-        "events": events,
-        "truncated": len(lines) > max_events or any(event.get("truncated") for event in events),
+        "events": selected,
+        "truncated": total_events > max_events
+        or any(event.get("truncated") for event in selected),
         "max_events": max_events,
         "max_event_chars": max_event_chars,
-        "total_events": len(lines),
+        "total_events": total_events,
     }
+
+
+def _empty_trace(
+    max_events: int,
+    max_event_chars: int,
+    *,
+    error: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    trace: dict[str, Any] = {
+        "events": [],
+        "truncated": False,
+        "max_events": max_events,
+        "max_event_chars": max_event_chars,
+    }
+    if error is not None:
+        trace["error"] = error
+    return trace
 
 
 def _parse_trace_line(line: str, max_event_chars: int) -> dict[str, Any]:
@@ -212,11 +280,15 @@ def _truncate_event(event: dict[str, Any], max_event_chars: int) -> dict[str, An
     serialized = json.dumps(event, ensure_ascii=False, sort_keys=True)
     if len(serialized) <= max_event_chars:
         return event
-    truncated = _truncate_value(event, max_event_chars)
-    if isinstance(truncated, dict):
-        truncated["truncated"] = True
-        return truncated
-    return {"value": truncated, "truncated": True}
+    truncated: dict[str, Any] = {"truncated": True}
+    serialized_limit = max_event_chars + 256
+    for key, value in event.items():
+        candidate = dict(truncated)
+        candidate[key] = _truncate_value(value, max_event_chars)
+        if len(json.dumps(candidate, ensure_ascii=False, sort_keys=True)) > serialized_limit:
+            continue
+        truncated = candidate
+    return truncated
 
 
 def _truncate_value(value: Any, max_chars: int) -> Any:
@@ -231,10 +303,36 @@ def _truncate_value(value: Any, max_chars: int) -> Any:
 
 def _read_json_evidence(audit_root: Path, relative: str) -> Any:
     try:
-        content = read_workspace_bytes(audit_root, relative).decode("utf-8")
-    except (OSError, UnicodeDecodeError, WorkspacePathError):
-        return None
+        with open_workspace_file(audit_root, relative, "read") as handle:
+            raw_content = handle.read(MAX_EVIDENCE_BYTES + 1)
+    except WorkspacePathError as exc:
+        if _is_optional_missing(exc, relative):
+            return None
+        return _audit_error("audit evidence unavailable", exc.rule_family)
+    except OSError:
+        return _audit_error("audit evidence unavailable", "path_race")
+    if len(raw_content) > MAX_EVIDENCE_BYTES:
+        return {
+            "error": "audit evidence exceeds size limit",
+            "truncated": True,
+            "max_bytes": MAX_EVIDENCE_BYTES,
+        }
+    try:
+        content = raw_content.decode("utf-8")
+    except UnicodeDecodeError:
+        return {"error": "audit evidence is not valid UTF-8"}
     try:
         return redact(json.loads(content))
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
         return {"error": str(redact(str(exc)))}
+
+
+def _is_optional_missing(exc: WorkspacePathError, relative: str) -> bool:
+    return exc.rule_family == "path_race" and exc.missing_path == relative
+
+
+def _audit_error(message: str, rule_family: str) -> dict[str, str]:
+    safe_family = (
+        rule_family if rule_family in SAFE_WORKSPACE_RULE_FAMILIES else "path_race"
+    )
+    return {"error": message, "rule_family": safe_family}
