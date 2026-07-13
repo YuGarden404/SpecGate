@@ -7,8 +7,10 @@ import os
 import shutil
 import stat
 import tempfile
+import threading
 import types
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
@@ -1071,6 +1073,45 @@ class WorkspaceScanAndCopyTests(unittest.TestCase):
                 expected,
             ) as actual:
                 self.assertEqual(actual, expected)
+
+    @unittest.skipUnless(os.name == "nt", "Windows concurrent handle inspection")
+    def test_windows_directory_lock_handle_inspection_is_thread_safe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            roots = (Path(tmp) / "first", Path(tmp) / "second")
+            for root in roots:
+                root.mkdir()
+
+            real_byref = ctypes.byref
+
+            def inspect(root):
+                expected_identity = workspace_fs._stat_identity(root.lstat())
+                with workspace_fs._open_windows_directory_lock(
+                    root,
+                    root.resolve(),
+                    expected_identity,
+                ) as actual:
+                    self.assertEqual(actual, expected_identity)
+
+            for _ in range(20):
+                barrier = threading.Barrier(2)
+
+                def synchronize_handle_information(value, *args):
+                    field_names = {
+                        field[0] for field in getattr(type(value), "_fields_", ())
+                    }
+                    if {"file_attributes", "file_index_high"} <= field_names:
+                        barrier.wait(timeout=5)
+                    return real_byref(value, *args)
+
+                with mock.patch.object(
+                    ctypes,
+                    "byref",
+                    side_effect=synchronize_handle_information,
+                ):
+                    with ThreadPoolExecutor(max_workers=2) as executor:
+                        futures = [executor.submit(inspect, root) for root in roots]
+                        for future in futures:
+                            future.result(timeout=10)
 
     @unittest.skipUnless(os.name == "nt", "Windows directory handle sharing policy")
     def test_windows_directory_lock_fails_closed_without_delete_sharing_retry(self):

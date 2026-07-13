@@ -15,6 +15,97 @@ from pathlib import Path
 from typing import Any, BinaryIO, Collection, Iterator
 
 
+if os.name == "nt":
+    import ctypes as _windows_ctypes
+    from ctypes import wintypes as _windows_wintypes
+
+    class _WindowsByHandleFileInformation(_windows_ctypes.Structure):
+        _fields_ = (
+            ("file_attributes", _windows_wintypes.DWORD),
+            ("creation_time", _windows_wintypes.FILETIME),
+            ("last_access_time", _windows_wintypes.FILETIME),
+            ("last_write_time", _windows_wintypes.FILETIME),
+            ("volume_serial_number", _windows_wintypes.DWORD),
+            ("file_size_high", _windows_wintypes.DWORD),
+            ("file_size_low", _windows_wintypes.DWORD),
+            ("number_of_links", _windows_wintypes.DWORD),
+            ("file_index_high", _windows_wintypes.DWORD),
+            ("file_index_low", _windows_wintypes.DWORD),
+        )
+
+    class _WindowsUnicodeString(_windows_ctypes.Structure):
+        _fields_ = (
+            ("length", _windows_wintypes.USHORT),
+            ("maximum_length", _windows_wintypes.USHORT),
+            ("buffer", _windows_wintypes.LPWSTR),
+        )
+
+    class _WindowsObjectAttributes(_windows_ctypes.Structure):
+        _fields_ = (
+            ("length", _windows_wintypes.ULONG),
+            ("root_directory", _windows_wintypes.HANDLE),
+            ("object_name", _windows_ctypes.POINTER(_WindowsUnicodeString)),
+            ("attributes", _windows_wintypes.ULONG),
+            ("security_descriptor", _windows_wintypes.LPVOID),
+            ("security_quality_of_service", _windows_wintypes.LPVOID),
+        )
+
+    class _WindowsIoStatusBlock(_windows_ctypes.Structure):
+        _fields_ = (
+            ("status", _windows_ctypes.c_ssize_t),
+            ("information", _windows_ctypes.c_size_t),
+        )
+
+    class _WindowsFileId128(_windows_ctypes.Structure):
+        _fields_ = (("identifier", _windows_ctypes.c_ubyte * 16),)
+
+    class _WindowsFileIdInfo(_windows_ctypes.Structure):
+        _fields_ = (
+            ("volume_serial_number", _windows_ctypes.c_ulonglong),
+            ("file_id", _WindowsFileId128),
+        )
+
+    _WINDOWS_CREATE_FILE_ARGTYPES = (
+        _windows_wintypes.LPCWSTR,
+        _windows_wintypes.DWORD,
+        _windows_wintypes.DWORD,
+        _windows_wintypes.LPVOID,
+        _windows_wintypes.DWORD,
+        _windows_wintypes.DWORD,
+        _windows_wintypes.HANDLE,
+    )
+    _WINDOWS_GET_FILE_INFORMATION_ARGTYPES = (
+        _windows_wintypes.HANDLE,
+        _windows_ctypes.POINTER(_WindowsByHandleFileInformation),
+    )
+    _WINDOWS_NT_CREATE_FILE_ARGTYPES = (
+        _windows_ctypes.POINTER(_windows_wintypes.HANDLE),
+        _windows_wintypes.ULONG,
+        _windows_ctypes.POINTER(_WindowsObjectAttributes),
+        _windows_ctypes.POINTER(_WindowsIoStatusBlock),
+        _windows_ctypes.POINTER(_windows_ctypes.c_longlong),
+        _windows_wintypes.ULONG,
+        _windows_wintypes.ULONG,
+        _windows_wintypes.ULONG,
+        _windows_wintypes.ULONG,
+        _windows_wintypes.LPVOID,
+        _windows_wintypes.ULONG,
+    )
+    _WINDOWS_GET_FILE_INFORMATION_EX_ARGTYPES = (
+        _windows_wintypes.HANDLE,
+        _windows_ctypes.c_int,
+        _windows_wintypes.LPVOID,
+        _windows_wintypes.DWORD,
+    )
+    _WINDOWS_CLOSE_HANDLE_ARGTYPES = (_windows_wintypes.HANDLE,)
+    _WINDOWS_GET_FINAL_PATH_ARGTYPES = (
+        _windows_wintypes.HANDLE,
+        _windows_wintypes.LPWSTR,
+        _windows_wintypes.DWORD,
+        _windows_wintypes.DWORD,
+    )
+
+
 class WorkspacePathError(ValueError):
     def __init__(
         self,
@@ -1736,35 +1827,11 @@ def _open_windows_directory_lock(
         ) from exc
 
     create_file = ctypes.windll.kernel32.CreateFileW
-    create_file.argtypes = (
-        wintypes.LPCWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.LPVOID,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.HANDLE,
-    )
+    create_file.argtypes = _WINDOWS_CREATE_FILE_ARGTYPES
     create_file.restype = wintypes.HANDLE
-    class ByHandleFileInformation(ctypes.Structure):
-        _fields_ = (
-            ("file_attributes", wintypes.DWORD),
-            ("creation_time", wintypes.FILETIME),
-            ("last_access_time", wintypes.FILETIME),
-            ("last_write_time", wintypes.FILETIME),
-            ("volume_serial_number", wintypes.DWORD),
-            ("file_size_high", wintypes.DWORD),
-            ("file_size_low", wintypes.DWORD),
-            ("number_of_links", wintypes.DWORD),
-            ("file_index_high", wintypes.DWORD),
-            ("file_index_low", wintypes.DWORD),
-        )
 
     get_file_information = ctypes.windll.kernel32.GetFileInformationByHandle
-    get_file_information.argtypes = (
-        wintypes.HANDLE,
-        ctypes.POINTER(ByHandleFileInformation),
-    )
+    get_file_information.argtypes = _WINDOWS_GET_FILE_INFORMATION_ARGTYPES
     get_file_information.restype = wintypes.BOOL
 
     file_share_read = 0x00000001
@@ -1805,7 +1872,7 @@ def _open_windows_directory_lock(
         )
 
     try:
-        information = ByHandleFileInformation()
+        information = _WindowsByHandleFileInformation()
         if not get_file_information(handle, ctypes.byref(information)):
             raise ctypes.WinError()
         file_attribute_directory = 0x00000010
@@ -1851,43 +1918,8 @@ def _open_windows_relative_directory(
     import ctypes
     from ctypes import wintypes
 
-    class UnicodeString(ctypes.Structure):
-        _fields_ = (
-            ("length", wintypes.USHORT),
-            ("maximum_length", wintypes.USHORT),
-            ("buffer", wintypes.LPWSTR),
-        )
-
-    class ObjectAttributes(ctypes.Structure):
-        _fields_ = (
-            ("length", wintypes.ULONG),
-            ("root_directory", wintypes.HANDLE),
-            ("object_name", ctypes.POINTER(UnicodeString)),
-            ("attributes", wintypes.ULONG),
-            ("security_descriptor", wintypes.LPVOID),
-            ("security_quality_of_service", wintypes.LPVOID),
-        )
-
-    class IoStatusBlock(ctypes.Structure):
-        _fields_ = (
-            ("status", ctypes.c_ssize_t),
-            ("information", ctypes.c_size_t),
-        )
-
     nt_create_file = ctypes.windll.ntdll.NtCreateFile
-    nt_create_file.argtypes = (
-        ctypes.POINTER(wintypes.HANDLE),
-        wintypes.ULONG,
-        ctypes.POINTER(ObjectAttributes),
-        ctypes.POINTER(IoStatusBlock),
-        ctypes.POINTER(ctypes.c_longlong),
-        wintypes.ULONG,
-        wintypes.ULONG,
-        wintypes.ULONG,
-        wintypes.ULONG,
-        wintypes.LPVOID,
-        wintypes.ULONG,
-    )
+    nt_create_file.argtypes = _WINDOWS_NT_CREATE_FILE_ARGTYPES
     nt_create_file.restype = ctypes.c_long
 
     file_read_attributes = 0x00000080
@@ -1896,20 +1928,20 @@ def _open_windows_relative_directory(
     file_open_reparse_point = 0x00200000
     obj_case_insensitive = 0x00000040
     name_buffer = ctypes.create_unicode_buffer(relative_name)
-    name = UnicodeString(
+    name = _WindowsUnicodeString(
         len(relative_name) * ctypes.sizeof(ctypes.c_wchar),
         (len(relative_name) + 1) * ctypes.sizeof(ctypes.c_wchar),
         ctypes.cast(name_buffer, wintypes.LPWSTR),
     )
-    attributes = ObjectAttributes(
-        ctypes.sizeof(ObjectAttributes),
+    attributes = _WindowsObjectAttributes(
+        ctypes.sizeof(_WindowsObjectAttributes),
         parent_handle,
         ctypes.pointer(name),
         obj_case_insensitive,
         None,
         None,
     )
-    io_status = IoStatusBlock()
+    io_status = _WindowsIoStatusBlock()
     handle = wintypes.HANDLE()
     status = nt_create_file(
         ctypes.byref(handle),
@@ -1960,25 +1992,11 @@ def _windows_handle_volume_serial(handle: int) -> int:
     import ctypes
     from ctypes import wintypes
 
-    class FileId128(ctypes.Structure):
-        _fields_ = (("identifier", ctypes.c_ubyte * 16),)
-
-    class FileIdInfo(ctypes.Structure):
-        _fields_ = (
-            ("volume_serial_number", ctypes.c_ulonglong),
-            ("file_id", FileId128),
-        )
-
     get_information = ctypes.windll.kernel32.GetFileInformationByHandleEx
-    get_information.argtypes = (
-        wintypes.HANDLE,
-        ctypes.c_int,
-        wintypes.LPVOID,
-        wintypes.DWORD,
-    )
+    get_information.argtypes = _WINDOWS_GET_FILE_INFORMATION_EX_ARGTYPES
     get_information.restype = wintypes.BOOL
     file_id_info_class = 18
-    information = FileIdInfo()
+    information = _WindowsFileIdInfo()
     if not get_information(
         handle,
         file_id_info_class,
@@ -1994,7 +2012,7 @@ def _windows_close_handle(handle: int) -> bool:
     from ctypes import wintypes
 
     close_handle = ctypes.windll.kernel32.CloseHandle
-    close_handle.argtypes = (wintypes.HANDLE,)
+    close_handle.argtypes = _WINDOWS_CLOSE_HANDLE_ARGTYPES
     close_handle.restype = wintypes.BOOL
     return bool(close_handle(handle))
 
@@ -2019,12 +2037,7 @@ def _windows_final_path_from_handle(handle: int) -> Path:
         raise RuntimeError("Windows handle APIs are unavailable") from exc
 
     get_final_path = ctypes.windll.kernel32.GetFinalPathNameByHandleW
-    get_final_path.argtypes = (
-        wintypes.HANDLE,
-        wintypes.LPWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-    )
+    get_final_path.argtypes = _WINDOWS_GET_FINAL_PATH_ARGTYPES
     get_final_path.restype = wintypes.DWORD
     required = get_final_path(handle, None, 0, 0)
     if not required:
