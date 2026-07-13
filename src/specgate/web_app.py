@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Respon
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from specgate.web_approvals import approve_web_approval, deny_web_approval, list_web_approvals
 from specgate.web_auth import (
@@ -25,6 +26,7 @@ from specgate.web_db import connect_db, init_db
 from specgate.web_debug import build_run_debug
 from specgate.web_projects import (
     ArchiveLimitError,
+    ArchiveValidationError,
     create_manual_project,
     create_project_from_zip,
     project_paths,
@@ -47,6 +49,8 @@ SESSION_COOKIE_NAME = "specgate_session"
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 RUN_THREAD_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 PREVIEW_UNAVAILABLE_MESSAGE = "Project preview is temporarily unavailable"
+UPLOAD_PATH_RACE_MESSAGE = "project archive storage changed during upload"
+UPLOAD_INTERNAL_ERROR_MESSAGE = "project archive could not be stored safely"
 RUN_CREATION_UNAVAILABLE_MESSAGE = "运行创建暂时不可用 / Run creation is temporarily unavailable"
 
 
@@ -211,7 +215,8 @@ def create_app(
         if len(content) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail="upload exceeds 5 MiB limit")
         try:
-            project = create_project_from_zip(
+            project = await run_in_threadpool(
+                create_project_from_zip,
                 app.state.db_path,
                 app.state.data_root,
                 int(user["id"]),
@@ -220,6 +225,12 @@ def create_app(
             )
         except ArchiveLimitError as exc:
             raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except ArchiveValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except WorkspacePathError as exc:
+            if exc.rule_family == "path_race":
+                raise HTTPException(status_code=409, detail=UPLOAD_PATH_RACE_MESSAGE) from exc
+            raise HTTPException(status_code=500, detail=UPLOAD_INTERNAL_ERROR_MESSAGE) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"project": _project_dict(project)}

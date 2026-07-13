@@ -156,6 +156,7 @@ def open_workspace_file(
                 descriptor = _open_windows_workspace_fd(
                     root_path,
                     trusted_root,
+                    root_identity,
                     parts,
                     access,
                     create,
@@ -473,6 +474,10 @@ def bind_workspace_tree(
         trusted_parent=trusted_parent,
         parent_identity=parent_identity,
     )
+
+
+def verify_workspace_tree_binding(binding: WorkspaceTreeBinding) -> None:
+    _verify_workspace_tree_binding(binding)
 
 
 def rename_workspace_tree_noreplace(
@@ -881,6 +886,7 @@ def _scan_windows_workspace(
                         descriptor = _open_windows_workspace_fd(
                             root,
                             trusted_root,
+                            root_identity,
                             normalized.split("/"),
                             "read",
                             False,
@@ -1083,6 +1089,7 @@ def _scan_windows_workspace_tolerant(
                             descriptor = _open_windows_workspace_fd(
                                 root,
                                 trusted_root,
+                                root_identity,
                                 relative.split("/"),
                                 "read",
                                 False,
@@ -1566,66 +1573,82 @@ def _validate_regular_file(descriptor: int, relative: str) -> None:
 def _open_windows_workspace_fd(
     root: Path,
     trusted_root: Path,
+    root_identity: tuple[int, int],
     parts: list[str],
     access: str,
     create: bool,
 ) -> int:
-    current = root
-    for part in parts[:-1]:
-        current /= part
-        try:
-            file_stat = current.lstat()
-        except FileNotFoundError:
-            if not create:
-                raise
+    descriptor = -1
+    try:
+        with contextlib.ExitStack() as directory_locks:
+            directory_locks.enter_context(
+                _open_windows_directory_lock(root, trusted_root, root_identity)
+            )
+            current = root
+            for index, part in enumerate(parts[:-1], start=1):
+                current /= part
+                try:
+                    file_stat = current.lstat()
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    try:
+                        current.mkdir()
+                    except FileExistsError:
+                        pass
+                    file_stat = current.lstat()
+                _reject_link_like(current)
+                if not stat.S_ISDIR(file_stat.st_mode):
+                    raise WorkspacePathError(
+                        f"workspace parent is not a directory: {part}",
+                        "unsafe_file_type",
+                    )
+                directory_locks.enter_context(
+                    _open_windows_directory_lock(
+                        current,
+                        trusted_root.joinpath(*parts[:index]),
+                        _stat_identity(file_stat),
+                    )
+                )
+
+            target = current / parts[-1]
             try:
-                current.mkdir()
-            except FileExistsError:
-                pass
-            file_stat = current.lstat()
-        _reject_link_like(current)
-        if not stat.S_ISDIR(file_stat.st_mode):
-            raise WorkspacePathError(
-                f"workspace parent is not a directory: {part}",
-                "unsafe_file_type",
-            )
+                target_stat = target.lstat()
+            except FileNotFoundError as exc:
+                target_stat = None
+                if not create:
+                    relative = "/".join(parts)
+                    raise WorkspacePathError(
+                        f"workspace file does not exist: {relative}",
+                        "path_race",
+                        missing_path=relative,
+                    ) from exc
+            if target_stat is not None:
+                _reject_link_like(target)
+                if not stat.S_ISREG(target_stat.st_mode):
+                    raise WorkspacePathError(
+                        f"workspace path is not a regular file: {'/'.join(parts)}",
+                        "unsafe_file_type",
+                    )
 
-    target = current / parts[-1]
-    try:
-        target_stat = target.lstat()
-    except FileNotFoundError as exc:
-        target_stat = None
-        if not create:
-            relative = "/".join(parts)
-            raise WorkspacePathError(
-                f"workspace file does not exist: {relative}",
-                "path_race",
-                missing_path=relative,
-            ) from exc
-    if target_stat is not None:
-        _reject_link_like(target)
-        if not stat.S_ISREG(target_stat.st_mode):
-            raise WorkspacePathError(
-                f"workspace path is not a regular file: {'/'.join(parts)}",
-                "unsafe_file_type",
-            )
+            flags = getattr(os, "O_BINARY", 0) | getattr(os, "O_NOINHERIT", 0)
+            flags |= os.O_RDONLY if access == "read" else os.O_WRONLY
+            if create:
+                flags |= os.O_CREAT
+            try:
+                descriptor = _open_windows_fd(target, flags, 0o666)
+            except OSError as exc:
+                _recheck_link_components(root, parts)
+                raise exc
 
-    flags = getattr(os, "O_BINARY", 0) | getattr(os, "O_NOINHERIT", 0)
-    flags |= os.O_RDONLY if access == "read" else os.O_WRONLY
-    if create:
-        flags |= os.O_CREAT
-    try:
-        descriptor = _open_windows_fd(target, flags, 0o666)
-    except OSError as exc:
-        _recheck_link_components(root, parts)
-        raise exc
-
-    try:
-        _validate_windows_final_path(descriptor, trusted_root, parts)
+            _validate_windows_final_path(descriptor, trusted_root, parts)
+        result = descriptor
+        descriptor = -1
+        return result
     except BaseException:
-        os.close(descriptor)
+        if descriptor >= 0:
+            os.close(descriptor)
         raise
-    return descriptor
 
 
 def _open_windows_fd(path: Path, flags: int, mode: int = 0o666) -> int:
@@ -1718,15 +1741,15 @@ def _open_windows_directory_lock(
     )
     get_file_information.restype = wintypes.BOOL
 
-    file_read_attributes = 0x0080
     file_share_read = 0x00000001
     file_share_write = 0x00000002
+    file_share_delete = 0x00000004
     open_existing = 3
     file_flag_backup_semantics = 0x02000000
     file_flag_open_reparse_point = 0x00200000
     handle = create_file(
         str(path),
-        file_read_attributes,
+        0,
         file_share_read | file_share_write,
         None,
         open_existing,
@@ -1734,7 +1757,39 @@ def _open_windows_directory_lock(
         None,
     )
     if handle == ctypes.c_void_p(-1).value:
-        raise ctypes.WinError()
+        handle = create_file(
+            str(path),
+            0,
+            file_share_read | file_share_write | file_share_delete,
+            None,
+            open_existing,
+            file_flag_backup_semantics,
+            None,
+        )
+        if handle == ctypes.c_void_p(-1).value:
+            fallback_stat = path.lstat()
+            _reject_link_like(path)
+            if not stat.S_ISDIR(fallback_stat.st_mode):
+                raise WorkspacePathError(
+                    "workspace scan path is not a directory",
+                    "unsafe_file_type",
+                )
+            fallback_identity = _stat_identity(fallback_stat)
+            if fallback_identity != expected_identity:
+                raise WorkspacePathError(
+                    "workspace directory identity changed during scan",
+                    "path_race",
+                )
+            if ntpath.normcase(ntpath.normpath(str(path))) != ntpath.normcase(
+                ntpath.normpath(str(expected))
+            ):
+                raise WorkspacePathError(
+                    "workspace directory changed location during scan",
+                    "path_race",
+                )
+            yield fallback_identity
+            _verify_tree_identity(path, expected_identity)
+            return
 
     try:
         information = ByHandleFileInformation()

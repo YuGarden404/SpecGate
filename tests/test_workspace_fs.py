@@ -520,6 +520,120 @@ class WorkspaceFileIOTests(unittest.TestCase):
             self.assertFalse((replacement / "nested").exists())
             self.assertFalse((ancestor / "nested").exists())
 
+    @unittest.skipUnless(os.name == "nt", "Windows implicit parent lock lifetime")
+    def test_windows_stream_write_holds_parent_locks_through_final_fd_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first"
+            nested = first / "nested"
+            active = []
+            entered = []
+            active_at_final_validation = []
+            real_validate = workspace_fs._validate_windows_final_path
+
+            @contextmanager
+            def tracking_lock(path, expected, expected_identity):
+                path = Path(path)
+                entered.append((path, Path(expected), tuple(active)))
+                active.append(path)
+                try:
+                    yield expected_identity
+                finally:
+                    active.remove(path)
+
+            def observe_final_validation(descriptor, trusted_root, parts):
+                active_at_final_validation.append(tuple(active))
+                return real_validate(descriptor, trusted_root, parts)
+
+            with (
+                mock.patch.object(
+                    workspace_fs,
+                    "_open_windows_directory_lock",
+                    side_effect=tracking_lock,
+                ),
+                mock.patch.object(
+                    workspace_fs,
+                    "_validate_windows_final_path",
+                    side_effect=observe_final_validation,
+                ),
+            ):
+                write_workspace_stream(
+                    root,
+                    "first/nested/data.bin",
+                    io.BytesIO(b"content"),
+                    max_bytes=7,
+                )
+
+            self.assertEqual([entry[0] for entry in entered], [root, first, nested])
+            self.assertEqual([entry[1] for entry in entered], [root, first, nested])
+            self.assertEqual([entry[2] for entry in entered], [(), (root,), (root, first)])
+            self.assertEqual(active_at_final_validation, [(root, first, nested)])
+
+    @unittest.skipUnless(os.name == "nt", "Windows implicit parent replacement prevention")
+    def test_windows_stream_write_rejects_ancestor_replacement_before_implicit_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "workspace"
+            ancestor = root / "ancestor"
+            displaced = base / "displaced-ancestor"
+            replacement = base / "replacement"
+            ancestor.mkdir(parents=True)
+            replacement.mkdir()
+            sentinel = replacement / "sentinel.txt"
+            sentinel.write_text("external sentinel", encoding="utf-8")
+            active = []
+            real_lstat = Path.lstat
+            attempted = False
+
+            @contextmanager
+            def tracking_lock(path, _expected, expected_identity):
+                path = Path(path)
+                active.append(path)
+                try:
+                    yield expected_identity
+                finally:
+                    active.remove(path)
+
+            def attempt_replacement(path):
+                nonlocal attempted
+                if Path(path) == ancestor / "nested" and not attempted:
+                    attempted = True
+                    if ancestor in active:
+                        raise WorkspacePathError(
+                            "workspace ancestor replacement was blocked",
+                            "path_race",
+                        )
+                    ancestor.rename(displaced)
+                    replacement.rename(ancestor)
+                return real_lstat(path)
+
+            with (
+                mock.patch.object(
+                    workspace_fs,
+                    "_open_windows_directory_lock",
+                    side_effect=tracking_lock,
+                ),
+                mock.patch.object(
+                    Path,
+                    "lstat",
+                    autospec=True,
+                    side_effect=attempt_replacement,
+                ),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    write_workspace_stream(
+                        root,
+                        "ancestor/nested/data.bin",
+                        io.BytesIO(b"content"),
+                        max_bytes=7,
+                    )
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
+            self.assertFalse((replacement / "nested").exists())
+            self.assertFalse((ancestor / "nested").exists())
+            self.assertFalse((ancestor / "data.bin").exists())
+
     def test_workspace_file_state_hashes_existing_and_reports_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1248,6 +1362,7 @@ class WorkspaceScanAndCopyTests(unittest.TestCase):
                     workspace_fs,
                     "_windows_handle_identity",
                     side_effect=(
+                        (root_stat.st_dev, root_stat.st_ino),
                         (root_stat.st_dev, root_stat.st_ino),
                         (outside_stat.st_dev, outside_stat.st_ino),
                     ),

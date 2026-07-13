@@ -918,6 +918,72 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.json()["detail"], "zip archive is invalid or unsafe")
         self.assertNotIn(str(app.state.data_root), response.text)
 
+    def test_upload_runs_synchronous_project_creation_in_threadpool(self):
+        client, _app = self.make_client()
+        self.register(client)
+        archive_bytes = BytesIO()
+        with zipfile.ZipFile(archive_bytes, "w") as archive:
+            archive.writestr("SPEC.md", "Spec")
+            archive.writestr("CHECKLIST.md", "Checklist")
+        calls = []
+
+        async def run_in_test_threadpool(function, *args, **kwargs):
+            calls.append((function, args, kwargs))
+            return function(*args, **kwargs)
+
+        with patch(
+            "specgate.web_app.run_in_threadpool",
+            create=True,
+            side_effect=run_in_test_threadpool,
+        ):
+            response = client.post(
+                "/api/projects/upload",
+                data={"name": "Threaded"},
+                files={"file": ("threaded.zip", archive_bytes.getvalue(), "application/zip")},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0].__name__, "create_project_from_zip")
+
+    def test_upload_maps_workspace_path_race_to_stable_409(self):
+        client, app = self.make_client()
+        self.register(client)
+        internal_path = str(app.state.data_root / "users" / "1" / "projects" / "1")
+
+        with patch(
+            "specgate.web_app.create_project_from_zip",
+            side_effect=WorkspacePathError(internal_path, "path_race"),
+        ):
+            response = client.post(
+                "/api/projects/upload",
+                data={"name": "Race"},
+                files={"file": ("race.zip", b"zip", "application/zip")},
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["detail"], "project archive storage changed during upload")
+        self.assertNotIn(internal_path, response.text)
+
+    def test_upload_maps_other_workspace_errors_to_stable_500(self):
+        client, app = self.make_client()
+        self.register(client)
+        internal_path = str(app.state.data_root / "private-sentinel")
+
+        with patch(
+            "specgate.web_app.create_project_from_zip",
+            side_effect=WorkspacePathError(internal_path, "reparse_point"),
+        ):
+            response = client.post(
+                "/api/projects/upload",
+                data={"name": "Unsafe storage"},
+                files={"file": ("unsafe.zip", b"zip", "application/zip")},
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["detail"], "project archive could not be stored safely")
+        self.assertNotIn(internal_path, response.text)
+
     def test_users_cannot_access_each_others_projects_or_runs(self):
         client_a, app = self.make_client()
         self.register(client_a, "alice", "correct-password")

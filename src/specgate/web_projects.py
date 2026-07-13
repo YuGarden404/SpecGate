@@ -15,10 +15,13 @@ from specgate.web_auth import utc_now
 from specgate.web_db import connect_db
 from specgate.workspace_fs import (
     WorkspacePathError,
+    WorkspaceTreeBinding,
     bind_workspace_tree,
+    copy_workspace_tree,
     ensure_workspace_directory,
     read_workspace_bytes,
     rename_workspace_tree_noreplace,
+    verify_workspace_tree_binding,
     write_workspace_bytes,
     write_workspace_stream,
 )
@@ -175,6 +178,7 @@ def create_project_from_zip(
         conn = connect_db(db_path)
         paths: ProjectPaths | None = None
         staging_paths: ProjectPaths | None = None
+        staging_binding: WorkspaceTreeBinding | None = None
         staging_identity: tuple[int, int] | None = None
         published_identity: tuple[int, int] | None = None
         try:
@@ -187,29 +191,38 @@ def create_project_from_zip(
                     dir=paths.root.parent,
                 )
             )
-            staging_paths = _paths_for_root(staging_root)
-            initial_staging_binding = bind_workspace_tree(staging_root)
-            if initial_staging_binding is None:
+            staging_binding = bind_workspace_tree(staging_root)
+            if staging_binding is None:
                 raise WorkspacePathError("upload staging root is missing", "path_race")
-            staging_identity = initial_staging_binding.identity
-            for directory in (
-                staging_paths.original,
-                staging_paths.workspace,
-                staging_paths.artifacts,
-                staging_paths.runs,
+            staging_identity = staging_binding.identity
+            staging_paths = _paths_for_root(staging_root)
+            for relative in (
+                "original",
+                "artifacts",
+                "runs",
             ):
-                directory.mkdir(exist_ok=False)
+                verify_workspace_tree_binding(staging_binding)
+                ensure_workspace_directory(staging_root, relative)
+                verify_workspace_tree_binding(staging_binding)
 
-            _extract_archive(archive, plan.members, staging_paths.original)
-            _extract_archive(archive, plan.members, staging_paths.workspace)
+            _extract_archive(
+                archive,
+                plan.members,
+                staging_paths.original,
+                staging_binding=staging_binding,
+            )
+            verify_workspace_tree_binding(staging_binding)
+            copy_workspace_tree(staging_paths.original, staging_paths.workspace)
+            verify_workspace_tree_binding(staging_binding)
+            verify_workspace_tree_binding(staging_binding)
             _normalize_workspace_inputs(
                 staging_paths.original,
                 staging_paths.workspace,
                 plan.spec_path,
                 plan.checklist_path,
             )
+            verify_workspace_tree_binding(staging_binding)
 
-            staging_binding = bind_workspace_tree(staging_paths.root)
             published = rename_workspace_tree_noreplace(staging_binding, paths.root)
             published_identity = published.identity
             staging_paths = None
@@ -427,13 +440,21 @@ def _extract_archive(
     archive: zipfile.ZipFile,
     members: tuple[_ValidatedArchiveMember, ...],
     destination: Path,
+    *,
+    staging_binding: WorkspaceTreeBinding | None = None,
 ) -> None:
     extracted_total = 0
     try:
         for member in members:
             if member.info.is_dir():
+                if staging_binding is not None:
+                    verify_workspace_tree_binding(staging_binding)
                 ensure_workspace_directory(destination, member.path[:-1])
+                if staging_binding is not None:
+                    verify_workspace_tree_binding(staging_binding)
                 continue
+            if staging_binding is not None:
+                verify_workspace_tree_binding(staging_binding)
             with archive.open(member.info, "r") as source:
                 written = write_workspace_stream(
                     destination,
@@ -442,6 +463,8 @@ def _extract_archive(
                     max_bytes=member.info.file_size,
                     chunk_size=ZIP_READ_CHUNK_BYTES,
                 )
+            if staging_binding is not None:
+                verify_workspace_tree_binding(staging_binding)
             if written != member.info.file_size:
                 raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE)
             extracted_total += written

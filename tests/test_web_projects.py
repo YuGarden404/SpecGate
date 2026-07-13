@@ -142,11 +142,118 @@ class WebProjectsTests(unittest.TestCase):
         paths = project_paths(data_root, user["id"], project["id"])
         self.assertTrue((paths.original / "empty" / "nested").is_dir())
         self.assertTrue((paths.workspace / "empty" / "nested").is_dir())
-        self.assertEqual(safe_directory.call_count, 2)
+        self.assertEqual(safe_directory.call_count, 4)
         self.assertEqual(
             [call.args[1] for call in safe_directory.call_args_list],
-            ["empty/nested", "empty/nested"],
+            ["original", "artifacts", "runs", "empty/nested"],
         )
+
+    def test_create_project_from_zip_extracts_once_then_uses_safe_workspace_copy(self):
+        db_path, data_root, user = self.make_context()
+        zip_content = self.zip_bytes(
+            {"SPEC.md": "Spec", "CHECKLIST.md": "Checklist", "site/index.html": "index"}
+        )
+        real_bind = web_projects.bind_workspace_tree
+        real_extract = web_projects._extract_archive
+        real_copy = workspace_fs.copy_workspace_tree
+
+        with (
+            mock.patch.object(web_projects, "bind_workspace_tree", wraps=real_bind) as bind_tree,
+            mock.patch.object(web_projects, "_extract_archive", wraps=real_extract) as extract,
+            mock.patch.object(
+                web_projects,
+                "copy_workspace_tree",
+                create=True,
+                wraps=real_copy,
+            ) as copy_tree,
+        ):
+            project = create_project_from_zip(
+                db_path,
+                data_root,
+                user["id"],
+                "Single extraction",
+                zip_content,
+            )
+
+        paths = project_paths(data_root, user["id"], project["id"])
+        self.assertEqual(bind_tree.call_count, 1)
+        self.assertEqual(extract.call_count, 1)
+        copy_tree.assert_called_once()
+        copied_source, copied_destination = copy_tree.call_args.args
+        self.assertEqual(copied_source.name, "original")
+        self.assertEqual(copied_destination.name, "workspace")
+        self.assertEqual(copied_source.parent, copied_destination.parent)
+        self.assertEqual((paths.workspace / "site" / "index.html").read_text(encoding="utf-8"), "index")
+
+    def test_staging_replacement_during_extraction_stops_before_next_write(self):
+        db_path, data_root, user = self.make_context()
+        base = data_root.parent
+        replacement = base / "replacement"
+        (replacement / "original").mkdir(parents=True)
+        sentinel = replacement / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+        zip_content = self.zip_bytes({"SPEC.md": "Spec", "CHECKLIST.md": "Checklist"})
+        real_write = web_projects.write_workspace_stream
+        staging_root = None
+        writes = 0
+
+        def replace_after_first_write(root, relative, source, **kwargs):
+            nonlocal staging_root, writes
+            written = real_write(root, relative, source, **kwargs)
+            writes += 1
+            if writes == 1:
+                staging_root = Path(root).parent
+                displaced = staging_root.parent / ".displaced-staging"
+                binding = workspace_fs.bind_workspace_tree(staging_root)
+                workspace_fs.rename_workspace_tree_noreplace(binding, displaced)
+                replacement.rename(staging_root)
+            return written
+
+        with mock.patch.object(
+            web_projects,
+            "write_workspace_stream",
+            side_effect=replace_after_first_write,
+        ):
+            with self.assertRaises(WorkspacePathError):
+                create_project_from_zip(db_path, data_root, user["id"], "Replaced", zip_content)
+
+        self.assertIsNotNone(staging_root)
+        self.assertEqual((staging_root / "sentinel.txt").read_text(encoding="utf-8"), "external sentinel")
+        self.assertFalse((staging_root / "original" / "CHECKLIST.md").exists())
+        self.assertFalse(project_paths(data_root, user["id"], 1).root.exists())
+
+    def test_staging_replacement_before_publish_is_not_rebound(self):
+        db_path, data_root, user = self.make_context()
+        base = data_root.parent
+        replacement = base / "replacement"
+        displaced = base / "displaced-staging"
+        replacement.mkdir()
+        sentinel = replacement / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+        zip_content = self.zip_bytes({"SPEC.md": "Spec", "CHECKLIST.md": "Checklist"})
+        real_normalize = web_projects._normalize_workspace_inputs
+        staging_root = None
+
+        def replace_after_normalize(original, workspace, spec_path, checklist_path):
+            nonlocal staging_root
+            real_normalize(original, workspace, spec_path, checklist_path)
+            staging_root = Path(original).parent
+            staging_root.rename(displaced)
+            replacement.rename(staging_root)
+
+        with mock.patch.object(
+            web_projects,
+            "_normalize_workspace_inputs",
+            side_effect=replace_after_normalize,
+        ):
+            with self.assertRaises(WorkspacePathError):
+                create_project_from_zip(db_path, data_root, user["id"], "Replaced", zip_content)
+
+        self.assertIsNotNone(staging_root)
+        self.assertEqual((staging_root / "sentinel.txt").read_text(encoding="utf-8"), "external sentinel")
+        self.assertFalse(project_paths(data_root, user["id"], 1).root.exists())
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from projects").fetchone()[0], 0)
 
     def test_create_project_from_zip_rejects_path_escape(self):
         db_path, data_root, user = self.make_context()
