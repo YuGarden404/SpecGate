@@ -29,6 +29,13 @@ class WorkspacePathError(ValueError):
         self.missing_path = missing_path
 
 
+class WorkspaceTreeRenameError(WorkspacePathError):
+    def __init__(self, message: str, *, quarantined: bool):
+        super().__init__(message, "path_race")
+        self.renamed = True
+        self.quarantined = quarantined
+
+
 @dataclass(frozen=True)
 class WorkspaceFileState:
     exists: bool
@@ -444,15 +451,30 @@ def rename_workspace_tree_noreplace(
             "path_race",
         ) from exc
 
-    moved = bind_workspace_tree(destination_path)
-    if moved is None or (
-        moved.identity != binding.identity
-        or moved.parent_identity != binding.parent_identity
-    ):
-        raise WorkspacePathError(
-            "workspace tree identity changed during rename",
-            "path_race",
-        )
+    try:
+        moved = bind_workspace_tree(destination_path)
+        if moved is None or (
+            moved.identity != binding.identity
+            or moved.parent_identity != binding.parent_identity
+        ):
+            raise WorkspacePathError(
+                "workspace tree identity changed during rename",
+                "path_race",
+            )
+    except BaseException as verification_error:
+        try:
+            quarantine = _quarantine_unknown_tree(destination_path)
+        except BaseException as quarantine_error:
+            error = WorkspaceTreeRenameError(
+                "renamed workspace tree could not be quarantined after verification failure",
+                quarantined=False,
+            )
+            error.add_note(f"workspace tree quarantine failed: {quarantine_error}")
+            raise error from verification_error
+        raise WorkspaceTreeRenameError(
+            "renamed workspace tree was quarantined after verification failure",
+            quarantined=quarantine is not None,
+        ) from verification_error
     return moved
 
 
@@ -1219,23 +1241,24 @@ def _rename_staging_noreplace(staging: Path, destination: Path) -> None:
     _platform_rename_noreplace(staging, destination)
 
 
-def _quarantine_unknown_tree(destination: Path) -> None:
+def _quarantine_unknown_tree(destination: Path) -> Path | None:
     try:
         destination.lstat()
     except FileNotFoundError:
-        return
+        return None
     quarantine = destination.parent / (
         f".{destination.name}.specgate-quarantine-{secrets.token_hex(16)}"
     )
     try:
         _platform_rename_noreplace(destination, quarantine)
     except FileNotFoundError:
-        return
+        return None
     except OSError as exc:
         raise WorkspacePathError(
             "uncertain published tree could not be quarantined",
             "path_race",
         ) from exc
+    return quarantine
 
 
 def _platform_rename_noreplace(staging: Path, destination: Path) -> None:

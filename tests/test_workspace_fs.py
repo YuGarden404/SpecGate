@@ -592,6 +592,84 @@ class WorkspaceScanAndCopyTests(unittest.TestCase):
             self.assertEqual((source / "index.html").read_text(encoding="utf-8"), "v1")
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
 
+    def test_bound_tree_rename_quarantines_post_rename_identity_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            source = parent / "workspace.next-11-token"
+            destination = parent / "workspace"
+            source.mkdir()
+            sentinel = source / "sentinel.txt"
+            sentinel.write_text("external sentinel", encoding="utf-8")
+            binding = workspace_fs.bind_workspace_tree(source)
+            mismatched = workspace_fs.WorkspaceTreeBinding(
+                path=destination,
+                trusted_path=destination,
+                identity=(binding.identity[0], binding.identity[1] + 1),
+                parent_path=binding.parent_path,
+                trusted_parent=binding.trusted_parent,
+                parent_identity=binding.parent_identity,
+            )
+
+            with mock.patch.object(workspace_fs, "bind_workspace_tree", return_value=mismatched):
+                with self.assertRaises(workspace_fs.WorkspaceTreeRenameError) as raised:
+                    workspace_fs.rename_workspace_tree_noreplace(binding, destination)
+
+            self.assertTrue(raised.exception.renamed)
+            self.assertTrue(raised.exception.quarantined)
+            self.assertFalse(destination.exists())
+            quarantines = list(parent.glob(".workspace.specgate-quarantine-*"))
+            self.assertEqual(len(quarantines), 1)
+            self.assertEqual(
+                (quarantines[0] / "sentinel.txt").read_text(encoding="utf-8"),
+                "external sentinel",
+            )
+
+    def test_bound_tree_rename_retains_unknown_tree_when_quarantine_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            source = parent / "workspace.next-11-token"
+            destination = parent / "workspace"
+            source.mkdir()
+            sentinel = source / "sentinel.txt"
+            sentinel.write_text("external sentinel", encoding="utf-8")
+            binding = workspace_fs.bind_workspace_tree(source)
+            mismatched = workspace_fs.WorkspaceTreeBinding(
+                path=destination,
+                trusted_path=destination,
+                identity=(binding.identity[0], binding.identity[1] + 1),
+                parent_path=binding.parent_path,
+                trusted_parent=binding.trusted_parent,
+                parent_identity=binding.parent_identity,
+            )
+            real_rename = workspace_fs._platform_rename_noreplace
+            calls = 0
+
+            def fail_quarantine(source_path, destination_path):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise OSError("quarantine denied")
+                return real_rename(source_path, destination_path)
+
+            with (
+                mock.patch.object(workspace_fs, "bind_workspace_tree", return_value=mismatched),
+                mock.patch.object(
+                    workspace_fs,
+                    "_platform_rename_noreplace",
+                    side_effect=fail_quarantine,
+                ),
+            ):
+                with self.assertRaises(workspace_fs.WorkspaceTreeRenameError) as raised:
+                    workspace_fs.rename_workspace_tree_noreplace(binding, destination)
+
+            self.assertTrue(raised.exception.renamed)
+            self.assertFalse(raised.exception.quarantined)
+            self.assertEqual(
+                (destination / "sentinel.txt").read_text(encoding="utf-8"),
+                "external sentinel",
+            )
+            self.assertEqual(list(parent.glob(".workspace.specgate-quarantine-*")), [])
+
     @unittest.skipUnless(os.name == "nt", "Windows root identity validation")
     def test_windows_stat_and_handle_identity_match_for_same_root(self):
         with tempfile.TemporaryDirectory() as tmp:

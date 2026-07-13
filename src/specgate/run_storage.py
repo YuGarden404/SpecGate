@@ -197,8 +197,17 @@ def cleanup_interrupted_run_storage(project: ProjectPaths, run_id: int) -> None:
 def promote_run_workspace(project: ProjectPaths, run_id: int) -> None:
     validate_run_storage_ownership(project, run_id)
     run = web_run_paths(project, run_id)
-    next_workspace = project.workspace.with_name(f"workspace.next-{run_id}")
-    backup_workspace = project.workspace.with_name(f"workspace.backup-{run_id}")
+    token = _load_promotion_transaction(project.workspace, run_id)
+    if token is None:
+        token = secrets.token_hex(32)
+        next_workspace, backup_workspace = _promotion_paths(project.workspace, run_id, token)
+        next_state = _load_promotion_phase(next_workspace, run_id, "next")
+        backup_state = _load_promotion_phase(backup_workspace, run_id, "backup")
+        if next_state.marker is not None or backup_state.marker is not None:
+            raise RunStorageOwnershipError("unowned workspace promotion marker retained")
+        _write_promotion_transaction(project.workspace, run_id, token)
+    else:
+        next_workspace, backup_workspace = _promotion_paths(project.workspace, run_id, token)
 
     next_state = _load_promotion_phase(next_workspace, run_id, "next")
     backup_state = _load_promotion_phase(backup_workspace, run_id, "backup")
@@ -208,12 +217,12 @@ def promote_run_workspace(project: ProjectPaths, run_id: int) -> None:
             next_state,
             backup_state,
             run_id,
+            token,
         )
         return
     if next_state.binding is not None or backup_state.binding is not None:
         raise RunStorageOwnershipError("unowned workspace promotion path retained")
 
-    token = secrets.token_hex(32)
     copy_workspace_tree(run.workspace, next_workspace)
     next_binding = _require_tree_binding(next_workspace, "next workspace")
     _write_promotion_marker(next_workspace, run_id, "next", token, next_binding)
@@ -233,10 +242,13 @@ def _recover_workspace_promotion(
     next_state: _PromotionPhaseState,
     backup_state: _PromotionPhaseState,
     run_id: int,
+    transaction_token: str,
 ) -> None:
     if next_state.marker is None:
         raise RunStorageOwnershipError("workspace next ownership marker is missing")
     token = _promotion_marker_token(next_state.marker)
+    if token != transaction_token:
+        raise RunStorageOwnershipError("workspace next transaction token does not match")
     if backup_state.marker is None:
         if backup_state.binding is not None:
             raise RunStorageOwnershipError("workspace backup ownership marker is missing")
@@ -250,7 +262,7 @@ def _recover_workspace_promotion(
         )
         backup_state = _load_promotion_phase(backup_state.path, run_id, "backup")
 
-    if _promotion_marker_token(backup_state.marker) != token:
+    if _promotion_marker_token(backup_state.marker) != transaction_token:
         raise RunStorageOwnershipError("workspace promotion transaction token does not match")
     next_identity = _promotion_marker_identity(next_state.marker)
     backup_identity = _promotion_marker_identity(backup_state.marker)
@@ -312,9 +324,24 @@ def _commit_workspace_promotion(
         token,
     )
     moved_backup = rename_workspace_tree_noreplace(current_binding, backup_workspace)
+    moved_current = None
     try:
         moved_current = rename_workspace_tree_noreplace(next_binding, current_binding.path)
+        _validate_published_workspace(moved_current, next_binding, run_id, token)
     except BaseException as publish_error:
+        if moved_current is not None:
+            try:
+                observed_current = _optional_tree_binding(
+                    moved_current.path,
+                    "published workspace",
+                )
+                if observed_current is not None:
+                    quarantine = _random_promotion_quarantine_path(moved_current.path)
+                    rename_workspace_tree_noreplace(observed_current, quarantine)
+            except BaseException as quarantine_error:
+                publish_error.add_note(
+                    f"published workspace quarantine failed: {quarantine_error}"
+                )
         try:
             rename_workspace_tree_noreplace(moved_backup, current_binding.path)
         except BaseException as rollback_error:
@@ -333,11 +360,34 @@ def _commit_workspace_promotion(
             except BaseException as cleanup_error:
                 publish_error.add_note(f"workspace promotion next quarantine failed: {cleanup_error}")
         raise
-    if moved_current.identity != next_binding.identity:
-        raise RunStorageOwnershipError("published workspace identity does not match next workspace")
     backup_state = _load_promotion_phase(backup_workspace, run_id, "backup")
     if backup_state.binding is not None:
         _quarantine_committed_phase(backup_state, token)
+
+
+def _validate_published_workspace(
+    current_binding: WorkspaceTreeBinding,
+    next_binding: WorkspaceTreeBinding,
+    run_id: int,
+    token: str,
+) -> None:
+    next_state = _load_promotion_phase(next_binding.path, run_id, "next")
+    if next_state.binding is not None:
+        raise RunStorageOwnershipError("workspace next path reappeared after publication")
+    if next_state.marker is None or _promotion_marker_token(next_state.marker) != token:
+        raise RunStorageOwnershipError("published workspace transaction token does not match")
+    expected_identity = _promotion_marker_identity(next_state.marker)
+    expected_parent = _promotion_marker_parent_identity(next_state.marker)
+    observed_current = _require_tree_binding(current_binding.path, "published workspace")
+    if (
+        observed_current.identity != current_binding.identity
+        or observed_current.identity != next_binding.identity
+        or observed_current.identity != expected_identity
+        or observed_current.parent_identity != current_binding.parent_identity
+        or observed_current.parent_identity != next_binding.parent_identity
+        or observed_current.parent_identity != expected_parent
+    ):
+        raise RunStorageOwnershipError("published workspace ownership does not match transaction")
 
 
 def _validate_promotion_commit(
@@ -404,8 +454,70 @@ def _promotion_marker_path(path: Path) -> Path:
     return path.with_name(f".{path.name}.specgate-owner.json")
 
 
+def _promotion_transaction_path(current: Path, run_id: int) -> Path:
+    return current.with_name(f".workspace.promotion-{run_id}.json")
+
+
+def _promotion_paths(current: Path, run_id: int, token: str) -> tuple[Path, Path]:
+    return (
+        current.with_name(f"workspace.next-{run_id}-{token}"),
+        current.with_name(f"workspace.backup-{run_id}-{token}"),
+    )
+
+
+def _load_promotion_transaction(current: Path, run_id: int) -> str | None:
+    path = _promotion_transaction_path(current, run_id)
+    try:
+        raw_marker = read_optional_workspace_text(path.parent, path.name)
+    except (OSError, UnicodeError, WorkspacePathError) as exc:
+        raise RunStorageOwnershipError("workspace promotion transaction is unsafe") from exc
+    if raw_marker is None:
+        return None
+    try:
+        marker = json.loads(raw_marker)
+    except json.JSONDecodeError as exc:
+        raise RunStorageOwnershipError("workspace promotion transaction is invalid") from exc
+    if not isinstance(marker, dict) or set(marker) != {
+        "schema_version",
+        "run_id",
+        "transaction_token",
+    }:
+        raise RunStorageOwnershipError("workspace promotion transaction is invalid")
+    token = marker.get("transaction_token")
+    if (
+        marker.get("schema_version") != _PROMOTION_MARKER_SCHEMA_VERSION
+        or marker.get("run_id") != run_id
+        or not isinstance(token, str)
+        or len(token) != 64
+        or any(character not in "0123456789abcdef" for character in token)
+    ):
+        raise RunStorageOwnershipError("workspace promotion transaction does not match run")
+    return token
+
+
+def _write_promotion_transaction(current: Path, run_id: int, token: str) -> None:
+    path = _promotion_transaction_path(current, run_id)
+    marker = {
+        "schema_version": _PROMOTION_MARKER_SCHEMA_VERSION,
+        "run_id": run_id,
+        "transaction_token": token,
+    }
+    try:
+        publish_workspace_bytes(
+            path.parent,
+            path.name,
+            json.dumps(marker, sort_keys=True).encode("utf-8"),
+        )
+    except WorkspacePathError as exc:
+        raise RunStorageOwnershipError("workspace promotion transaction could not be published") from exc
+
+
 def _promotion_quarantine_path(path: Path, token: str) -> Path:
     return path.with_name(f".{path.name}.specgate-quarantine-{token}")
+
+
+def _random_promotion_quarantine_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}.specgate-quarantine-{secrets.token_hex(16)}")
 
 
 def _write_promotion_marker(

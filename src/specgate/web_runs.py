@@ -31,6 +31,7 @@ from specgate.web_db import connect_db
 from specgate.web_projects import ProjectPaths, RunPaths, project_paths, web_run_paths
 from specgate.web_settings import get_settings
 from specgate.workspace_fs import (
+    WorkspaceTreeRenameError,
     open_workspace_file,
     publish_workspace_bytes,
     read_workspace_bytes,
@@ -504,7 +505,9 @@ def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
             )
     except Exception as exc:
         if run is not None:
-            if publication_prepared and workspace_promoted:
+            if publication_prepared and (
+                workspace_promoted or isinstance(exc, WorkspaceTreeRenameError)
+            ):
                 try:
                     _record_publication_error(db_path, run_id, _safe_error(exc))
                 except Exception as diagnostic_error:
@@ -585,7 +588,9 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
         return get_run(db_path, user_id, run_id)
     except Exception as exc:
         if running_run is not None:
-            if publication_prepared and workspace_promoted:
+            if publication_prepared and (
+                workspace_promoted or isinstance(exc, WorkspaceTreeRenameError)
+            ):
                 try:
                     _record_publication_error(db_path, run_id, _safe_error(exc))
                 except Exception as diagnostic_error:

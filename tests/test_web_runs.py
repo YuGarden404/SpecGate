@@ -358,6 +358,31 @@ class WebRunsTests(unittest.TestCase):
                     [str(first["id"])],
                 )
 
+    def test_create_run_during_publishing_does_not_snapshot_workspace(self):
+        db_path, data_root, user, project = self.make_context()
+        first = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "First run",
+            data_root=data_root,
+        )
+        with closing(connect_db(db_path)) as conn:
+            conn.execute("update runs set status = 'publishing' where id = ?", (first["id"],))
+            conn.commit()
+
+        with patch("specgate.web_runs.initialize_run_storage") as initialize_storage:
+            with self.assertRaises(ActiveRunConflict):
+                create_run(
+                    db_path,
+                    project["id"],
+                    user["id"],
+                    "Conflicting run",
+                    data_root=data_root,
+                )
+
+        initialize_storage.assert_not_called()
+
     def test_create_run_allows_different_projects_concurrently(self):
         db_path, data_root, user, first_project = self.make_context()
         second_project = create_manual_project(
@@ -995,6 +1020,91 @@ class WebRunsTests(unittest.TestCase):
                 conn.execute("select count(*) from artifacts where run_id = ?", (run["id"],)).fetchone()[0],
                 0,
             )
+
+    def test_post_rename_source_replacement_is_quarantined_and_keeps_publishing(self):
+        db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        (paths.workspace / "index.html").write_text("old workspace", encoding="utf-8")
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        replacement = paths.root / "unknown-promotion-source"
+        replacement.mkdir()
+        sentinel = replacement / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+        displaced = paths.root / "displaced-owned-next"
+        real_rename = workspace_fs._platform_rename_noreplace
+
+        def replace_source_at_publish(source, destination):
+            source = Path(source)
+            destination = Path(destination)
+            if destination == paths.workspace and source.name.startswith("workspace.next-"):
+                real_rename(source, displaced)
+                real_rename(replacement, source)
+            return real_rename(source, destination)
+
+        with patch.object(
+            workspace_fs,
+            "_platform_rename_noreplace",
+            side_effect=replace_source_at_publish,
+        ):
+            with self.assertRaises(workspace_fs.WorkspaceTreeRenameError):
+                execute_run_once(db_path, data_root, run["id"])
+
+        updated = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(updated["status"], "publishing")
+        self.assertIn("quarantined after verification failure", updated["error_message"])
+        self.assertEqual(
+            (paths.workspace / "index.html").read_text(encoding="utf-8"),
+            "old workspace",
+        )
+        self.assertFalse((paths.workspace / "sentinel.txt").exists())
+        quarantines = list(paths.root.glob(".workspace.specgate-quarantine-*"))
+        self.assertEqual(len(quarantines), 1)
+        self.assertEqual(
+            (quarantines[0] / "sentinel.txt").read_text(encoding="utf-8"),
+            "external sentinel",
+        )
+        self.assertTrue(displaced.is_dir())
+
+    def test_post_rename_quarantine_failure_keeps_publishing_and_evidence(self):
+        db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        (paths.workspace / "index.html").write_text("old workspace", encoding="utf-8")
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        replacement = paths.root / "unknown-promotion-source"
+        replacement.mkdir()
+        sentinel = replacement / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+        displaced = paths.root / "displaced-owned-next"
+        real_rename = workspace_fs._platform_rename_noreplace
+
+        def replace_source_and_fail_quarantine(source, destination):
+            source = Path(source)
+            destination = Path(destination)
+            if destination == paths.workspace and source.name.startswith("workspace.next-"):
+                real_rename(source, displaced)
+                real_rename(replacement, source)
+            if destination.name.startswith(".workspace.specgate-quarantine-"):
+                raise OSError("quarantine denied")
+            return real_rename(source, destination)
+
+        with patch.object(
+            workspace_fs,
+            "_platform_rename_noreplace",
+            side_effect=replace_source_and_fail_quarantine,
+        ):
+            with self.assertRaises(workspace_fs.WorkspaceTreeRenameError) as raised:
+                execute_run_once(db_path, data_root, run["id"])
+
+        self.assertFalse(raised.exception.quarantined)
+        updated = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(updated["status"], "publishing")
+        self.assertIn("could not be quarantined", updated["error_message"])
+        self.assertEqual(
+            (paths.workspace / "sentinel.txt").read_text(encoding="utf-8"),
+            "external sentinel",
+        )
+        self.assertEqual(list(paths.root.glob(".workspace.specgate-quarantine-*")), [])
+        self.assertTrue(displaced.is_dir())
 
     def test_finalize_failure_after_promotion_keeps_publishing_and_blocks_new_run(self):
         db_path, data_root, user, project = self.make_context()
