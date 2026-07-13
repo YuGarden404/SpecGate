@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from specgate.web_app import create_app
 from specgate.web_db import connect_db
+from specgate.web_projects import project_paths, web_run_paths
 from specgate.web_runs import execute_run_once
 
 
@@ -327,19 +328,15 @@ class WebAppTests(unittest.TestCase):
                 f"/api/projects/{project['id']}/runs",
                 json={"prompt": "Build the result"},
             ).json()["run"]
-        artifact = app.state.data_root / "artifact-index.html"
-        artifact.write_text("<!doctype html><script>fetch('/api/me')</script>", encoding="utf-8")
-        with closing(connect_db(app.state.db_path)) as conn:
-            conn.execute(
-                "update runs set status = ?, index_artifact_path = ? where id = ?",
-                ("completed", str(artifact), run["id"]),
-            )
-            conn.commit()
+        execute_run_once(app.state.db_path, app.state.data_root, run["id"])
 
         response = client.get(f"/api/runs/{run['id']}/artifacts/index")
+        result_zip = client.get(f"/api/runs/{run['id']}/artifacts/zip")
         fetched = client.get(f"/api/runs/{run['id']}")
 
         self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(result_zip.status_code, 200, result_zip.text)
+        self.assertTrue(result_zip.headers["content-type"].startswith("application/zip"))
         self.assertIn("attachment", response.headers.get("content-disposition", ""))
         self.assertIn("sandbox", response.headers.get("content-security-policy", ""))
         self.assertNotIn("index_artifact_path", fetched.json()["run"])
@@ -347,6 +344,62 @@ class WebAppTests(unittest.TestCase):
             fetched.json()["run"]["index_artifact_url"],
             f"/api/runs/{run['id']}/artifacts/index",
         )
+
+    def test_artifact_downloads_reject_tampered_paths_without_leaking_existence(self):
+        client, app = self.make_client()
+        user = self.register(client)["user"]
+        project = self.create_project(client)
+        with patch("specgate.web_app.start_run_background"):
+            run1 = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "Build the first result"},
+            ).json()["run"]
+        execute_run_once(app.state.db_path, app.state.data_root, run1["id"])
+        with patch("specgate.web_app.start_run_background"):
+            run2 = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "Build the second result"},
+            ).json()["run"]
+        execute_run_once(app.state.db_path, app.state.data_root, run2["id"])
+
+        project_root = project_paths(app.state.data_root, user["id"], project["id"])
+        run2_paths = web_run_paths(project_root, run2["id"])
+        project_root.artifacts.mkdir(parents=True, exist_ok=True)
+        shared_index = project_root.artifacts / "shared-index.html"
+        shared_zip = project_root.artifacts / "shared-result.zip"
+        shared_index.write_text("shared", encoding="utf-8")
+        shared_zip.write_bytes(b"shared")
+        outside_index = app.state.data_root.parent / "outside-index.html"
+        outside_zip = app.state.data_root.parent / "outside-result.zip"
+        outside_index.write_text("outside", encoding="utf-8")
+        outside_zip.write_bytes(b"outside")
+
+        cases = (
+            (
+                "index_artifact_path",
+                "index",
+                (run2_paths.index_artifact, shared_index, outside_index, outside_index.with_name("missing.html")),
+            ),
+            (
+                "zip_artifact_path",
+                "zip",
+                (run2_paths.zip_artifact, shared_zip, outside_zip, outside_zip.with_name("missing.zip")),
+            ),
+        )
+        for column, endpoint, tampered_paths in cases:
+            for tampered_path in tampered_paths:
+                with self.subTest(endpoint=endpoint, tampered_path=tampered_path):
+                    with closing(connect_db(app.state.db_path)) as conn:
+                        conn.execute(
+                            f"update runs set {column} = ? where id = ?",
+                            (str(tampered_path), run1["id"]),
+                        )
+                        conn.commit()
+
+                    response = client.get(f"/api/runs/{run1['id']}/artifacts/{endpoint}")
+
+                    self.assertEqual(response.status_code, 404, response.text)
+                    self.assertEqual(response.json(), {"detail": "artifact not found"})
 
     def test_project_responses_include_latest_run_id_without_paths(self):
         client, _app = self.make_client()

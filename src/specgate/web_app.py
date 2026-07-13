@@ -23,7 +23,12 @@ from specgate.web_auth import (
 )
 from specgate.web_db import connect_db, init_db
 from specgate.web_debug import build_run_debug
-from specgate.web_projects import create_manual_project, create_project_from_zip, project_paths
+from specgate.web_projects import (
+    create_manual_project,
+    create_project_from_zip,
+    project_paths,
+    web_run_paths,
+)
 from specgate.web_runs import (
     ActiveRunConflict,
     create_run,
@@ -310,8 +315,13 @@ def create_app(
     @app.get("/api/runs/{run_id}/artifacts/index")
     def get_index_artifact(run_id: int, user=Depends(current_user)):
         run = _load_run_for_artifact(app.state.db_path, int(user["id"]), run_id)
+        paths = web_run_paths(
+            project_paths(app.state.data_root, int(user["id"]), int(run["project_id"])),
+            run_id,
+        )
         return _artifact_response(
             run["index_artifact_path"],
+            paths.index_artifact,
             "text/html",
             headers={
                 "Content-Disposition": 'attachment; filename="index.html"',
@@ -322,7 +332,15 @@ def create_app(
     @app.get("/api/runs/{run_id}/artifacts/zip")
     def get_zip_artifact(run_id: int, user=Depends(current_user)):
         run = _load_run_for_artifact(app.state.db_path, int(user["id"]), run_id)
-        return _artifact_response(run["zip_artifact_path"], "application/zip")
+        paths = web_run_paths(
+            project_paths(app.state.data_root, int(user["id"]), int(run["project_id"])),
+            run_id,
+        )
+        return _artifact_response(
+            run["zip_artifact_path"],
+            paths.zip_artifact,
+            "application/zip",
+        )
 
     @app.get("/api/approvals")
     def list_approvals(user=Depends(current_user)) -> dict[str, Any]:
@@ -456,13 +474,28 @@ def _load_run_for_artifact(db_path: Path, user_id: int, run_id: int):
         raise _http_error_for_value_error(exc) from exc
 
 
-def _artifact_response(path_value: str | None, media_type: str, headers: dict[str, str] | None = None):
+def _artifact_response(
+    path_value: str | None,
+    expected_path: Path,
+    media_type: str,
+    headers: dict[str, str] | None = None,
+):
     if not path_value:
         raise HTTPException(status_code=404, detail="artifact not found")
     path = Path(path_value)
-    if not path.is_file():
+    try:
+        if Path(os.path.abspath(path)) != Path(os.path.abspath(expected_path)):
+            raise HTTPException(status_code=404, detail="artifact not found")
+        resolved_path = path.resolve()
+        resolved_artifacts = expected_path.parent.resolve()
+        resolved_run = expected_path.parent.parent.resolve()
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail="artifact not found") from exc
+    if resolved_artifacts.parent != resolved_run or resolved_path.parent != resolved_artifacts:
         raise HTTPException(status_code=404, detail="artifact not found")
-    return FileResponse(path, media_type=media_type, headers=headers)
+    if not resolved_path.is_file():
+        raise HTTPException(status_code=404, detail="artifact not found")
+    return FileResponse(resolved_path, media_type=media_type, headers=headers)
 
 
 def _is_sqlite_lock_error(exc: sqlite3.OperationalError) -> bool:

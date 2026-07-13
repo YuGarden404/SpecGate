@@ -8,7 +8,7 @@ from typing import Any
 
 from specgate.trace import redact
 from specgate.web_db import connect_db
-from specgate.web_projects import project_paths
+from specgate.web_projects import project_paths, web_run_paths
 
 
 DEFAULT_MAX_TRACE_EVENTS = 200
@@ -51,16 +51,18 @@ def build_run_debug(
             (run_id,),
         ).fetchall()
 
-    paths = project_paths(data_root, user_id, int(project["id"]))
-    run_dir = paths.workspace / "runs" / "latest"
+    paths = web_run_paths(
+        project_paths(data_root, user_id, int(project["id"])),
+        run_id,
+    )
     artifact_payloads = [_artifact_dict(row, run_id) for row in artifacts]
     approval_payloads = [_approval_dict(row) for row in approvals]
-    trace = _read_trace(run_dir / "trace.jsonl", max_trace_events, max_event_chars)
+    trace = _read_trace(paths.audit / "trace.jsonl", max_trace_events, max_event_chars)
     evidence = {
-        "retrieval": _read_json_evidence(run_dir / "retrieval.json"),
-        "compression": _read_json_evidence(run_dir / "compression.json"),
-        "isolation": _read_json_evidence(run_dir / "isolation.json"),
-        "security": _read_json_evidence(run_dir / "security.json"),
+        "retrieval": _read_json_evidence(paths.audit / "retrieval.json"),
+        "compression": _read_json_evidence(paths.audit / "compression.json"),
+        "isolation": _read_json_evidence(paths.audit / "isolation.json"),
+        "security": _read_json_evidence(paths.audit / "security.json"),
     }
 
     return {

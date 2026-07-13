@@ -8,7 +8,7 @@ from pathlib import Path
 from specgate.web_auth import create_user
 from specgate.web_db import init_db
 from specgate.web_debug import build_run_debug
-from specgate.web_projects import create_manual_project, project_paths
+from specgate.web_projects import create_manual_project, project_paths, web_run_paths
 from specgate.web_runs import create_run, execute_run_once
 
 
@@ -57,8 +57,11 @@ class WebDebugTests(unittest.TestCase):
 
     def test_build_run_debug_limits_trace_events_and_event_size(self):
         db_path, data_root, user, project, run = self.make_completed_run()
-        paths = project_paths(data_root, user["id"], project["id"])
-        trace_path = paths.workspace / "runs" / "latest" / "trace.jsonl"
+        paths = web_run_paths(
+            project_paths(data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        trace_path = paths.audit / "trace.jsonl"
         trace_path.parent.mkdir(parents=True, exist_ok=True)
         trace_path.write_text(
             "\n".join(json.dumps({"event": i, "payload": "x" * 50}) for i in range(5)),
@@ -81,8 +84,11 @@ class WebDebugTests(unittest.TestCase):
 
     def test_build_run_debug_reads_evidence_files(self):
         db_path, data_root, user, project, run = self.make_completed_run()
-        paths = project_paths(data_root, user["id"], project["id"])
-        evidence_path = paths.workspace / "runs" / "latest" / "retrieval.json"
+        paths = web_run_paths(
+            project_paths(data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        evidence_path = paths.audit / "retrieval.json"
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         evidence_path.write_text(
             json.dumps({"selected_chunks": [{"path": "TASK_SPEC.md"}]}),
@@ -93,6 +99,111 @@ class WebDebugTests(unittest.TestCase):
 
         self.assertEqual(payload["evidence"]["retrieval"]["selected_chunks"][0]["path"], "TASK_SPEC.md")
         self.assertIsNone(payload["evidence"]["compression"])
+
+    def test_completed_runs_read_only_their_immutable_audit_data(self):
+        db_path, data_root, user, project, run1 = self.make_completed_run()
+        project_root = project_paths(data_root, user["id"], project["id"])
+        run1_paths = web_run_paths(project_root, run1["id"])
+        evidence_names = ("retrieval", "compression", "isolation", "security")
+        (run1_paths.audit / "trace.jsonl").write_text(
+            json.dumps({"run_marker": "run-1"}) + "\n",
+            encoding="utf-8",
+        )
+        for name in evidence_names:
+            (run1_paths.audit / f"{name}.json").write_text(
+                json.dumps({"run_marker": "run-1", "kind": name}),
+                encoding="utf-8",
+            )
+
+        run1_before = build_run_debug(db_path, data_root, user["id"], run1["id"])
+        run1_bytes = {
+            path.name: path.read_bytes()
+            for path in run1_paths.audit.iterdir()
+            if path.is_file()
+        }
+
+        run2 = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build it again",
+            data_root=data_root,
+        )
+        execute_run_once(db_path, data_root, run2["id"])
+        run2_paths = web_run_paths(project_root, run2["id"])
+        (run2_paths.audit / "trace.jsonl").write_text(
+            json.dumps({"run_marker": "run-2"}) + "\n",
+            encoding="utf-8",
+        )
+        for name in evidence_names:
+            (run2_paths.audit / f"{name}.json").write_text(
+                json.dumps({"run_marker": "run-2", "kind": name}),
+                encoding="utf-8",
+            )
+        shared_latest = project_root.workspace / "runs" / "latest"
+        shared_latest.mkdir(parents=True, exist_ok=True)
+        (shared_latest / "trace.jsonl").write_text(
+            json.dumps({"run_marker": "shared-latest"}) + "\n",
+            encoding="utf-8",
+        )
+        for name in evidence_names:
+            (shared_latest / f"{name}.json").write_text(
+                json.dumps({"run_marker": "shared-latest", "kind": name}),
+                encoding="utf-8",
+            )
+
+        run1_after = build_run_debug(db_path, data_root, user["id"], run1["id"])
+        run2_debug = build_run_debug(db_path, data_root, user["id"], run2["id"])
+
+        self.assertEqual(run1_after["trace"]["events"], run1_before["trace"]["events"])
+        self.assertEqual(run1_after["trace"]["events"][0]["run_marker"], "run-1")
+        self.assertEqual(run2_debug["trace"]["events"][0]["run_marker"], "run-2")
+        for name in evidence_names:
+            self.assertEqual(run1_after["evidence"][name]["run_marker"], "run-1")
+            self.assertEqual(run2_debug["evidence"][name]["run_marker"], "run-2")
+        self.assertEqual(
+            {
+                path.name: path.read_bytes()
+                for path in run1_paths.audit.iterdir()
+                if path.is_file()
+            },
+            run1_bytes,
+        )
+
+    def test_missing_run_audit_returns_safe_empty_values_without_latest_fallback(self):
+        db_path, data_root, user, project, _completed = self.make_completed_run()
+        project_root = project_paths(data_root, user["id"], project["id"])
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Queued run",
+            data_root=data_root,
+        )
+        shared_latest = project_root.workspace / "runs" / "latest"
+        shared_latest.mkdir(parents=True, exist_ok=True)
+        (shared_latest / "trace.jsonl").write_text(
+            json.dumps({"run_marker": "shared-latest"}) + "\n",
+            encoding="utf-8",
+        )
+        (shared_latest / "retrieval.json").write_text(
+            json.dumps({"run_marker": "shared-latest"}),
+            encoding="utf-8",
+        )
+
+        payload = build_run_debug(db_path, data_root, user["id"], run["id"])
+
+        self.assertEqual(payload["trace"]["events"], [])
+        self.assertFalse(payload["trace"]["truncated"])
+        self.assertEqual(
+            payload["evidence"],
+            {
+                "retrieval": None,
+                "compression": None,
+                "isolation": None,
+                "security": None,
+            },
+        )
 
     def test_build_run_debug_rejects_other_user(self):
         db_path, data_root, user, _project, run = self.make_completed_run()
