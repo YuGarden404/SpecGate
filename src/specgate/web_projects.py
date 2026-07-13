@@ -24,6 +24,17 @@ class ProjectPaths:
     runs: Path
 
 
+@dataclass(frozen=True)
+class RunPaths:
+    root: Path
+    workspace: Path
+    audit: Path
+    approval_queue: Path
+    artifacts: Path
+    index_artifact: Path
+    zip_artifact: Path
+
+
 def project_paths(data_root: Path, user_id: int, project_id: int) -> ProjectPaths:
     root = data_root / "users" / str(user_id) / "projects" / str(project_id)
     return ProjectPaths(
@@ -32,6 +43,20 @@ def project_paths(data_root: Path, user_id: int, project_id: int) -> ProjectPath
         workspace=root / "workspace",
         artifacts=root / "artifacts",
         runs=root / "runs",
+    )
+
+
+def web_run_paths(project: ProjectPaths, run_id: int) -> RunPaths:
+    root = project.runs / str(run_id)
+    artifacts = root / "artifacts"
+    return RunPaths(
+        root=root,
+        workspace=root / "workspace",
+        audit=root / "audit",
+        approval_queue=root / "approvals" / "pending_approvals.json",
+        artifacts=artifacts,
+        index_artifact=artifacts / "index.html",
+        zip_artifact=artifacts / "result.zip",
     )
 
 
