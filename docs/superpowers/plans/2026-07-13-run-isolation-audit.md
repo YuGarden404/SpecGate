@@ -95,6 +95,9 @@ Run: `$env:PYTHONPATH='src'; python -m unittest tests.test_web_runs -v`
 断言 sentinel 不被失败清理删除。使用 Event 阻塞一个项目的复制，验证另一项目可以完成创建，
 而同项目请求在 `initializing` 期间立即冲突。
 
+增加启动恢复测试：遗留 `initializing` 与 run 目录在 app 初始化时被清理，清理失败时行转为
+`failed` 且不再阻塞；queued/running/needs_approval 不受此恢复函数影响。
+
 - [ ] **Step 5: 运行相关测试**
 
 Run: `$env:PYTHONPATH='src'; python -m unittest tests.test_web_runs tests.test_web_app -v`
