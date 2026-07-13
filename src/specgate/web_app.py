@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from specgate.web_settings import clear_api_key, get_settings, update_settings, 
 
 SESSION_COOKIE_NAME = "specgate_session"
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+RUN_CREATION_UNAVAILABLE_MESSAGE = "运行创建暂时不可用 / Run creation is temporarily unavailable"
 
 
 class AuthRequest(BaseModel):
@@ -250,6 +252,10 @@ def create_app(
             )
         except ActiveRunConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except sqlite3.OperationalError as exc:
+            if _is_sqlite_lock_error(exc):
+                raise HTTPException(status_code=503, detail=RUN_CREATION_UNAVAILABLE_MESSAGE) from exc
+            raise
         except ValueError as exc:
             raise _http_error_for_value_error(exc) from exc
         start_run_background(app.state.db_path, app.state.data_root, int(run["id"]))
@@ -427,6 +433,13 @@ def _artifact_response(path_value: str | None, media_type: str, headers: dict[st
     if not path.is_file():
         raise HTTPException(status_code=404, detail="artifact not found")
     return FileResponse(path, media_type=media_type, headers=headers)
+
+
+def _is_sqlite_lock_error(exc: sqlite3.OperationalError) -> bool:
+    error_code = getattr(exc, "sqlite_errorcode", None)
+    return error_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED} or any(
+        marker in str(exc).lower() for marker in ("locked", "busy")
+    )
 
 
 def _http_error_for_value_error(exc: ValueError) -> HTTPException:

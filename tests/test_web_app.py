@@ -1,3 +1,4 @@
+import sqlite3
 from contextlib import closing
 from io import BytesIO
 import tempfile
@@ -32,12 +33,12 @@ class WebAppTests(unittest.TestCase):
         finally:
             os.chdir(old_cwd)
 
-    def make_client(self, **app_kwargs):
+    def make_client(self, *, raise_server_exceptions=True, **app_kwargs):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         base = Path(tmp.name)
         app = create_app(data_root=base / "data", db_path=base / "web.sqlite3", **app_kwargs)
-        return TestClient(app), app
+        return TestClient(app, raise_server_exceptions=raise_server_exceptions), app
 
     def register(self, client, username="alice", password="correct-password"):
         response = client.post(
@@ -182,6 +183,27 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(
             conflict.json(),
             {"detail": "该项目已有进行中的运行 / This project already has an active run"},
+        )
+        starter.assert_not_called()
+
+    def test_post_run_returns_stable_503_when_database_is_locked(self):
+        client, _app = self.make_client(raise_server_exceptions=False)
+        self.register(client)
+        project = self.create_project(client)
+
+        with patch(
+            "specgate.web_app.create_run",
+            side_effect=sqlite3.OperationalError("database is locked"),
+        ), patch("specgate.web_app.start_run_background") as starter:
+            response = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "Build the result"},
+            )
+
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertEqual(
+            response.json(),
+            {"detail": "运行创建暂时不可用 / Run creation is temporarily unavailable"},
         )
         starter.assert_not_called()
 

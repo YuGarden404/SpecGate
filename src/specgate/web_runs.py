@@ -37,9 +37,44 @@ def create_run(
     data_root: Path,
 ) -> sqlite3.Row:
     run_prompt = _require_text(prompt, "prompt")
+    run_id, paths, created_at = _reserve_initializing_run(
+        db_path,
+        data_root,
+        project_id,
+        user_id,
+        run_prompt,
+    )
+    storage_initialized = False
+    try:
+        initialize_run_storage(paths, run_id)
+        storage_initialized = True
+        return _queue_initialized_run(
+            db_path,
+            run_id,
+            project_id,
+            user_id,
+            run_prompt,
+            created_at,
+        )
+    except Exception as exc:
+        _recover_failed_run_creation(
+            db_path,
+            paths,
+            run_id,
+            storage_initialized=storage_initialized,
+            error=exc,
+        )
+        raise
+
+
+def _reserve_initializing_run(
+    db_path: Path,
+    data_root: Path,
+    project_id: int,
+    user_id: int,
+    run_prompt: str,
+) -> tuple[int, ProjectPaths, str]:
     conn = connect_db(db_path)
-    paths: ProjectPaths | None = None
-    run_id: int | None = None
     try:
         conn.execute("BEGIN IMMEDIATE")
         project = conn.execute(
@@ -52,7 +87,7 @@ def create_run(
         active_run = conn.execute(
             """
             select id from runs
-            where project_id = ? and status in ('queued', 'running', 'needs_approval')
+            where project_id = ? and status in ('initializing', 'queued', 'running', 'needs_approval')
             limit 1
             """,
             (project_id,),
@@ -66,29 +101,118 @@ def create_run(
             insert into runs (project_id, user_id, status, prompt, created_at)
             values (?, ?, ?, ?, ?)
             """,
-            (project_id, user_id, "queued", run_prompt, now),
+            (project_id, user_id, "initializing", run_prompt, now),
         )
         run_id = int(cursor.lastrowid)
         paths = project_paths(data_root, int(project["user_id"]), int(project["id"]))
-        initialize_run_storage(paths, run_id)
+        conn.commit()
+        return run_id, paths, now
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _queue_initialized_run(
+    db_path: Path,
+    run_id: int,
+    project_id: int,
+    user_id: int,
+    run_prompt: str,
+    created_at: str,
+) -> sqlite3.Row:
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        run = conn.execute(
+            "select status from runs where id = ? and project_id = ? and user_id = ?",
+            (run_id, project_id, user_id),
+        ).fetchone()
+        if run is None or run["status"] != "initializing":
+            raise RuntimeError("run is no longer initializing")
+
         conn.execute(
             """
             insert into messages (project_id, user_id, role, content, created_at)
             values (?, ?, ?, ?, ?)
             """,
-            (project_id, user_id, "user", run_prompt, now),
+            (project_id, user_id, "user", run_prompt, created_at),
         )
+        cursor = conn.execute(
+            "update runs set status = 'queued' where id = ? and status = 'initializing'",
+            (run_id,),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("run is no longer initializing")
         run = conn.execute("select * from runs where id = ?", (run_id,)).fetchone()
         conn.commit()
         return run
-    except Exception as exc:
+    except Exception:
         conn.rollback()
-        if paths is not None and run_id is not None:
-            try:
-                remove_run_storage(paths, run_id)
-            except Exception as cleanup_error:
-                exc.add_note(f"run storage cleanup failed: {cleanup_error}")
         raise
+    finally:
+        conn.close()
+
+
+def _recover_failed_run_creation(
+    db_path: Path,
+    paths: ProjectPaths,
+    run_id: int,
+    *,
+    storage_initialized: bool,
+    error: Exception,
+) -> None:
+    if storage_initialized:
+        try:
+            remove_run_storage(paths, run_id)
+        except Exception as cleanup_error:
+            error.add_note(f"run storage cleanup failed: {cleanup_error}")
+            _record_run_creation_failure(db_path, run_id, error, cleanup_error)
+            return
+
+    try:
+        _delete_initializing_run(db_path, run_id)
+    except Exception as cleanup_error:
+        error.add_note(f"initializing run cleanup failed: {cleanup_error}")
+        _record_run_creation_failure(db_path, run_id, error, cleanup_error)
+
+
+def _delete_initializing_run(db_path: Path, run_id: int) -> None:
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("delete from runs where id = ? and status = 'initializing'", (run_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _record_run_creation_failure(
+    db_path: Path,
+    run_id: int,
+    error: Exception,
+    cleanup_error: Exception,
+) -> None:
+    detail = f"{_safe_error(error)}; cleanup failed: {_safe_error(cleanup_error)}"
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            update runs
+            set status = 'failed', error_message = ?, finished_at = ?
+            where id = ? and status = 'initializing'
+            """,
+            (detail, utc_now().isoformat(), run_id),
+        )
+        conn.commit()
+    except Exception as diagnostic_error:
+        conn.rollback()
+        error.add_note(f"run creation diagnostic update failed: {diagnostic_error}")
     finally:
         conn.close()
 

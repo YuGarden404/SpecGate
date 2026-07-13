@@ -77,7 +77,7 @@ class WebRunsTests(unittest.TestCase):
             create_run(db_path, project["id"], user["id"], "Build the result")
 
     def test_create_run_rejects_active_statuses_without_side_effects(self):
-        for status in ("queued", "running", "needs_approval"):
+        for status in ("initializing", "queued", "running", "needs_approval"):
             with self.subTest(status=status):
                 db_path, data_root, user, project = self.make_context()
                 first = create_run(
@@ -186,15 +186,71 @@ class WebRunsTests(unittest.TestCase):
             [str(successful_runs[0]["id"])],
         )
 
-    def test_create_run_rolls_back_database_and_storage_when_initialization_fails(self):
+    def test_create_run_preserves_preexisting_run_storage_on_initialization_conflict(self):
         db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        existing_run = web_run_paths(paths, 1)
+        existing_run.root.mkdir(parents=True)
+        sentinel = existing_run.root / "sentinel.txt"
+        sentinel.write_text("keep", encoding="utf-8")
 
-        def fail_after_initialization(paths, run_id):
-            initialize_run_storage_real(paths, run_id)
-            raise OSError("storage initialization failed")
+        with self.assertRaises(FileExistsError):
+            create_run(
+                db_path,
+                project["id"],
+                user["id"],
+                "Build the result",
+                data_root=data_root,
+            )
 
-        with patch("specgate.web_runs.initialize_run_storage", side_effect=fail_after_initialization):
-            with self.assertRaisesRegex(OSError, "storage initialization failed"):
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
+            self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+
+    def test_create_run_cleans_owned_storage_when_queue_transaction_fails(self):
+        db_path, data_root, user, project = self.make_context()
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                """
+                create trigger reject_run_message before insert on messages
+                begin
+                    select raise(abort, 'message insert failed');
+                end
+                """
+            )
+            conn.commit()
+
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "message insert failed"):
+            create_run(
+                db_path,
+                project["id"],
+                user["id"],
+                "Build the result",
+                data_root=data_root,
+            )
+
+        paths = project_paths(data_root, user["id"], project["id"])
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
+            self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
+        self.assertEqual(list(paths.runs.iterdir()), [])
+
+    def test_create_run_preserves_diagnostic_row_when_owned_storage_cleanup_fails(self):
+        db_path, data_root, user, project = self.make_context()
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                """
+                create trigger reject_run_message before insert on messages
+                begin
+                    select raise(abort, 'message insert failed');
+                end
+                """
+            )
+            conn.commit()
+
+        with patch("specgate.web_runs.remove_run_storage", side_effect=OSError("cleanup failed")):
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "message insert failed") as raised:
                 create_run(
                     db_path,
                     project["id"],
@@ -203,11 +259,111 @@ class WebRunsTests(unittest.TestCase):
                     data_root=data_root,
                 )
 
+        self.assertTrue(any("cleanup failed" in note for note in raised.exception.__notes__))
+        with closing(connect_db(db_path)) as conn:
+            run = conn.execute("select * from runs").fetchone()
+            self.assertIsNotNone(run)
+            self.assertIn(run["status"], {"initializing", "failed"})
+            self.assertIn("cleanup failed", run["error_message"])
+            self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
+
+    def test_slow_initialization_does_not_hold_write_lock_across_projects(self):
+        db_path, data_root, user, first_project = self.make_context()
+        second_project = create_manual_project(
+            db_path,
+            data_root,
+            user["id"],
+            name="Second Site",
+            spec_text="# Spec\nBuild another page.",
+            checklist_text="- Ship another HTML page.",
+            index_html=None,
+        )
+        first_paths = project_paths(data_root, user["id"], first_project["id"])
+        initialization_started = threading.Event()
+        release_initialization = threading.Event()
+
+        def controlled_initialize(paths, run_id):
+            if paths.root == first_paths.root:
+                initialization_started.set()
+                if not release_initialization.wait(timeout=5):
+                    raise TimeoutError("test did not release initialization")
+            return initialize_run_storage_real(paths, run_id)
+
+        executor = ThreadPoolExecutor(max_workers=2)
+        try:
+            with patch("specgate.web_runs.initialize_run_storage", side_effect=controlled_initialize):
+                first_future = executor.submit(
+                    create_run,
+                    db_path,
+                    first_project["id"],
+                    user["id"],
+                    "First project run",
+                    data_root=data_root,
+                )
+                self.assertTrue(initialization_started.wait(timeout=2))
+                second_future = executor.submit(
+                    create_run,
+                    db_path,
+                    second_project["id"],
+                    user["id"],
+                    "Second project run",
+                    data_root=data_root,
+                )
+                second_run = second_future.result(timeout=2)
+                self.assertEqual(second_run["status"], "queued")
+                release_initialization.set()
+                first_run = first_future.result(timeout=2)
+        finally:
+            release_initialization.set()
+            executor.shutdown(wait=True)
+
+        self.assertEqual(first_run["status"], "queued")
+
+    def test_initializing_run_rejects_same_project_before_storage_finishes(self):
+        db_path, data_root, user, project = self.make_context()
+        initialization_started = threading.Event()
+        release_initialization = threading.Event()
+
+        def controlled_initialize(paths, run_id):
+            initialization_started.set()
+            if not release_initialization.wait(timeout=5):
+                raise TimeoutError("test did not release initialization")
+            return initialize_run_storage_real(paths, run_id)
+
+        executor = ThreadPoolExecutor(max_workers=2)
+        try:
+            with patch("specgate.web_runs.initialize_run_storage", side_effect=controlled_initialize):
+                first_future = executor.submit(
+                    create_run,
+                    db_path,
+                    project["id"],
+                    user["id"],
+                    "First run",
+                    data_root=data_root,
+                )
+                self.assertTrue(initialization_started.wait(timeout=2))
+                second_future = executor.submit(
+                    create_run,
+                    db_path,
+                    project["id"],
+                    user["id"],
+                    "Conflicting run",
+                    data_root=data_root,
+                )
+                with self.assertRaises(ActiveRunConflict):
+                    second_future.result(timeout=2)
+                release_initialization.set()
+                run = first_future.result(timeout=2)
+        finally:
+            release_initialization.set()
+            executor.shutdown(wait=True)
+
         paths = project_paths(data_root, user["id"], project["id"])
         with closing(connect_db(db_path)) as conn:
-            self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
-            self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
-        self.assertEqual(list(paths.runs.iterdir()), [])
+            self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 1)
+            self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 1)
+            self.assertEqual(conn.execute("select status from runs").fetchone()[0], "queued")
+        self.assertEqual(sorted(path.name for path in paths.runs.iterdir()), [str(run["id"])])
 
     def test_get_run_rejects_other_user(self):
         db_path, data_root, user, project = self.make_context()
