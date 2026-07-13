@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 import specgate.web_projects as web_projects
+import specgate.workspace_fs as workspace_fs
 from specgate.workspace_fs import WorkspacePathError
 from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
@@ -57,7 +58,7 @@ class WebProjectsTests(unittest.TestCase):
             self.assertEqual(conn.execute("select count(*) from projects").fetchone()[0], 0)
         projects_root = data_root / "users" / str(user_id) / "projects"
         if projects_root.exists():
-            self.assertEqual(list(projects_root.iterdir()), [])
+            self.assertTrue(all(path.name.startswith(".") for path in projects_root.iterdir()))
 
     def test_create_manual_project_writes_input_snapshot_and_workspace(self):
         db_path, data_root, user = self.make_context()
@@ -116,6 +117,36 @@ class WebProjectsTests(unittest.TestCase):
         self.assertFalse((paths.original / "CHECKLIST.md").exists())
         self.assertEqual((paths.workspace / "TASK_SPEC.md").read_text(encoding="utf-8"), "Spec")
         self.assertEqual((paths.workspace / "CHECKLIST.md").read_text(encoding="utf-8"), "Checklist")
+
+    def test_create_project_from_zip_uses_safe_directory_api_for_explicit_directories(self):
+        db_path, data_root, user = self.make_context()
+        zip_content = self.zip_entries(
+            [("SPEC.md", "Spec"), ("CHECKLIST.md", "Checklist"), ("empty/nested/", b"")]
+        )
+        real_ensure = workspace_fs.ensure_workspace_directory
+
+        with mock.patch.object(
+            web_projects,
+            "ensure_workspace_directory",
+            create=True,
+            wraps=real_ensure,
+        ) as safe_directory:
+            project = create_project_from_zip(
+                db_path,
+                data_root,
+                user["id"],
+                "Directories",
+                zip_content,
+            )
+
+        paths = project_paths(data_root, user["id"], project["id"])
+        self.assertTrue((paths.original / "empty" / "nested").is_dir())
+        self.assertTrue((paths.workspace / "empty" / "nested").is_dir())
+        self.assertEqual(safe_directory.call_count, 2)
+        self.assertEqual(
+            [call.args[1] for call in safe_directory.call_args_list],
+            ["empty/nested", "empty/nested"],
+        )
 
     def test_create_project_from_zip_rejects_path_escape(self):
         db_path, data_root, user = self.make_context()
@@ -387,6 +418,97 @@ class WebProjectsTests(unittest.TestCase):
             with self.assertRaises(WorkspacePathError):
                 create_project_from_zip(db_path, data_root, user["id"], "Failed", zip_content)
 
+        self.assert_no_projects_or_upload_residue(db_path, data_root, user["id"])
+
+    def test_failed_extraction_quarantines_owned_staging(self):
+        db_path, data_root, user = self.make_context()
+        zip_content = self.zip_bytes({"SPEC.md": "Spec", "CHECKLIST.md": "Checklist"})
+
+        with mock.patch.object(
+            web_projects,
+            "write_workspace_stream",
+            side_effect=WorkspacePathError("write failed", "path_race"),
+        ):
+            with self.assertRaises(WorkspacePathError):
+                create_project_from_zip(db_path, data_root, user["id"], "Failed", zip_content)
+
+        projects_root = data_root / "users" / str(user["id"]) / "projects"
+        quarantines = list(projects_root.glob(".*.specgate-upload-quarantine-*"))
+        self.assertEqual(len(quarantines), 1)
+        self.assertFalse(project_paths(data_root, user["id"], 1).root.exists())
+        self.assert_no_projects_or_upload_residue(db_path, data_root, user["id"])
+
+    def test_cleanup_does_not_delete_staging_replacement(self):
+        db_path, data_root, user = self.make_context()
+        base = data_root.parent
+        replacement = base / "replacement"
+        displaced = base / "displaced-staging"
+        replacement.mkdir()
+        sentinel = replacement / "sentinel.txt"
+        sentinel.write_text("external sentinel", encoding="utf-8")
+        zip_content = self.zip_bytes({"SPEC.md": "Spec", "CHECKLIST.md": "Checklist"})
+
+        def replace_staging(root, _relative, _source, **_kwargs):
+            staging_root = Path(root).parent
+            staging_root.rename(displaced)
+            replacement.rename(staging_root)
+            raise WorkspacePathError("write failed", "path_race")
+
+        with mock.patch.object(web_projects, "write_workspace_stream", side_effect=replace_staging):
+            with self.assertRaises(WorkspacePathError) as raised:
+                create_project_from_zip(db_path, data_root, user["id"], "Replaced", zip_content)
+
+        self.assertEqual(raised.exception.rule_family, "path_race")
+        self.assertTrue(
+            any("upload cleanup failed" in note for note in getattr(raised.exception, "__notes__", ()))
+        )
+        sentinels = list(base.rglob("sentinel.txt"))
+        self.assertEqual(len(sentinels), 1)
+        self.assertEqual(sentinels[0].read_text(encoding="utf-8"), "external sentinel")
+        self.assertFalse(project_paths(data_root, user["id"], 1).root.exists())
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from projects").fetchone()[0], 0)
+
+    def test_cleanup_quarantine_failure_is_attached_to_original_error(self):
+        db_path, data_root, user = self.make_context()
+        zip_content = self.zip_bytes({"SPEC.md": "Spec", "CHECKLIST.md": "Checklist"})
+
+        with (
+            mock.patch.object(
+                web_projects,
+                "write_workspace_stream",
+                side_effect=WorkspacePathError("write failed", "path_race"),
+            ),
+            mock.patch.object(
+                web_projects,
+                "rename_workspace_tree_noreplace",
+                side_effect=WorkspacePathError("upload quarantine failed", "path_race"),
+            ),
+        ):
+            with self.assertRaises(WorkspacePathError) as raised:
+                create_project_from_zip(db_path, data_root, user["id"], "Cleanup failure", zip_content)
+
+        self.assertEqual(str(raised.exception), "write failed")
+        self.assertTrue(
+            any("upload cleanup failed" in note for note in getattr(raised.exception, "__notes__", ()))
+        )
+        self.assertFalse(project_paths(data_root, user["id"], 1).root.exists())
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from projects").fetchone()[0], 0)
+
+    def test_finalize_failure_quarantines_published_project_root(self):
+        db_path, data_root, user = self.make_context()
+        zip_content = self.zip_bytes({"SPEC.md": "Spec", "CHECKLIST.md": "Checklist"})
+
+        with mock.patch.object(web_projects, "_finalize_project", side_effect=RuntimeError("finalize failed")):
+            with self.assertRaisesRegex(RuntimeError, "finalize failed"):
+                create_project_from_zip(db_path, data_root, user["id"], "Finalize failure", zip_content)
+
+        projects_root = data_root / "users" / str(user["id"]) / "projects"
+        quarantines = list(projects_root.glob(".1.specgate-upload-quarantine-*"))
+        self.assertEqual(len(quarantines), 1)
+        self.assertEqual((quarantines[0] / "original" / "SPEC.md").read_text(encoding="utf-8"), "Spec")
+        self.assertFalse(project_paths(data_root, user["id"], 1).root.exists())
         self.assert_no_projects_or_upload_residue(db_path, data_root, user["id"])
 
     def test_create_project_from_zip_never_overwrites_existing_project_path(self):

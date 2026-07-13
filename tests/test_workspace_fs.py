@@ -309,6 +309,110 @@ class WorkspaceFileIOTests(unittest.TestCase):
         self.assertEqual(written, 6)
         self.assertEqual(bytes(handle.content), b"abcdef")
 
+    def test_ensure_workspace_directory_creates_a_nested_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            workspace_fs.ensure_workspace_directory(root, "assets/images")
+
+            self.assertTrue((root / "assets" / "images").is_dir())
+
+    def test_ensure_workspace_directory_rejects_reparse_ancestor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ancestor = root / "ancestor"
+            ancestor.mkdir()
+            real_is_link_like = workspace_fs.is_link_like
+
+            with mock.patch.object(
+                workspace_fs,
+                "is_link_like",
+                side_effect=lambda path: Path(path) == ancestor or real_is_link_like(path),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    workspace_fs.ensure_workspace_directory(root, "ancestor/nested")
+
+            self.assertEqual(raised.exception.rule_family, "reparse_point")
+            self.assertFalse((ancestor / "nested").exists())
+
+    def test_ensure_workspace_directory_rejects_root_identity_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "workspace"
+            displaced = base / "displaced"
+            replacement = base / "replacement"
+            root.mkdir()
+            replacement.mkdir()
+            sentinel = replacement / "sentinel.txt"
+            sentinel.write_text("external sentinel", encoding="utf-8")
+            real_ensure = workspace_fs._ensure_workspace_directory
+
+            def replace_before_create(path, relative, *args, **kwargs):
+                root.rename(displaced)
+                replacement.rename(root)
+                return real_ensure(path, relative, *args, **kwargs)
+
+            with mock.patch.object(
+                workspace_fs,
+                "_ensure_workspace_directory",
+                side_effect=replace_before_create,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    workspace_fs.ensure_workspace_directory(root, "nested")
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertEqual((root / "sentinel.txt").read_text(encoding="utf-8"), "external sentinel")
+            self.assertFalse((root / "nested").exists())
+
+    def test_ensure_workspace_directory_rejects_ancestor_identity_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "workspace"
+            ancestor = root / "ancestor"
+            displaced = base / "displaced-ancestor"
+            replacement = base / "replacement"
+            ancestor.mkdir(parents=True)
+            replacement.mkdir()
+            sentinel = replacement / "sentinel.txt"
+            sentinel.write_text("external sentinel", encoding="utf-8")
+
+            if os.name == "nt":
+                real_lstat = Path.lstat
+                replaced = False
+
+                def replace_after_lstat(path):
+                    nonlocal replaced
+                    result = real_lstat(path)
+                    if Path(path) == ancestor and not replaced:
+                        ancestor.rename(displaced)
+                        replacement.rename(ancestor)
+                        replaced = True
+                    return result
+
+                patcher = mock.patch.object(Path, "lstat", autospec=True, side_effect=replace_after_lstat)
+            else:
+                real_stat = os.stat
+                replaced = False
+
+                def replace_after_stat(path, *args, **kwargs):
+                    nonlocal replaced
+                    result = real_stat(path, *args, **kwargs)
+                    if path == "ancestor" and kwargs.get("dir_fd") is not None and not replaced:
+                        ancestor.rename(displaced)
+                        replacement.rename(ancestor)
+                        replaced = True
+                    return result
+
+                patcher = mock.patch.object(os, "stat", side_effect=replace_after_stat)
+
+            with patcher:
+                with self.assertRaises(WorkspacePathError) as raised:
+                    workspace_fs.ensure_workspace_directory(root, "ancestor/nested")
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertEqual((ancestor / "sentinel.txt").read_text(encoding="utf-8"), "external sentinel")
+            self.assertFalse((ancestor / "nested").exists())
+
     def test_workspace_file_state_hashes_existing_and_reports_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import shutil
 import sqlite3
 import stat
@@ -15,6 +16,7 @@ from specgate.web_db import connect_db
 from specgate.workspace_fs import (
     WorkspacePathError,
     bind_workspace_tree,
+    ensure_workspace_directory,
     read_workspace_bytes,
     rename_workspace_tree_noreplace,
     write_workspace_bytes,
@@ -173,6 +175,7 @@ def create_project_from_zip(
         conn = connect_db(db_path)
         paths: ProjectPaths | None = None
         staging_paths: ProjectPaths | None = None
+        staging_identity: tuple[int, int] | None = None
         published_identity: tuple[int, int] | None = None
         try:
             project_id = _insert_project(conn, user_id, project_name, "zip")
@@ -185,6 +188,10 @@ def create_project_from_zip(
                 )
             )
             staging_paths = _paths_for_root(staging_root)
+            initial_staging_binding = bind_workspace_tree(staging_root)
+            if initial_staging_binding is None:
+                raise WorkspacePathError("upload staging root is missing", "path_race")
+            staging_identity = initial_staging_binding.identity
             for directory in (
                 staging_paths.original,
                 staging_paths.workspace,
@@ -209,12 +216,22 @@ def create_project_from_zip(
             row = _finalize_project(conn, project_id, paths.root)
             conn.commit()
             return row
-        except Exception:
+        except Exception as project_error:
             conn.rollback()
+            cleanup_errors: list[Exception] = []
+            cleanup_targets: list[tuple[Path, tuple[int, int] | None]] = []
             if staging_paths is not None:
-                _remove_owned_upload_tree(staging_paths.root)
+                cleanup_targets.append((staging_paths.root, staging_identity))
             if paths is not None and published_identity is not None:
-                _remove_owned_upload_tree(paths.root, expected_identity=published_identity)
+                cleanup_targets.append((paths.root, published_identity))
+            for cleanup_path, expected_identity in cleanup_targets:
+                try:
+                    _quarantine_owned_upload_tree(cleanup_path, expected_identity)
+                except Exception as cleanup_error:
+                    cleanup_errors.append(cleanup_error)
+                    project_error.add_note(f"upload cleanup failed: {cleanup_error}")
+            if cleanup_errors:
+                raise project_error from cleanup_errors[0]
             raise
         finally:
             conn.close()
@@ -415,7 +432,7 @@ def _extract_archive(
     try:
         for member in members:
             if member.info.is_dir():
-                (destination / member.path[:-1]).mkdir(parents=True, exist_ok=True)
+                ensure_workspace_directory(destination, member.path[:-1])
                 continue
             with archive.open(member.info, "r") as source:
                 written = write_workspace_stream(
@@ -436,20 +453,35 @@ def _extract_archive(
         raise ArchiveValidationError(INVALID_ARCHIVE_MESSAGE) from exc
 
 
-def _remove_owned_upload_tree(
+def _quarantine_owned_upload_tree(
     path: Path,
-    *,
-    expected_identity: tuple[int, int] | None = None,
-) -> None:
+    expected_identity: tuple[int, int] | None,
+) -> Path | None:
+    if expected_identity is None:
+        raise WorkspacePathError(
+            "upload cleanup identity is unavailable",
+            "path_race",
+        )
     try:
-        file_stat = path.lstat()
-    except FileNotFoundError:
-        return
-    identity = (file_stat.st_dev, file_stat.st_ino)
-    if expected_identity is not None and identity != expected_identity:
-        return
-    if stat.S_ISDIR(file_stat.st_mode) and not stat.S_ISLNK(file_stat.st_mode):
-        shutil.rmtree(path, ignore_errors=True)
+        binding = bind_workspace_tree(path, missing_ok=True)
+        if binding is None:
+            return None
+        if binding.identity != expected_identity:
+            raise WorkspacePathError(
+                "upload cleanup root identity changed",
+                "path_race",
+            )
+        quarantine = path.parent / (
+            f".{path.name.lstrip('.')}.specgate-upload-quarantine-{secrets.token_hex(16)}"
+        )
+        return rename_workspace_tree_noreplace(binding, quarantine).path
+    except WorkspacePathError:
+        raise
+    except OSError as exc:
+        raise WorkspacePathError(
+            "upload cleanup could not be quarantined",
+            "path_race",
+        ) from exc
 
 
 def _find_required_project_files(

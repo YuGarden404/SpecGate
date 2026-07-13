@@ -328,6 +328,25 @@ def write_workspace_stream(
         ) from exc
 
 
+def ensure_workspace_directory(
+    root: str | os.PathLike[str],
+    relative: str,
+) -> None:
+    normalized = normalize_workspace_relative(relative)
+    try:
+        root_path, trusted_path, identity = _validate_root(Path(root))
+        binding = _WorkspaceRootBinding(root_path, trusted_path, identity)
+        _ensure_workspace_directory(root_path, normalized, _binding=binding)
+        _verify_bound_root(root_path, trusted_path, identity)
+    except WorkspacePathError:
+        raise
+    except OSError as exc:
+        raise WorkspacePathError(
+            "workspace directory could not be created safely",
+            "path_race",
+        ) from exc
+
+
 def workspace_file_state(
     root: str | os.PathLike[str],
     relative: str,
@@ -1374,12 +1393,19 @@ def _platform_rename_noreplace(staging: Path, destination: Path) -> None:
         raise OSError(error_number, os.strerror(error_number), destination)
 
 
-def _ensure_workspace_directory(root: Path, relative: str) -> None:
+def _ensure_workspace_directory(
+    root: Path,
+    relative: str,
+    *,
+    _binding: _WorkspaceRootBinding | None = None,
+) -> None:
     parts = normalize_workspace_relative(relative).split("/")
     root_path, trusted_root, root_identity = _validate_root(root)
+    if _binding is not None:
+        _validate_root_binding(root_path, trusted_root, root_identity, _binding)
     if os.name == "nt":
         current = root_path
-        for part in parts:
+        for index, part in enumerate(parts, start=1):
             current /= part
             try:
                 file_stat = current.lstat()
@@ -1395,6 +1421,12 @@ def _ensure_workspace_directory(root: Path, relative: str) -> None:
                     f"workspace path is not a directory: {relative}",
                     "unsafe_file_type",
                 )
+            with _open_windows_directory_lock(
+                current,
+                trusted_root.joinpath(*parts[:index]),
+                _stat_identity(file_stat),
+            ):
+                pass
         expected = ntpath.normcase(ntpath.normpath(str(trusted_root.joinpath(*parts))))
         try:
             actual = ntpath.normcase(ntpath.normpath(str(current.resolve(strict=True))))
