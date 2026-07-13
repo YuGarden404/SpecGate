@@ -427,7 +427,7 @@ class WorkspaceFileIOTests(unittest.TestCase):
             real_resolve = Path.resolve
 
             @contextmanager
-            def tracking_lock(path, expected, expected_identity):
+            def tracking_lock(path, expected, expected_identity, **_kwargs):
                 path = Path(path)
                 entered.append((path, Path(expected), expected_identity, tuple(active)))
                 active.append(path)
@@ -481,7 +481,7 @@ class WorkspaceFileIOTests(unittest.TestCase):
             active = []
 
             @contextmanager
-            def tracking_lock(path, _expected, expected_identity):
+            def tracking_lock(path, _expected, expected_identity, **_kwargs):
                 path = Path(path)
                 active.append(path)
                 try:
@@ -533,7 +533,7 @@ class WorkspaceFileIOTests(unittest.TestCase):
             real_validate = workspace_fs._validate_windows_final_path
 
             @contextmanager
-            def tracking_lock(path, expected, expected_identity):
+            def tracking_lock(path, expected, expected_identity, **_kwargs):
                 path = Path(path)
                 entered.append((path, Path(expected), tuple(active)))
                 active.append(path)
@@ -587,7 +587,7 @@ class WorkspaceFileIOTests(unittest.TestCase):
             attempted = False
 
             @contextmanager
-            def tracking_lock(path, _expected, expected_identity):
+            def tracking_lock(path, _expected, expected_identity, **_kwargs):
                 path = Path(path)
                 active.append(path)
                 try:
@@ -1088,6 +1088,59 @@ class WorkspaceScanAndCopyTests(unittest.TestCase):
                         root,
                         root.resolve(),
                         workspace_fs._stat_identity(root.lstat()),
+                    ):
+                        pass
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            create_file.assert_called_once()
+            self.assertEqual(create_file.call_args.args[1], 0x00000080)
+            share_flags = create_file.call_args.args[2]
+            self.assertEqual(share_flags & 0x00000004, 0)
+
+    @unittest.skipUnless(os.name == "nt", "Windows anchor sharing policy")
+    def test_windows_volume_root_lock_uses_delete_sharing_once(self):
+        root = Path(Path.cwd().anchor)
+        invalid_handle = ctypes.c_void_p(-1).value
+
+        with mock.patch.object(
+            ctypes.windll.kernel32,
+            "CreateFileW",
+            return_value=invalid_handle,
+        ) as create_file:
+            with self.assertRaises(WorkspacePathError) as raised:
+                with workspace_fs._open_windows_directory_lock(
+                    root,
+                    root,
+                    workspace_fs._stat_identity(root.lstat()),
+                ):
+                    pass
+
+        self.assertEqual(raised.exception.rule_family, "path_race")
+        create_file.assert_called_once()
+        self.assertEqual(create_file.call_args.args[1], 0x00000080)
+        share_flags = create_file.call_args.args[2]
+        self.assertEqual(share_flags, 0x00000001 | 0x00000002 | 0x00000004)
+
+    @unittest.skipUnless(os.name == "nt", "Windows pseudo-anchor sharing policy")
+    def test_windows_pseudo_anchors_do_not_get_delete_sharing(self):
+        drive = Path.cwd().drive
+        cases = (
+            Path(f"{drive}relative"),
+            Path(Path.cwd().anchor) / "not-a-volume-root",
+        )
+        invalid_handle = ctypes.c_void_p(-1).value
+
+        for path in cases:
+            with self.subTest(path=str(path)), mock.patch.object(
+                ctypes.windll.kernel32,
+                "CreateFileW",
+                return_value=invalid_handle,
+            ) as create_file:
+                with self.assertRaises(WorkspacePathError) as raised:
+                    with workspace_fs._open_windows_directory_lock(
+                        path,
+                        path,
+                        (1, 1),
                     ):
                         pass
 

@@ -89,6 +89,19 @@ class _WorkspaceRootBinding:
     identity: tuple[int, int]
 
 
+class _WindowsDirectoryLock(tuple):
+    handle: int
+
+    def __new__(
+        cls,
+        identity: tuple[int, int],
+        handle: int,
+    ) -> _WindowsDirectoryLock:
+        instance = super().__new__(cls, identity)
+        instance.handle = handle
+        return instance
+
+
 def normalize_workspace_relative(value: str) -> str:
     if not isinstance(value, str):
         raise WorkspacePathError("workspace path must be a string", "invalid_path")
@@ -841,13 +854,16 @@ def _scan_windows_workspace(
         current: Path,
         prefix: str,
         expected_identity: tuple[int, int],
+        parent_lock: _WindowsDirectoryLock | None = None,
     ) -> None:
         expected = trusted_root.joinpath(*prefix.split("/")) if prefix else trusted_root
         with _open_windows_directory_lock(
             current,
             expected,
             expected_identity,
-        ) as current_identity:
+            parent_lock=parent_lock,
+            relative_name=current.name if parent_lock is not None else None,
+        ) as current_lock:
             discovered: list[tuple[Path, str, tuple[int, int]]] = []
             with os.scandir(current) as scanner:
                 for entry in sorted(scanner, key=lambda item: item.name):
@@ -879,7 +895,7 @@ def _scan_windows_workspace(
                             (
                                 entry_path,
                                 normalized,
-                                (current_identity[0], entry.inode()),
+                                (current_lock[0], entry.inode()),
                             )
                         )
                     elif stat.S_ISREG(entry_stat.st_mode):
@@ -899,7 +915,7 @@ def _scan_windows_workspace(
                             "unsafe_file_type",
                         )
             for entry_path, relative, entry_identity in discovered:
-                scan(entry_path, relative, entry_identity)
+                scan(entry_path, relative, entry_identity, current_lock)
 
     scan(root, "", root_identity)
     return sorted(directories), sorted(files)
@@ -1026,6 +1042,7 @@ def _scan_windows_workspace_tolerant(
         current: Path,
         prefix: str,
         expected_identity: tuple[int, int],
+        parent_lock: _WindowsDirectoryLock | None = None,
     ) -> None:
         expected = trusted_root.joinpath(*prefix.split("/")) if prefix else trusted_root
         try:
@@ -1033,7 +1050,9 @@ def _scan_windows_workspace_tolerant(
                 current,
                 expected,
                 expected_identity,
-            ) as current_identity:
+                parent_lock=parent_lock,
+                relative_name=current.name if parent_lock is not None else None,
+            ) as current_lock:
                 try:
                     with os.scandir(current) as scanner:
                         entries = sorted(scanner, key=lambda item: item.name)
@@ -1081,7 +1100,7 @@ def _scan_windows_workspace_tolerant(
                             (
                                 entry_path,
                                 relative,
-                                (current_identity[0], entry_stat.st_ino),
+                                (current_lock[0], entry_stat.st_ino),
                             )
                         )
                     elif stat.S_ISREG(entry_stat.st_mode):
@@ -1106,7 +1125,7 @@ def _scan_windows_workspace_tolerant(
                         reject(relative, "unsafe_file_type", "non-regular entry rejected")
 
                 for entry_path, relative, entry_identity in discovered:
-                    scan(entry_path, relative, entry_identity)
+                    scan(entry_path, relative, entry_identity, current_lock)
         except WorkspacePathError as exc:
             if not prefix:
                 raise
@@ -1412,7 +1431,7 @@ def _ensure_workspace_directory(
         _validate_root_binding(root_path, trusted_root, root_identity, _binding)
     if os.name == "nt":
         with contextlib.ExitStack() as directory_locks:
-            directory_locks.enter_context(
+            parent_lock = directory_locks.enter_context(
                 _open_windows_directory_lock(
                     root_path,
                     trusted_root,
@@ -1436,11 +1455,13 @@ def _ensure_workspace_directory(
                         f"workspace path is not a directory: {relative}",
                         "unsafe_file_type",
                     )
-                directory_locks.enter_context(
+                parent_lock = directory_locks.enter_context(
                     _open_windows_directory_lock(
                         current,
                         trusted_root.joinpath(*parts[:index]),
                         _stat_identity(file_stat),
+                        parent_lock=parent_lock,
+                        relative_name=part,
                     )
                 )
             expected = ntpath.normcase(ntpath.normpath(str(trusted_root.joinpath(*parts))))
@@ -1581,7 +1602,7 @@ def _open_windows_workspace_fd(
     descriptor = -1
     try:
         with contextlib.ExitStack() as directory_locks:
-            directory_locks.enter_context(
+            parent_lock = directory_locks.enter_context(
                 _open_windows_directory_lock(root, trusted_root, root_identity)
             )
             current = root
@@ -1603,11 +1624,13 @@ def _open_windows_workspace_fd(
                         f"workspace parent is not a directory: {part}",
                         "unsafe_file_type",
                     )
-                directory_locks.enter_context(
+                parent_lock = directory_locks.enter_context(
                     _open_windows_directory_lock(
                         current,
                         trusted_root.joinpath(*parts[:index]),
                         _stat_identity(file_stat),
+                        parent_lock=parent_lock,
+                        relative_name=part,
                     )
                 )
 
@@ -1696,7 +1719,10 @@ def _open_windows_directory_lock(
     path: Path,
     expected: Path,
     expected_identity: tuple[int, int],
-) -> Iterator[tuple[int, int]]:
+    *,
+    parent_lock: _WindowsDirectoryLock | None = None,
+    relative_name: str | None = None,
+) -> Iterator[_WindowsDirectoryLock]:
     if os.name != "nt":
         raise RuntimeError("Windows directory handles are unavailable")
     _reject_link_like(path)
@@ -1743,18 +1769,35 @@ def _open_windows_directory_lock(
 
     file_share_read = 0x00000001
     file_share_write = 0x00000002
+    file_share_delete = 0x00000004
+    file_read_attributes = 0x00000080
+    share_mode = file_share_read | file_share_write
+    if _is_windows_anchor(path):
+        share_mode |= file_share_delete
     open_existing = 3
     file_flag_backup_semantics = 0x02000000
     file_flag_open_reparse_point = 0x00200000
-    handle = create_file(
-        str(path),
-        0,
-        file_share_read | file_share_write,
-        None,
-        open_existing,
-        file_flag_backup_semantics | file_flag_open_reparse_point,
-        None,
-    )
+    if parent_lock is None:
+        handle = create_file(
+            str(path),
+            file_read_attributes,
+            share_mode,
+            None,
+            open_existing,
+            file_flag_backup_semantics | file_flag_open_reparse_point,
+            None,
+        )
+    elif relative_name is None:
+        raise WorkspacePathError(
+            "Windows relative directory name is unavailable",
+            "path_race",
+        )
+    else:
+        handle = _open_windows_relative_directory(
+            parent_lock.handle,
+            relative_name,
+            share_mode,
+        )
     if handle == ctypes.c_void_p(-1).value:
         raise WorkspacePathError(
             "Windows directory handle could not be opened safely",
@@ -1791,13 +1834,113 @@ def _open_windows_directory_lock(
                 "workspace directory changed location during scan",
                 "path_race",
             )
-        yield actual_identity
+        yield _WindowsDirectoryLock(actual_identity, handle)
     finally:
         if not _windows_close_handle(handle):
             raise WorkspacePathError(
                 "Windows directory handle could not be closed",
                 "path_race",
             )
+
+
+def _open_windows_relative_directory(
+    parent_handle: int,
+    relative_name: str,
+    share_mode: int,
+) -> int:
+    import ctypes
+    from ctypes import wintypes
+
+    class UnicodeString(ctypes.Structure):
+        _fields_ = (
+            ("length", wintypes.USHORT),
+            ("maximum_length", wintypes.USHORT),
+            ("buffer", wintypes.LPWSTR),
+        )
+
+    class ObjectAttributes(ctypes.Structure):
+        _fields_ = (
+            ("length", wintypes.ULONG),
+            ("root_directory", wintypes.HANDLE),
+            ("object_name", ctypes.POINTER(UnicodeString)),
+            ("attributes", wintypes.ULONG),
+            ("security_descriptor", wintypes.LPVOID),
+            ("security_quality_of_service", wintypes.LPVOID),
+        )
+
+    class IoStatusBlock(ctypes.Structure):
+        _fields_ = (
+            ("status", ctypes.c_ssize_t),
+            ("information", ctypes.c_size_t),
+        )
+
+    nt_create_file = ctypes.windll.ntdll.NtCreateFile
+    nt_create_file.argtypes = (
+        ctypes.POINTER(wintypes.HANDLE),
+        wintypes.ULONG,
+        ctypes.POINTER(ObjectAttributes),
+        ctypes.POINTER(IoStatusBlock),
+        ctypes.POINTER(ctypes.c_longlong),
+        wintypes.ULONG,
+        wintypes.ULONG,
+        wintypes.ULONG,
+        wintypes.ULONG,
+        wintypes.LPVOID,
+        wintypes.ULONG,
+    )
+    nt_create_file.restype = ctypes.c_long
+
+    file_read_attributes = 0x00000080
+    file_open = 0x00000001
+    file_directory_file = 0x00000001
+    file_open_reparse_point = 0x00200000
+    obj_case_insensitive = 0x00000040
+    name_buffer = ctypes.create_unicode_buffer(relative_name)
+    name = UnicodeString(
+        len(relative_name) * ctypes.sizeof(ctypes.c_wchar),
+        (len(relative_name) + 1) * ctypes.sizeof(ctypes.c_wchar),
+        ctypes.cast(name_buffer, wintypes.LPWSTR),
+    )
+    attributes = ObjectAttributes(
+        ctypes.sizeof(ObjectAttributes),
+        parent_handle,
+        ctypes.pointer(name),
+        obj_case_insensitive,
+        None,
+        None,
+    )
+    io_status = IoStatusBlock()
+    handle = wintypes.HANDLE()
+    status = nt_create_file(
+        ctypes.byref(handle),
+        file_read_attributes,
+        ctypes.byref(attributes),
+        ctypes.byref(io_status),
+        None,
+        0,
+        share_mode,
+        file_open,
+        file_directory_file | file_open_reparse_point,
+        None,
+        0,
+    )
+    if status < 0 or not handle.value:
+        raise WorkspacePathError(
+            "Windows directory could not be locked against replacement",
+            "path_race",
+        )
+    return int(handle.value)
+
+
+def _is_windows_anchor(path: Path) -> bool:
+    normalized = ntpath.normpath(str(path))
+    drive, tail = ntpath.splitdrive(normalized)
+    if not drive or not ntpath.isabs(normalized):
+        return False
+    if not drive.startswith("\\\\"):
+        return tail == "\\"
+    components = [component for component in drive.lstrip("\\").split("\\") if component]
+    return len(components) == 2 and tail in {"", "\\"}
 
 
 def _stat_identity(file_stat: os.stat_result | Any) -> tuple[int, int]:
