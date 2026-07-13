@@ -5,7 +5,7 @@ import errno
 import hashlib
 import ntpath
 import os
-import shutil
+import secrets
 import stat
 import sys
 import tempfile
@@ -25,6 +25,15 @@ class WorkspacePathError(ValueError):
 class WorkspaceFileState:
     exists: bool
     sha256: str | None
+
+
+@dataclass(frozen=True)
+class _StagingOwnership:
+    path: Path
+    identity: tuple[int, int]
+    marker_path: Path
+    marker_identity: tuple[int, int]
+    token: str
 
 
 def normalize_workspace_relative(value: str) -> str:
@@ -204,8 +213,7 @@ def copy_workspace_tree(
     directories, files = _scan_workspace(source_path)
 
     destination_path = Path(os.path.abspath(destination))
-    staging_path: Path | None = None
-    staging_identity: tuple[int, int] | None = None
+    ownership: _StagingOwnership | None = None
     try:
         try:
             destination_path.lstat()
@@ -217,32 +225,22 @@ def copy_workspace_tree(
                 "workspace copy destination already exists",
                 "path_race",
             )
-        staging_path = _create_private_staging(destination_path)
-        staging_identity = _stat_identity(staging_path.lstat())
+        ownership = _create_private_staging(destination_path)
 
         for relative in directories:
-            _ensure_workspace_directory(staging_path, relative)
+            _ensure_workspace_directory(ownership.path, relative)
         for relative in files:
             write_workspace_bytes(
-                staging_path,
+                ownership.path,
                 relative,
                 read_workspace_bytes(source_path, relative),
             )
-        _publish_workspace_tree(
-            staging_path,
-            destination_path,
-            staging_identity,
-        )
-        staging_path = None
+        _publish_workspace_tree(ownership, destination_path)
+        ownership = None
     except BaseException as copy_error:
-        if staging_path is not None and staging_identity is not None:
-            try:
-                _remove_created_destination(staging_path, staging_identity)
-            except OSError as cleanup_error:
-                raise WorkspacePathError(
-                    "workspace copy failed and destination cleanup was incomplete",
-                    "path_race",
-                ) from cleanup_error
+        # Recursive path cleanup cannot bind the staging root through rmtree's
+        # final removal. Retain marked staging on failure rather than risk
+        # deleting an object that replaced it.
         if isinstance(copy_error, WorkspacePathError):
             raise
         if isinstance(copy_error, OSError):
@@ -423,27 +421,145 @@ def _scan_windows_workspace(
     return sorted(directories), sorted(files)
 
 
-def _create_private_staging(destination: Path) -> Path:
+def _create_private_staging(destination: Path) -> _StagingOwnership:
     prefix = f".{destination.name}.specgate-copy-"
-    return Path(tempfile.mkdtemp(prefix=prefix, dir=destination.parent))
+    staging = Path(tempfile.mkdtemp(prefix=prefix, dir=destination.parent))
+    token = secrets.token_hex(32)
+    marker_name = f".{staging.name}.owner-{secrets.token_hex(16)}"
+    marker_path = destination.parent / marker_name
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(marker_path, flags, 0o600)
+    with os.fdopen(descriptor, "wb") as marker:
+        marker.write(token.encode("ascii"))
+    return _StagingOwnership(
+        path=staging,
+        identity=_stat_identity(staging.lstat()),
+        marker_path=marker_path,
+        marker_identity=_stat_identity(marker_path.lstat()),
+        token=token,
+    )
 
 
 def _publish_workspace_tree(
-    staging: Path,
+    ownership: _StagingOwnership,
     destination: Path,
-    expected_identity: tuple[int, int],
 ) -> None:
-    staging_stat = staging.lstat()
+    _verify_owned_tree(ownership.path, ownership)
+    renamed = False
+    try:
+        _rename_staging_noreplace(ownership.path, destination)
+        renamed = True
+        _verify_published_tree(
+            destination,
+            ownership.identity,
+            ownership.marker_path,
+            ownership.token,
+        )
+        _remove_ownership_marker(ownership)
+        _verify_tree_identity(destination, ownership.identity)
+    except BaseException as publish_error:
+        if renamed:
+            _quarantine_unknown_tree(destination)
+        if isinstance(publish_error, WorkspacePathError):
+            raise
+        if isinstance(publish_error, OSError):
+            raise WorkspacePathError(
+                "workspace copy publication could not be verified",
+                "path_race",
+            ) from publish_error
+        raise
+
+
+def _verify_tree_identity(path: Path, expected_identity: tuple[int, int]) -> None:
+    file_stat = path.lstat()
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     if (
-        stat.S_ISLNK(staging_stat.st_mode)
-        or getattr(staging_stat, "st_file_attributes", 0) & reparse_flag
-        or _stat_identity(staging_stat) != expected_identity
+        stat.S_ISLNK(file_stat.st_mode)
+        or getattr(file_stat, "st_file_attributes", 0) & reparse_flag
+        or not stat.S_ISDIR(file_stat.st_mode)
+        or _stat_identity(file_stat) != expected_identity
     ):
         raise WorkspacePathError(
-            "workspace copy staging directory was replaced before publication",
+            "workspace copy tree identity is uncertain",
             "path_race",
         )
+
+
+def _verify_ownership_marker(
+    marker_path: Path,
+    expected_identity: tuple[int, int],
+    token: str,
+) -> None:
+    marker_stat = marker_path.lstat()
+    if (
+        not stat.S_ISREG(marker_stat.st_mode)
+        or _stat_identity(marker_stat) != expected_identity
+        or marker_path.read_text(encoding="ascii") != token
+    ):
+        raise WorkspacePathError(
+            "workspace copy ownership marker is uncertain",
+            "path_race",
+        )
+
+
+def _verify_owned_tree(path: Path, ownership: _StagingOwnership) -> None:
+    _verify_tree_identity(path, ownership.identity)
+    _verify_ownership_marker(
+        ownership.marker_path,
+        ownership.marker_identity,
+        ownership.token,
+    )
+
+
+def _verify_published_tree(
+    destination: Path,
+    expected_identity: tuple[int, int],
+    marker_path: Path,
+    marker_token: str,
+) -> None:
+    _verify_tree_identity(destination, expected_identity)
+    marker_stat = marker_path.lstat()
+    _verify_ownership_marker(
+        marker_path,
+        _stat_identity(marker_stat),
+        marker_token,
+    )
+
+
+def _remove_ownership_marker(ownership: _StagingOwnership) -> None:
+    _verify_ownership_marker(
+        ownership.marker_path,
+        ownership.marker_identity,
+        ownership.token,
+    )
+    ownership.marker_path.unlink()
+
+
+def _rename_staging_noreplace(staging: Path, destination: Path) -> None:
+    _platform_rename_noreplace(staging, destination)
+
+
+def _quarantine_unknown_tree(destination: Path) -> None:
+    try:
+        destination.lstat()
+    except FileNotFoundError:
+        return
+    quarantine = destination.parent / (
+        f".{destination.name}.specgate-quarantine-{secrets.token_hex(16)}"
+    )
+    try:
+        _platform_rename_noreplace(destination, quarantine)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise WorkspacePathError(
+            "uncertain published tree could not be quarantined",
+            "path_race",
+        ) from exc
+
+
+def _platform_rename_noreplace(staging: Path, destination: Path) -> None:
     if os.name == "nt":
         os.rename(staging, destination)
         return
@@ -498,27 +614,6 @@ def _publish_workspace_tree(
     if result != 0:
         error_number = ctypes.get_errno()
         raise OSError(error_number, os.strerror(error_number), destination)
-
-
-def _remove_created_destination(
-    destination: Path,
-    expected_identity: tuple[int, int],
-) -> None:
-    try:
-        file_stat = destination.lstat()
-    except FileNotFoundError:
-        return
-    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    if (
-        stat.S_ISLNK(file_stat.st_mode)
-        or getattr(file_stat, "st_file_attributes", 0) & reparse_flag
-        or _stat_identity(file_stat) != expected_identity
-    ):
-        raise WorkspacePathError(
-            "workspace copy staging directory was replaced",
-            "path_race",
-        )
-    shutil.rmtree(destination)
 
 
 def _ensure_workspace_directory(root: Path, relative: str) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import stat
 import tempfile
 import types
@@ -560,6 +561,123 @@ class WorkspaceScanAndCopyTests(unittest.TestCase):
                 "existing sentinel",
             )
             self.assertFalse(destination.exists())
+
+    def test_copy_publish_rejects_replacement_after_prevalidation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "source"
+            destination = base / "destination"
+            replacement = base / "replacement"
+            displaced = base / "displaced-copy"
+            source.mkdir()
+            replacement.mkdir()
+            (source / "a.txt").write_text("a", encoding="utf-8")
+            (replacement / "sentinel.txt").write_text("existing sentinel", encoding="utf-8")
+            real_rename = getattr(workspace_fs, "_rename_staging_noreplace", None)
+
+            def replace_after_validation(staging, target):
+                os.rename(staging, displaced)
+                os.rename(replacement, staging)
+                if real_rename is None:
+                    raise AssertionError("rename helper was not called")
+                return real_rename(staging, target)
+
+            with mock.patch.object(
+                workspace_fs,
+                "_rename_staging_noreplace",
+                create=True,
+                side_effect=replace_after_validation,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    copy_workspace_tree(source, destination)
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertFalse(destination.exists())
+            sentinels = list(base.rglob("sentinel.txt"))
+            self.assertEqual(len(sentinels), 1)
+            self.assertEqual(sentinels[0].read_text(encoding="utf-8"), "existing sentinel")
+
+    def test_copy_cleanup_never_rmtree_after_identity_precheck(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "source"
+            destination = base / "destination"
+            replacement = base / "replacement"
+            displaced = base / "displaced-copy"
+            source.mkdir()
+            replacement.mkdir()
+            (source / "a.txt").write_text("a", encoding="utf-8")
+            (replacement / "sentinel.txt").write_text("existing sentinel", encoding="utf-8")
+            real_rmtree = shutil.rmtree
+            copy_root = None
+
+            def fail_write(root, _relative, _content):
+                nonlocal copy_root
+                copy_root = Path(root)
+                raise OSError("copy interrupted")
+
+            def replace_before_rmtree(path, *args, **kwargs):
+                path = Path(path)
+                os.rename(path, displaced)
+                os.rename(replacement, path)
+                return real_rmtree(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    workspace_fs,
+                    "write_workspace_bytes",
+                    side_effect=fail_write,
+                ),
+                mock.patch.object(
+                    shutil,
+                    "rmtree",
+                    side_effect=replace_before_rmtree,
+                ) as rmtree,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    copy_workspace_tree(source, destination)
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertIsNotNone(copy_root)
+            rmtree.assert_not_called()
+            sentinels = list(base.rglob("sentinel.txt"))
+            self.assertEqual(len(sentinels), 1)
+            self.assertEqual(sentinels[0].read_text(encoding="utf-8"), "existing sentinel")
+
+    def test_copy_rejects_destination_replaced_before_postpublish_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "source"
+            destination = base / "destination"
+            replacement = base / "replacement"
+            displaced = base / "displaced-published"
+            source.mkdir()
+            replacement.mkdir()
+            (source / "a.txt").write_text("a", encoding="utf-8")
+            (replacement / "sentinel.txt").write_text("existing sentinel", encoding="utf-8")
+            real_verify = getattr(workspace_fs, "_verify_published_tree", None)
+
+            def replace_before_verify(target, expected_identity, marker_name, marker_token):
+                os.rename(target, displaced)
+                os.rename(replacement, target)
+                if real_verify is None:
+                    raise AssertionError("postpublish verifier was not called")
+                return real_verify(target, expected_identity, marker_name, marker_token)
+
+            with mock.patch.object(
+                workspace_fs,
+                "_verify_published_tree",
+                create=True,
+                side_effect=replace_before_verify,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    copy_workspace_tree(source, destination)
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertFalse(destination.exists())
+            sentinels = list(base.rglob("sentinel.txt"))
+            self.assertEqual(len(sentinels), 1)
+            self.assertEqual(sentinels[0].read_text(encoding="utf-8"), "existing sentinel")
 
     def test_copy_destination_lstat_error_uses_stable_path_race_family(self):
         with tempfile.TemporaryDirectory() as tmp:
