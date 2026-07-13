@@ -114,6 +114,12 @@ Web 应用启动时还恢复 `publishing` run：验证 run workspace 与 artifac
 completed。恢复失败保持 publishing 和安全诊断，不能开放下一 run，也不能在项目可能已经提升时
 宣称 failed。
 
+正常发布和启动恢复必须竞争同一个 `runs/.<run_id>.publish.lock` 跨进程锁，并在持锁后重新确认
+数据库状态。prepare 阶段生成不可变 publication manifest，记录 run id、ownership、run workspace
+`index.html`、index artifact、zip artifact 及 zip 内 `index.html` 的 SHA-256。恢复只有在 marker、
+manifest schema、全部摘要和 ZIP 内容均一致时才能提升并标记 completed；任何损坏保持 publishing
+并记录安全诊断。
+
 ## 7. 审批与恢复
 
 Web approvals 表通过 `run_id` 定位 run，然后只读写该 run 的
@@ -138,6 +144,8 @@ Web approvals 表通过 `run_id` 定位 run，然后只读写该 run 的
 - workspace 发布前提升失败：恢复旧 workspace，run 标记 failed，并保留 run 自身证据。
 - workspace 已发布但备份清理失败：保留完整新 workspace，记录清理错误并允许后续恢复流程清理残留。
 - workspace 已发布但 completed 落库失败：保持 publishing，启动恢复幂等提升后完成落库。
+- publication lock 被其他进程持有：启动恢复跳过该 run，不修改其文件或状态。
+- publication manifest 或 artifact 损坏：保持 publishing 并记录诊断，禁止自动提升。
 
 ## 10. 测试与验收
 

@@ -157,6 +157,11 @@ run 2 初始 workspace 包含 run 1 成功内容。
 增加发布 saga 测试：prepare 后中断由启动恢复完成；提升成功但 completed 落库失败时保持
 publishing 并阻止下一 run，启动恢复后转 completed；提升失败时旧 workspace 不变且 run failed。
 
+正常发布与恢复持有同一个 `.<run_id>.publish.lock`，恢复持锁后重新确认状态。prepare 原子写入
+publication manifest，包含 run ownership、workspace index、index artifact、zip artifact 和 zip 内
+index 的 SHA-256；恢复逐项验证，篡改任一文件、marker 或 manifest 都不得完成。Web shutdown 对
+后台线程采用单个全局 deadline 的有界 join，超时 daemon 线程不阻塞退出。
+
 - [ ] **Step 6: 改造审批测试夹具与恢复**
 
 所有 Web approval 测试通过 `web_run_paths(..., run_id).approval_queue` 写队列，验证两个 run 的
