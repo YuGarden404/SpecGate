@@ -27,14 +27,20 @@ class ContextSelectorTests(unittest.TestCase):
             self.assertEqual(statuses["index.html"], "selected")
             self.assertLessEqual(selection.used_chars, selection.budget_chars)
 
-    def test_skips_runtime_outputs_and_cache_dirs(self):
+    def test_prunes_runtime_outputs_and_cache_dirs_without_leaking_content(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "TASK_SPEC.md").write_text("task spec", encoding="utf-8")
             (root / "runs" / "latest").mkdir(parents=True)
-            (root / "runs" / "latest" / "trace.jsonl").write_text("trace", encoding="utf-8")
+            (root / "runs" / "latest" / "trace.jsonl").write_text(
+                "EXCLUDED_RUN_SENTINEL",
+                encoding="utf-8",
+            )
             (root / "reports" / "latest").mkdir(parents=True)
-            (root / "reports" / "latest" / "index.html").write_text("report", encoding="utf-8")
+            (root / "reports" / "latest" / "index.html").write_text(
+                "EXCLUDED_REPORT_SENTINEL",
+                encoding="utf-8",
+            )
             (root / "__pycache__").mkdir()
             (root / "__pycache__" / "x.pyc").write_bytes(b"cache")
 
@@ -42,9 +48,11 @@ class ContextSelectorTests(unittest.TestCase):
             statuses = _statuses(selection)
 
             self.assertEqual(statuses["TASK_SPEC.md"], "selected")
-            self.assertEqual(statuses["runs/latest/trace.jsonl"], "skipped")
-            self.assertEqual(statuses["reports/latest/index.html"], "skipped")
-            self.assertEqual(statuses["__pycache__/x.pyc"], "skipped")
+            self.assertNotIn("runs/latest/trace.jsonl", statuses)
+            self.assertNotIn("reports/latest/index.html", statuses)
+            self.assertNotIn("__pycache__/x.pyc", statuses)
+            self.assertNotIn("EXCLUDED_RUN_SENTINEL", str(selection))
+            self.assertNotIn("EXCLUDED_REPORT_SENTINEL", str(selection))
 
     def test_applies_budget_to_low_priority_files(self):
         with tempfile.TemporaryDirectory() as tmp:
