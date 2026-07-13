@@ -115,6 +115,9 @@ class ApprovalQueue:
     @classmethod
     def read(cls, path: Path) -> "ApprovalQueue":
         root, relative_path = _approval_queue_location(path)
+        parent_relative = relative_path.rpartition("/")[0]
+        if parent_relative:
+            workspace_fs._ensure_workspace_directory(root, parent_relative)
         try:
             content = workspace_fs.read_workspace_text(
                 root,
@@ -122,7 +125,7 @@ class ApprovalQueue:
                 encoding="utf-8-sig",
             )
         except workspace_fs.WorkspacePathError as exc:
-            if _caused_by_file_not_found(exc):
+            if _is_missing_queue_file(exc, path):
                 return cls()
             raise
 
@@ -235,13 +238,22 @@ def _approval_queue_location(path: Path) -> tuple[Path, str]:
     return root, workspace_fs.normalize_workspace_relative(relative_path)
 
 
-def _caused_by_file_not_found(error: BaseException) -> bool:
+def _is_missing_queue_file(
+    error: workspace_fs.WorkspacePathError,
+    path: Path,
+) -> bool:
     cause = error.__cause__
-    while cause is not None:
-        if isinstance(cause, FileNotFoundError):
-            return True
-        cause = cause.__cause__
-    return False
+    if error.rule_family != "path_race" or not isinstance(cause, FileNotFoundError):
+        return False
+    if cause.filename is None:
+        return False
+
+    expected = Path(os.path.abspath(path))
+    missing = Path(cause.filename)
+    if missing.is_absolute():
+        return os.path.normcase(str(missing)) == os.path.normcase(str(expected))
+
+    return missing.name == expected.name and expected.name not in expected.parent.parts
 
 
 def _parse_pending_approval(approval: dict[str, Any]) -> PendingApproval:

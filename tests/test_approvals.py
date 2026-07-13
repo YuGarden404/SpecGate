@@ -229,6 +229,64 @@ class ApprovalTests(unittest.TestCase):
 
             self.assertEqual(raised.exception.rule_family, "path_race")
 
+    def test_queue_read_does_not_treat_chained_missing_path_race_as_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+            try:
+                raise FileNotFoundError("ancestor disappeared")
+            except FileNotFoundError as missing:
+                error = WorkspacePathError("ancestor replaced", "path_race")
+                error.__cause__ = missing
+
+            with mock.patch(
+                "specgate.workspace_fs.read_workspace_text",
+                side_effect=error,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    ApprovalQueue.read(queue_path)
+
+            self.assertIs(raised.exception, error)
+
+    def test_queue_read_returns_empty_only_when_final_file_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+
+            queue = ApprovalQueue.read(queue_path)
+
+            self.assertEqual(queue, ApprovalQueue())
+
+    def test_queue_read_safely_establishes_missing_parent_before_returning_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "missing" / "pending_approvals.json"
+
+            queue = ApprovalQueue.read(queue_path)
+
+            self.assertEqual(queue, ApprovalQueue())
+            self.assertTrue(queue_path.parent.is_dir())
+
+    def test_queue_read_fails_closed_when_parent_disappears_after_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "missing" / "pending_approvals.json"
+            missing = FileNotFoundError(
+                2,
+                "parent disappeared",
+                str(queue_path.parent),
+            )
+            error = WorkspacePathError("ancestor replaced", "path_race")
+            error.__cause__ = missing
+
+            with mock.patch(
+                "specgate.workspace_fs._ensure_workspace_directory",
+                return_value=None,
+            ), mock.patch(
+                "specgate.workspace_fs.read_workspace_text",
+                side_effect=error,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    ApprovalQueue.read(queue_path)
+
+            self.assertIs(raised.exception, error)
+
     def test_queue_file_link_does_not_overwrite_external_sentinel(self):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
             root = Path(tmp)

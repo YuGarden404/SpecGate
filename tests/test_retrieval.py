@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import specgate.workspace_fs as workspace_fs
 from specgate.context_selector import select_context_files
 from specgate.retrieval import RetrievalConfig, build_query_terms, chunk_text, retrieve_chunks
 from specgate.workspace_fs import WorkspacePathError
@@ -98,10 +99,11 @@ class RetrievalTests(unittest.TestCase):
             external = Path(outside) / "notes.md"
             external.write_text(sentinel, encoding="utf-8")
             self._symlink_or_skip(root / "linked-notes.md", external)
+            (root / "safe-notes.md").write_text("python gate search safe", encoding="utf-8")
 
             result = retrieve_chunks(root, ["python", "gate", "search"])
 
-            self.assertEqual(result.selected_chunks, [])
+            self.assertEqual([chunk.path for chunk in result.selected_chunks], ["safe-notes.md"])
             self.assertTrue(any("linked_path" in reason for reason in result.dropped_reasons))
             self.assertNotIn(sentinel, str(result))
 
@@ -111,7 +113,7 @@ class RetrievalTests(unittest.TestCase):
             (root / "notes.md").write_text("python gate search", encoding="utf-8")
 
             with mock.patch(
-                "specgate.workspace_fs.iter_workspace_files",
+                "specgate.workspace_fs.read_workspace_text",
                 side_effect=WorkspacePathError("ancestor replaced", "path_race"),
             ):
                 result = retrieve_chunks(root, ["python", "gate", "search"])
@@ -120,20 +122,57 @@ class RetrievalTests(unittest.TestCase):
             self.assertEqual(result.selected_chunks, [])
             self.assertTrue(any("path_race" in reason for reason in result.dropped_reasons))
 
-    def test_retrieval_records_linked_scan_rejection_without_candidates(self):
+    def test_retrieval_skips_linked_candidate_and_keeps_safe_chunks(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "notes.md").write_text("python gate search", encoding="utf-8")
+            (root / "safe.md").write_text("python gate search safe", encoding="utf-8")
+            sentinel = "EXTERNAL_RETRIEVAL_SENTINEL python gate search"
+            (root / "linked.md").write_text(sentinel, encoding="utf-8")
+            original_is_link_like = workspace_fs.is_link_like
+
+            def mark_linked(path):
+                if Path(path).name == "linked.md":
+                    return True
+                return original_is_link_like(path)
 
             with mock.patch(
-                "specgate.workspace_fs.iter_workspace_files",
-                side_effect=WorkspacePathError("linked entry", "linked_path"),
+                "specgate.workspace_fs.is_link_like",
+                side_effect=mark_linked,
             ):
                 result = retrieve_chunks(root, ["python", "gate", "search"])
 
-            self.assertEqual(result.candidate_count, 0)
-            self.assertEqual(result.selected_chunks, [])
+            self.assertEqual([chunk.path for chunk in result.selected_chunks], ["safe.md"])
             self.assertTrue(any("linked_path" in reason for reason in result.dropped_reasons))
+            self.assertNotIn(sentinel, str(result))
+
+    def test_excluded_directory_link_does_not_empty_retrieval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "safe.md").write_text("python gate search safe", encoding="utf-8")
+            (root / "eval-runs").mkdir()
+            (root / "eval-runs" / "linked.md").write_text(
+                "EXTERNAL_EXCLUDED_SENTINEL python gate search",
+                encoding="utf-8",
+            )
+            original_is_link_like = workspace_fs.is_link_like
+
+            def mark_linked(path):
+                if Path(path).name == "linked.md":
+                    return True
+                return original_is_link_like(path)
+
+            with mock.patch(
+                "specgate.workspace_fs.iter_workspace_files",
+                side_effect=WorkspacePathError("excluded linked entry", "linked_path"),
+            ), mock.patch(
+                "specgate.workspace_fs.is_link_like",
+                side_effect=mark_linked,
+            ):
+                result = retrieve_chunks(root, ["python", "gate", "search"])
+
+            self.assertEqual([chunk.path for chunk in result.selected_chunks], ["safe.md"])
+            self.assertTrue(any("linked_path" in reason for reason in result.dropped_reasons))
+            self.assertNotIn("EXTERNAL_EXCLUDED_SENTINEL", str(result))
 
 
 if __name__ == "__main__":

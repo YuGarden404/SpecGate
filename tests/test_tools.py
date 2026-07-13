@@ -205,7 +205,7 @@ class ToolDispatcherTests(unittest.TestCase):
             policy = WorkspacePolicy(root, {"list_files"}, {"index.html"}, set())
 
             with mock.patch(
-                "specgate.workspace_fs.iter_workspace_files",
+                "specgate.workspace_fs.workspace_file_state",
                 side_effect=WorkspacePathError("linked entry", "linked_path"),
             ):
                 result = ToolDispatcher(policy).dispatch(Action("1", "list_files", {}))
@@ -214,6 +214,21 @@ class ToolDispatcherTests(unittest.TestCase):
             self.assertTrue(result.blocked)
             self.assertEqual(result.data["rule_family"], "linked_path")
             self.assertEqual(getattr(result, "rule_family", None), "linked_path")
+
+    def test_list_files_ignores_unallowed_link_rejection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "index.html").write_text("safe", encoding="utf-8")
+            policy = WorkspacePolicy(root, {"list_files"}, {"index.html"}, set())
+
+            with mock.patch(
+                "specgate.workspace_fs.iter_workspace_files",
+                side_effect=WorkspacePathError("unallowed linked entry", "linked_path"),
+            ):
+                result = ToolDispatcher(policy).dispatch(Action("1", "list_files", {}))
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.data["files"], ["index.html"])
 
     def test_guardrail_rule_family_is_directly_exposed_on_tool_result(self):
         with tempfile.TemporaryDirectory() as tmp:

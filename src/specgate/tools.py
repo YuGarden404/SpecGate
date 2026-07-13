@@ -133,11 +133,14 @@ class ToolDispatcher:
 
     def _list_files(self, action: Action) -> ToolResult:
         try:
-            files = sorted(
-                relative_path
-                for relative_path in workspace_fs.iter_workspace_files(self.policy.root)
-                if relative_path in self.policy.allowed_read_paths
-            )
+            files = []
+            for relative_path in sorted(self.policy.allowed_read_paths):
+                state = workspace_fs.workspace_file_state(
+                    self.policy.root,
+                    relative_path,
+                )
+                if state.exists:
+                    files.append(relative_path)
         except workspace_fs.WorkspacePathError as exc:
             return self._blocked_path_result(action, exc)
         return ToolResult(True, action.action, "listed files", {"files": files})
