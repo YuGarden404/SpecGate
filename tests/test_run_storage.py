@@ -1,3 +1,4 @@
+import json
 import shutil
 import tempfile
 import unittest
@@ -5,6 +6,7 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import patch
 
+import specgate.run_storage as run_storage
 from specgate.run_storage import (
     RunStorageCleanupError,
     initialize_run_storage,
@@ -15,6 +17,8 @@ from specgate.web_projects import RunPaths, project_paths, web_run_paths
 
 
 class RunStorageTests(unittest.TestCase):
+    ownership_marker = ".specgate-run-owner.json"
+
     def make_project(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -62,6 +66,13 @@ class RunStorageTests(unittest.TestCase):
         self.assertTrue(run.audit.is_dir())
         self.assertTrue(run.approval_queue.parent.is_dir())
         self.assertTrue(run.artifacts.is_dir())
+        marker = run.root / self.ownership_marker
+        self.assertEqual(
+            json.loads(marker.read_text(encoding="utf-8")),
+            {"run_id": 11, "schema_version": 1},
+        )
+        self.assertFalse((run.workspace / self.ownership_marker).exists())
+        self.assertFalse((run.artifacts / self.ownership_marker).exists())
 
     def test_initialize_run_storage_rejects_existing_target(self):
         project = self.make_project()
@@ -114,15 +125,54 @@ class RunStorageTests(unittest.TestCase):
             any("temporary cleanup failed" in note for note in getattr(error, "__notes__", ()))
         )
 
-    def test_initialize_run_storage_cleans_stale_same_run_temporary_directory(self):
+    def test_initialize_run_storage_leaves_unowned_stale_temporary_directory(self):
         project = self.make_project()
-        temporary_root = project.runs / ".11.tmp"
+        temporary_root = project.runs / ".11.tmp-unowned"
         temporary_root.mkdir()
         (temporary_root / "partial.txt").write_text("partial", encoding="utf-8")
 
         run = initialize_run_storage(project, 11)
 
-        self.assertEqual(list(project.runs.iterdir()), [run.root])
+        self.assertTrue(temporary_root.is_dir())
+        self.assertTrue(run.root.is_dir())
+
+    def test_cleanup_interrupted_run_storage_removes_owned_temp_and_formal_roots(self):
+        project = self.make_project()
+        run = initialize_run_storage(project, 11)
+        temporary_root = project.runs / ".11.tmp-interrupted"
+        temporary_root.mkdir()
+        self.write_ownership_marker(temporary_root, 11)
+        (temporary_root / "partial.txt").write_text("partial", encoding="utf-8")
+
+        run_storage.cleanup_interrupted_run_storage(project, 11)
+
+        self.assertFalse(temporary_root.exists())
+        self.assertFalse(run.root.exists())
+
+    def test_cleanup_interrupted_run_storage_preserves_missing_and_wrong_markers(self):
+        project = self.make_project()
+        run = initialize_run_storage(project, 11)
+        self.write_ownership_marker(run.root, 12)
+        unowned_temp = project.runs / ".11.tmp-unowned"
+        unowned_temp.mkdir()
+        sentinel = unowned_temp / "keep.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+
+        with self.assertRaisesRegex(RuntimeError, "unowned run storage retained"):
+            run_storage.cleanup_interrupted_run_storage(project, 11)
+
+        self.assertTrue(run.root.is_dir())
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+
+    def test_cleanup_interrupted_run_storage_reports_owned_path_removal_failure(self):
+        project = self.make_project()
+        run = initialize_run_storage(project, 11)
+
+        with patch("specgate.run_storage.shutil.rmtree", side_effect=OSError("cleanup failed")):
+            with self.assertRaisesRegex(RunStorageCleanupError, "cleanup failed"):
+                run_storage.cleanup_interrupted_run_storage(project, 11)
+
+        self.assertTrue(run.root.is_dir())
 
     def test_remove_run_storage_removes_run_root(self):
         project = self.make_project()
@@ -132,6 +182,29 @@ class RunStorageTests(unittest.TestCase):
         remove_run_storage(project, 11)
 
         self.assertFalse(run.root.exists())
+
+    def test_remove_run_storage_preserves_unowned_run_root(self):
+        project = self.make_project()
+        run = web_run_paths(project, 11)
+        run.root.mkdir()
+        sentinel = run.root / "keep.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+
+        with self.assertRaisesRegex(RuntimeError, "unowned run storage retained"):
+            remove_run_storage(project, 11)
+
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+
+    def test_remove_run_storage_preserves_wrong_ownership_marker(self):
+        project = self.make_project()
+        run = web_run_paths(project, 11)
+        run.root.mkdir()
+        self.write_ownership_marker(run.root, 12)
+
+        with self.assertRaisesRegex(RuntimeError, "unowned run storage retained"):
+            remove_run_storage(project, 11)
+
+        self.assertTrue(run.root.is_dir())
 
     def test_promote_run_workspace_replaces_project_workspace(self):
         project = self.make_project()
@@ -315,6 +388,12 @@ class RunStorageTests(unittest.TestCase):
             path
             for path in project.root.iterdir()
             if path.name.startswith("workspace.next-") or path.name.startswith("workspace.backup-")
+        )
+
+    def write_ownership_marker(self, root, run_id):
+        (root / self.ownership_marker).write_text(
+            json.dumps({"run_id": run_id, "schema_version": 1}, sort_keys=True),
+            encoding="utf-8",
         )
 
 

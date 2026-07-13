@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import tempfile
 import threading
@@ -17,6 +18,8 @@ from specgate.web_settings import update_settings
 
 
 class WebRunsTests(unittest.TestCase):
+    ownership_marker = ".specgate-run-owner.json"
+
     def make_context(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -66,8 +69,10 @@ class WebRunsTests(unittest.TestCase):
 
         partial_paths = project_paths(data_root, user["id"], partial_project["id"])
         partial_storage = web_run_paths(partial_paths, partial_run_id)
-        partial_storage.root.mkdir(parents=True)
-        (partial_storage.root / "partial.tmp").write_text("partial", encoding="utf-8")
+        partial_temporary_root = partial_paths.runs / f".{partial_run_id}.tmp-interrupted"
+        partial_temporary_root.mkdir(parents=True)
+        self.write_ownership_marker(partial_temporary_root, partial_run_id)
+        (partial_temporary_root / "partial.tmp").write_text("partial", encoding="utf-8")
         complete_paths = project_paths(data_root, user["id"], complete_project["id"])
         initialize_run_storage_real(complete_paths, complete_run_id)
 
@@ -76,6 +81,7 @@ class WebRunsTests(unittest.TestCase):
         with closing(connect_db(db_path)) as conn:
             self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
             self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
+        self.assertFalse(partial_temporary_root.exists())
         self.assertFalse(partial_storage.root.exists())
         self.assertFalse(web_run_paths(complete_paths, complete_run_id).root.exists())
         partial_run = create_run(
@@ -94,7 +100,7 @@ class WebRunsTests(unittest.TestCase):
         )
         self.assertEqual((partial_run["status"], complete_run["status"]), ("queued", "queued"))
 
-    def test_recover_interrupted_initialization_marks_failed_when_storage_cleanup_fails(self):
+    def test_recover_interrupted_initialization_retains_unowned_storage_as_failed(self):
         db_path, data_root, user, project = self.make_context()
         with closing(connect_db(db_path)) as conn:
             run_id = conn.execute(
@@ -111,11 +117,7 @@ class WebRunsTests(unittest.TestCase):
         sentinel = run_storage.root / "sentinel.txt"
         sentinel.write_text("keep", encoding="utf-8")
 
-        with patch(
-            "specgate.web_runs.remove_run_storage",
-            side_effect=OSError("cleanup failed with secret sk-do-not-store"),
-        ):
-            web_runs.recover_interrupted_run_initializations(db_path, data_root)
+        web_runs.recover_interrupted_run_initializations(db_path, data_root)
 
         with closing(connect_db(db_path)) as conn:
             interrupted = conn.execute("select * from runs where id = ?", (run_id,)).fetchone()
@@ -123,7 +125,7 @@ class WebRunsTests(unittest.TestCase):
             self.assertEqual(interrupted["trust_level"], "failed")
             self.assertEqual(
                 interrupted["error_message"],
-                "Interrupted run initialization cleanup failed",
+                "Interrupted run initialization cleanup failed: unowned storage retained",
             )
             self.assertIsNotNone(interrupted["finished_at"])
             self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
@@ -363,6 +365,29 @@ class WebRunsTests(unittest.TestCase):
             self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
 
+    def test_create_run_does_not_claim_preexisting_formal_storage_with_matching_marker(self):
+        db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        existing_run = web_run_paths(paths, 1)
+        existing_run.root.mkdir(parents=True)
+        self.write_ownership_marker(existing_run.root, 1)
+        sentinel = existing_run.root / "sentinel.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+
+        with self.assertRaises(FileExistsError):
+            create_run(
+                db_path,
+                project["id"],
+                user["id"],
+                "Build the result",
+                data_root=data_root,
+            )
+
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
+            self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+
     def test_create_run_cleans_owned_storage_when_queue_transaction_fails(self):
         db_path, data_root, user, project = self.make_context()
         with closing(connect_db(db_path)) as conn:
@@ -421,6 +446,43 @@ class WebRunsTests(unittest.TestCase):
             self.assertIn(run["status"], {"initializing", "failed"})
             self.assertIn("cleanup failed", run["error_message"])
             self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
+
+    def test_create_run_keeps_owned_partial_storage_recoverable_when_initial_cleanup_fails(self):
+        db_path, data_root, user, project = self.make_context()
+
+        def fail_after_partial_copy(source, destination):
+            destination.mkdir()
+            (destination / "partial.txt").write_text("partial", encoding="utf-8")
+            raise OSError("copy failed")
+
+        with (
+            patch("specgate.run_storage.shutil.copytree", side_effect=fail_after_partial_copy),
+            patch("specgate.run_storage.shutil.rmtree", side_effect=OSError("cleanup failed")),
+        ):
+            with self.assertRaisesRegex(OSError, "copy failed"):
+                create_run(
+                    db_path,
+                    project["id"],
+                    user["id"],
+                    "Build the result",
+                    data_root=data_root,
+                )
+
+        paths = project_paths(data_root, user["id"], project["id"])
+        temporary_roots = list(paths.runs.glob(".1.tmp-*"))
+        self.assertEqual(len(temporary_roots), 1)
+        self.assertTrue((temporary_roots[0] / self.ownership_marker).is_file())
+        with closing(connect_db(db_path)) as conn:
+            interrupted = conn.execute("select * from runs").fetchone()
+            self.assertEqual(interrupted["status"], "initializing")
+            self.assertIn("cleanup failed", interrupted["error_message"])
+            self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
+
+        web_runs.recover_interrupted_run_initializations(db_path, data_root)
+
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
+        self.assertEqual(list(paths.runs.glob(".1.tmp-*")), [])
 
     def test_slow_initialization_does_not_hold_write_lock_across_projects(self):
         db_path, data_root, user, first_project = self.make_context()
@@ -528,6 +590,12 @@ class WebRunsTests(unittest.TestCase):
         self.assertEqual(get_run(db_path, user["id"], run["id"])["id"], run["id"])
         with self.assertRaises(ValueError):
             get_run(db_path, other["id"], run["id"])
+
+    def write_ownership_marker(self, root, run_id):
+        (root / self.ownership_marker).write_text(
+            json.dumps({"run_id": run_id, "schema_version": 1}, sort_keys=True),
+            encoding="utf-8",
+        )
 
     def test_execute_run_once_publishes_index_and_zip_artifacts(self):
         db_path, data_root, user, project = self.make_context()

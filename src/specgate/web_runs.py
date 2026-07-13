@@ -11,7 +11,13 @@ from specgate.approvals import ApprovalQueue, GovernanceConfig, approval_queue_p
 from specgate.config import ContextConfig, WorkspaceConfig
 from specgate.llm import MockLLM
 from specgate.policy import WorkspacePolicy
-from specgate.run_storage import initialize_run_storage, remove_run_storage
+from specgate.run_storage import (
+    RunStorageOwnershipError,
+    RunStorageTargetExists,
+    cleanup_interrupted_run_storage,
+    initialize_run_storage,
+    remove_run_storage,
+)
 from specgate.runner import AgentRunner, RunResult
 from specgate.trace import redact
 from specgate.web_auth import utc_now
@@ -22,6 +28,9 @@ from specgate.web_settings import get_settings
 
 ACTIVE_RUN_CONFLICT_MESSAGE = "该项目已有进行中的运行 / This project already has an active run"
 INTERRUPTED_RUN_INITIALIZATION_ERROR = "Interrupted run initialization cleanup failed"
+INTERRUPTED_RUN_UNOWNED_STORAGE_ERROR = (
+    "Interrupted run initialization cleanup failed: unowned storage retained"
+)
 
 
 class ActiveRunConflict(ValueError):
@@ -47,9 +56,19 @@ def recover_interrupted_run_initializations(db_path: Path, data_root: Path) -> N
         paths = project_paths(data_root, int(run["user_id"]), int(run["project_id"]))
         run_id = int(run["id"])
         try:
-            remove_run_storage(paths, run_id)
+            cleanup_interrupted_run_storage(paths, run_id)
+        except RunStorageOwnershipError:
+            _mark_interrupted_initialization_failed(
+                db_path,
+                run_id,
+                INTERRUPTED_RUN_UNOWNED_STORAGE_ERROR,
+            )
         except Exception:
-            _mark_interrupted_initialization_failed(db_path, run_id)
+            _mark_interrupted_initialization_failed(
+                db_path,
+                run_id,
+                INTERRUPTED_RUN_INITIALIZATION_ERROR,
+            )
         else:
             _delete_initializing_run(db_path, run_id)
 
@@ -196,6 +215,16 @@ def _recover_failed_run_creation(
             error.add_note(f"run storage cleanup failed: {cleanup_error}")
             _record_run_creation_failure(db_path, run_id, error, cleanup_error)
             return
+    else:
+        if not isinstance(error, RunStorageTargetExists):
+            try:
+                cleanup_interrupted_run_storage(paths, run_id)
+            except RunStorageOwnershipError:
+                pass
+            except Exception as cleanup_error:
+                error.add_note(f"run storage cleanup failed: {cleanup_error}")
+                _record_initializing_run_creation_failure(db_path, run_id, error, cleanup_error)
+                return
 
     try:
         _delete_initializing_run(db_path, run_id)
@@ -217,7 +246,11 @@ def _delete_initializing_run(db_path: Path, run_id: int) -> None:
         conn.close()
 
 
-def _mark_interrupted_initialization_failed(db_path: Path, run_id: int) -> None:
+def _mark_interrupted_initialization_failed(
+    db_path: Path,
+    run_id: int,
+    error_message: str,
+) -> None:
     conn = connect_db(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -227,12 +260,38 @@ def _mark_interrupted_initialization_failed(db_path: Path, run_id: int) -> None:
             set status = 'failed', trust_level = 'failed', error_message = ?, finished_at = ?
             where id = ? and status = 'initializing'
             """,
-            (INTERRUPTED_RUN_INITIALIZATION_ERROR, utc_now().isoformat(), run_id),
+            (error_message, utc_now().isoformat(), run_id),
         )
         conn.commit()
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+def _record_initializing_run_creation_failure(
+    db_path: Path,
+    run_id: int,
+    error: Exception,
+    cleanup_error: Exception,
+) -> None:
+    detail = f"{_safe_error(error)}; cleanup failed: {_safe_error(cleanup_error)}"
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            update runs
+            set trust_level = 'failed', error_message = ?
+            where id = ? and status = 'initializing'
+            """,
+            (detail, run_id),
+        )
+        conn.commit()
+    except Exception as diagnostic_error:
+        conn.rollback()
+        error.add_note(f"run creation diagnostic update failed: {diagnostic_error}")
     finally:
         conn.close()
 
