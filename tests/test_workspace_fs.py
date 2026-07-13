@@ -1,0 +1,469 @@
+from __future__ import annotations
+
+import hashlib
+import os
+import stat
+import tempfile
+import types
+import unittest
+from pathlib import Path
+from unittest import mock
+
+import specgate.workspace_fs as workspace_fs
+from specgate.workspace_fs import (
+    WorkspacePathError,
+    copy_workspace_tree,
+    iter_workspace_files,
+    is_link_like,
+    normalize_workspace_relative,
+    open_workspace_file,
+    read_workspace_bytes,
+    read_workspace_text,
+    workspace_file_state,
+    write_workspace_bytes,
+    write_workspace_text,
+)
+
+
+class WorkspacePathErrorTests(unittest.TestCase):
+    def test_exposes_message_and_rule_family(self):
+        error = WorkspacePathError("unsafe path", "linked_path")
+
+        self.assertEqual(str(error), "unsafe path")
+        self.assertEqual(error.rule_family, "linked_path")
+
+
+class NormalizeWorkspaceRelativeTests(unittest.TestCase):
+    def test_preserves_normal_nested_path(self):
+        self.assertEqual(normalize_workspace_relative("docs/a.txt"), "docs/a.txt")
+
+    def test_rejects_invalid_or_ambiguous_paths(self):
+        invalid_paths = (
+            "",
+            ".",
+            "./a.txt",
+            "docs/./a.txt",
+            "..",
+            "../a.txt",
+            "docs/../a.txt",
+            "/tmp/a.txt",
+            "//server/share/a.txt",
+            r"\\server\share\a.txt",
+            "C:/a.txt",
+            "C:a.txt",
+            r"C:\a.txt",
+            r"docs\a.txt",
+            r"..\a.txt",
+            "docs//a.txt",
+            "docs/a.txt/",
+            "docs/\x00a.txt",
+        )
+
+        for value in invalid_paths:
+            with self.subTest(value=value):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    normalize_workspace_relative(value)
+                self.assertIn(
+                    raised.exception.rule_family,
+                    {"invalid_path", "path_escape"},
+                )
+
+    def test_rejects_non_string_values(self):
+        for value in (None, 1, Path("docs/a.txt")):
+            with self.subTest(value=value):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    normalize_workspace_relative(value)  # type: ignore[arg-type]
+                self.assertEqual(raised.exception.rule_family, "invalid_path")
+
+    def test_uses_stable_rule_families_for_escape_and_ambiguity(self):
+        cases = {
+            "/tmp/a.txt": "path_escape",
+            r"\\server\share\a.txt": "path_escape",
+            "C:/a.txt": "path_escape",
+            r"C:\a.txt": "path_escape",
+            r"docs\a.txt": "invalid_path",
+            "./a.txt": "invalid_path",
+            "../a.txt": "path_escape",
+        }
+
+        for value, family in cases.items():
+            with self.subTest(value=value):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    normalize_workspace_relative(value)
+                self.assertEqual(raised.exception.rule_family, family)
+
+
+class LinkLikeTests(unittest.TestCase):
+    def test_detects_reparse_attribute_without_is_junction(self):
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+
+        class Python311PathLike:
+            def is_symlink(self):
+                return False
+
+            def lstat(self):
+                return types.SimpleNamespace(
+                    st_mode=stat.S_IFREG,
+                    st_file_attributes=reparse_flag,
+                )
+
+        with mock.patch.object(
+            stat,
+            "FILE_ATTRIBUTE_REPARSE_POINT",
+            reparse_flag,
+            create=True,
+        ):
+            self.assertTrue(is_link_like(Python311PathLike()))  # type: ignore[arg-type]
+
+    def test_uses_is_junction_when_available(self):
+        path = mock.Mock()
+        path.is_symlink.return_value = False
+        path.is_junction.return_value = True
+        path.lstat.return_value = types.SimpleNamespace(st_mode=stat.S_IFDIR)
+
+        self.assertTrue(is_link_like(path))
+
+    def test_regular_file_is_not_link_like(self):
+        path = mock.Mock(spec=["is_symlink", "lstat"])
+        path.is_symlink.return_value = False
+        path.lstat.return_value = types.SimpleNamespace(
+            st_mode=stat.S_IFREG,
+            st_file_attributes=0,
+        )
+
+        self.assertFalse(is_link_like(path))
+
+
+class WorkspaceFileIOTests(unittest.TestCase):
+    def test_writes_and_reads_nested_text_and_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            write_workspace_text(root, "nested/docs/a.txt", "hello")
+
+            self.assertEqual(read_workspace_text(root, "nested/docs/a.txt"), "hello")
+            self.assertEqual(read_workspace_bytes(root, "nested/docs/a.txt"), b"hello")
+
+    def test_writes_binary_content_without_text_conversion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            write_workspace_bytes(root, "assets/data.bin", b"\x00\xff\x10")
+
+            self.assertEqual(read_workspace_bytes(root, "assets/data.bin"), b"\x00\xff\x10")
+
+    def test_workspace_file_state_hashes_existing_and_reports_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a.txt").write_bytes(b"content")
+
+            existing = workspace_file_state(root, "a.txt")
+            missing = workspace_file_state(root, "missing.txt")
+
+            self.assertTrue(existing.exists)
+            self.assertEqual(existing.sha256, hashlib.sha256(b"content").hexdigest())
+            self.assertFalse(missing.exists)
+            self.assertIsNone(missing.sha256)
+
+    def test_open_workspace_file_closes_handle_after_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a.txt").write_bytes(b"content")
+
+            with open_workspace_file(root, "a.txt", "read") as handle:
+                opened = handle
+                self.assertEqual(handle.read(), b"content")
+                self.assertFalse(handle.closed)
+
+            self.assertTrue(opened.closed)
+
+    def test_rejects_directory_as_unsafe_file_type(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "folder").mkdir()
+
+            with self.assertRaises(WorkspacePathError) as raised:
+                read_workspace_bytes(root, "folder")
+
+            self.assertEqual(raised.exception.rule_family, "unsafe_file_type")
+
+    def test_rejects_mocked_reparse_parent_before_missing_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            linked = root / "linked"
+            linked.mkdir()
+            real_is_link_like = workspace_fs.is_link_like
+
+            def mocked_is_link_like(path):
+                return Path(path) == linked or real_is_link_like(path)
+
+            with mock.patch.object(
+                workspace_fs,
+                "is_link_like",
+                side_effect=mocked_is_link_like,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    read_workspace_bytes(root, "linked/missing.txt")
+
+            self.assertEqual(raised.exception.rule_family, "reparse_point")
+
+    def test_rejects_mocked_symlink_with_linked_path_family(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            linked = root / "linked.txt"
+            linked.write_text("placeholder", encoding="utf-8")
+            real_is_link_like = workspace_fs.is_link_like
+            real_is_symlink = Path.is_symlink
+
+            def mocked_is_symlink(path):
+                return path == linked or real_is_symlink(path)
+
+            with (
+                mock.patch.object(
+                    Path,
+                    "is_symlink",
+                    autospec=True,
+                    side_effect=mocked_is_symlink,
+                ),
+                mock.patch.object(
+                    workspace_fs,
+                    "is_link_like",
+                    side_effect=lambda path: Path(path) == linked or real_is_link_like(path),
+                ),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    read_workspace_bytes(root, linked.name)
+
+            self.assertEqual(raised.exception.rule_family, "linked_path")
+
+    def test_rejects_internal_and_external_file_symlinks(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            inside_file = root / "inside.txt"
+            outside_file = Path(outside) / "outside.txt"
+            inside_file.write_text("inside", encoding="utf-8")
+            outside_file.write_text("sentinel", encoding="utf-8")
+            internal_link = root / "internal-link.txt"
+            external_link = root / "external-link.txt"
+            self._symlink_or_skip(inside_file, internal_link)
+            self._symlink_or_skip(outside_file, external_link)
+
+            for relative in (internal_link.name, external_link.name):
+                with self.subTest(relative=relative):
+                    with self.assertRaises(WorkspacePathError) as raised:
+                        read_workspace_text(root, relative)
+                    self.assertEqual(raised.exception.rule_family, "linked_path")
+
+            with self.assertRaises(WorkspacePathError) as raised:
+                write_workspace_text(root, external_link.name, "changed")
+            self.assertEqual(raised.exception.rule_family, "linked_path")
+            self.assertEqual(outside_file.read_text(encoding="utf-8"), "sentinel")
+
+    @unittest.skipUnless(os.name == "nt", "Windows final-handle validation")
+    def test_rejects_opened_file_outside_root_and_closes_descriptor(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            expected = root / "ancestor" / "value.txt"
+            expected.parent.mkdir()
+            expected.write_text("inside", encoding="utf-8")
+            sentinel = Path(outside) / "value.txt"
+            sentinel.write_text("external sentinel", encoding="utf-8")
+            opened_descriptors = []
+
+            def replace_during_open(_path, flags, mode=0o666):
+                descriptor = os.open(sentinel, flags, mode)
+                opened_descriptors.append(descriptor)
+                return descriptor
+
+            with mock.patch.object(
+                workspace_fs,
+                "_open_windows_fd",
+                side_effect=replace_during_open,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    read_workspace_text(root, "ancestor/value.txt")
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertEqual(len(opened_descriptors), 1)
+            with self.assertRaises(OSError):
+                os.fstat(opened_descriptors[0])
+
+    @unittest.skipUnless(os.name == "nt", "Windows final-handle validation")
+    def test_write_does_not_change_content_before_final_handle_validation(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            expected = root / "ancestor" / "value.txt"
+            expected.parent.mkdir()
+            expected.write_text("inside", encoding="utf-8")
+            sentinel = Path(outside) / "value.txt"
+            sentinel.write_text("external sentinel", encoding="utf-8")
+
+            def replace_during_open(_path, flags, mode=0o666):
+                return os.open(sentinel, flags, mode)
+
+            with mock.patch.object(
+                workspace_fs,
+                "_open_windows_fd",
+                side_effect=replace_during_open,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    write_workspace_text(root, "ancestor/value.txt", "changed")
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
+
+    @unittest.skipUnless(os.name == "nt", "Windows capability check")
+    def test_windows_missing_final_path_capability_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a.txt").write_text("inside", encoding="utf-8")
+
+            with mock.patch.object(workspace_fs, "_windows_final_path", None):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    read_workspace_text(root, "a.txt")
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+
+    @staticmethod
+    def _symlink_or_skip(target: Path, link: Path, *, is_directory: bool = False):
+        try:
+            os.symlink(target, link, target_is_directory=is_directory)
+        except (NotImplementedError, OSError) as exc:
+            raise unittest.SkipTest(f"symlinks unavailable: {exc}") from exc
+
+
+class WorkspaceScanAndCopyTests(unittest.TestCase):
+    def test_iterates_normal_nested_files_in_stable_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "z.txt").write_text("z", encoding="utf-8")
+            (root / "docs").mkdir()
+            (root / "docs" / "b.txt").write_text("b", encoding="utf-8")
+            (root / "docs" / "a.txt").write_text("a", encoding="utf-8")
+            (root / "empty").mkdir()
+
+            self.assertEqual(
+                list(iter_workspace_files(root)),
+                ["docs/a.txt", "docs/b.txt", "z.txt"],
+            )
+
+    def test_copies_normal_files_and_empty_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "source"
+            destination = base / "destination"
+            (source / "docs").mkdir(parents=True)
+            (source / "empty").mkdir()
+            (source / "docs" / "a.txt").write_text("hello", encoding="utf-8")
+            (source / "data.bin").write_bytes(b"\x00\xff")
+
+            copy_workspace_tree(source, destination)
+
+            self.assertEqual((destination / "docs" / "a.txt").read_text(encoding="utf-8"), "hello")
+            self.assertEqual((destination / "data.bin").read_bytes(), b"\x00\xff")
+            self.assertTrue((destination / "empty").is_dir())
+
+    def test_iter_rejects_mocked_reparse_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = root / "entry.txt"
+            entry.write_text("content", encoding="utf-8")
+            real_is_link_like = workspace_fs.is_link_like
+
+            def mocked_is_link_like(path):
+                return Path(path) == entry or real_is_link_like(path)
+
+            with mock.patch.object(
+                workspace_fs,
+                "is_link_like",
+                side_effect=mocked_is_link_like,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    list(iter_workspace_files(root))
+
+            self.assertEqual(raised.exception.rule_family, "reparse_point")
+
+    def test_iter_rejects_internal_and_external_directory_symlinks(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            inside = root / "inside"
+            inside.mkdir()
+            (inside / "inside.txt").write_text("inside", encoding="utf-8")
+            external = Path(outside)
+            (external / "sentinel.txt").write_text("sentinel", encoding="utf-8")
+            WorkspaceFileIOTests._symlink_or_skip(
+                inside,
+                root / "internal-dir-link",
+                is_directory=True,
+            )
+            WorkspaceFileIOTests._symlink_or_skip(
+                external,
+                root / "external-dir-link",
+                is_directory=True,
+            )
+
+            with self.assertRaises(WorkspacePathError) as raised:
+                list(iter_workspace_files(root))
+
+            self.assertEqual(raised.exception.rule_family, "linked_path")
+
+    def test_iter_rejects_non_regular_entry_and_closes_scandir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            class FakeEntry:
+                name = "special"
+
+                def stat(self, *, follow_symlinks=True):
+                    if follow_symlinks:
+                        raise AssertionError("scan followed a link-like entry")
+                    return types.SimpleNamespace(
+                        st_mode=stat.S_IFIFO,
+                        st_file_attributes=0,
+                    )
+
+            class FakeScandir:
+                def __init__(self):
+                    self.closed = False
+
+                def __enter__(self):
+                    return iter([FakeEntry()])
+
+                def __exit__(self, *_args):
+                    self.closed = True
+
+            scanner = FakeScandir()
+            with mock.patch.object(os, "scandir", return_value=scanner):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    list(iter_workspace_files(root))
+
+            self.assertEqual(raised.exception.rule_family, "unsafe_file_type")
+            self.assertTrue(scanner.closed)
+
+    def test_copy_rejects_reparse_before_creating_destination(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "source"
+            destination = base / "destination"
+            source.mkdir()
+            linked = source / "linked"
+            linked.mkdir()
+            real_is_link_like = workspace_fs.is_link_like
+
+            def mocked_is_link_like(path):
+                return Path(path) == linked or real_is_link_like(path)
+
+            with mock.patch.object(
+                workspace_fs,
+                "is_link_like",
+                side_effect=mocked_is_link_like,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    copy_workspace_tree(source, destination)
+
+            self.assertEqual(raised.exception.rule_family, "reparse_point")
+            self.assertFalse(destination.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
