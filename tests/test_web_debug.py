@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 from specgate.web_auth import create_user
-from specgate.web_db import init_db
+from specgate.web_db import connect_db, init_db
 from specgate.web_debug import build_run_debug
 from specgate.web_projects import create_manual_project, project_paths, web_run_paths
 from specgate.web_runs import create_run, execute_run_once
@@ -204,6 +206,61 @@ class WebDebugTests(unittest.TestCase):
                 "security": None,
             },
         )
+
+    def test_tampered_artifact_metadata_never_touches_external_database_path(self):
+        db_path, data_root, user, _project, run = self.make_completed_run()
+        external = data_root.parent / "external-secret.bin"
+        external.write_bytes(b"secret-size")
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                "update artifacts set path = ? where run_id = ? and kind = 'index'",
+                (str(external), run["id"]),
+            )
+            conn.commit()
+        original_is_file = Path.is_file
+        original_stat = Path.stat
+        external_calls = []
+
+        def guarded_is_file(path):
+            if path == external:
+                external_calls.append(("is_file", path))
+            return original_is_file(path)
+
+        def guarded_stat(path, *args, **kwargs):
+            if path == external:
+                external_calls.append(("stat", path))
+            return original_stat(path, *args, **kwargs)
+
+        with (
+            patch.object(Path, "is_file", autospec=True, side_effect=guarded_is_file),
+            patch.object(Path, "stat", autospec=True, side_effect=guarded_stat),
+        ):
+            payload = build_run_debug(db_path, data_root, user["id"], run["id"])
+
+        index_artifact = next(item for item in payload["artifacts"] if item["kind"] == "index")
+        self.assertEqual(external_calls, [])
+        self.assertFalse(index_artifact["exists"])
+        self.assertEqual(index_artifact["size_bytes"], 0)
+
+    def test_artifact_metadata_rejects_mocked_run_junction(self):
+        db_path, data_root, user, project, run = self.make_completed_run()
+        paths = web_run_paths(
+            project_paths(data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        original_is_junction = Path.is_junction
+
+        with patch.object(
+            Path,
+            "is_junction",
+            autospec=True,
+            side_effect=lambda path: path == paths.root or original_is_junction(path),
+        ):
+            payload = build_run_debug(db_path, data_root, user["id"], run["id"])
+
+        self.assertTrue(payload["artifacts"])
+        self.assertTrue(all(not item["exists"] for item in payload["artifacts"]))
+        self.assertTrue(all(item["size_bytes"] == 0 for item in payload["artifacts"]))
 
     def test_build_run_debug_rejects_other_user(self):
         db_path, data_root, user, _project, run = self.make_completed_run()

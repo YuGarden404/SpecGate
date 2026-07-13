@@ -1,4 +1,6 @@
+import os
 import sqlite3
+import stat
 from contextlib import closing
 from io import BytesIO
 import tempfile
@@ -15,7 +17,9 @@ warnings.filterwarnings(
 )
 
 from fastapi.testclient import TestClient
+from fastapi.responses import FileResponse
 
+from specgate import web_app as web_app_module
 from specgate.web_app import create_app
 from specgate.web_db import connect_db
 from specgate.web_projects import project_paths, web_run_paths
@@ -319,6 +323,35 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(index.status_code, 404)
         self.assertEqual(result_zip.status_code, 404)
 
+    def test_artifact_endpoints_return_same_404_for_expected_but_missing_files(self):
+        client, app = self.make_client()
+        user = self.register(client)["user"]
+        project = self.create_project(client)
+        with patch("specgate.web_app.start_run_background"):
+            run = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "Build the result"},
+            ).json()["run"]
+        paths = web_run_paths(
+            project_paths(app.state.data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        with closing(connect_db(app.state.db_path)) as conn:
+            conn.execute(
+                "update runs set index_artifact_path = ?, zip_artifact_path = ? where id = ?",
+                (str(paths.index_artifact), str(paths.zip_artifact), run["id"]),
+            )
+            conn.commit()
+
+        responses = (
+            client.get(f"/api/runs/{run['id']}/artifacts/index"),
+            client.get(f"/api/runs/{run['id']}/artifacts/zip"),
+        )
+
+        for response in responses:
+            self.assertEqual(response.status_code, 404, response.text)
+            self.assertEqual(response.json(), {"detail": "artifact not found"})
+
     def test_artifact_index_is_not_served_as_executable_same_origin_html(self):
         client, app = self.make_client()
         self.register(client)
@@ -400,6 +433,135 @@ class WebAppTests(unittest.TestCase):
 
                     self.assertEqual(response.status_code, 404, response.text)
                     self.assertEqual(response.json(), {"detail": "artifact not found"})
+
+    def test_artifact_download_rejects_mocked_junction_or_symlink_components(self):
+        client, app = self.make_client()
+        user = self.register(client)["user"]
+        project = self.create_project(client)
+        with patch("specgate.web_app.start_run_background"):
+            run = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "Build the result"},
+            ).json()["run"]
+        execute_run_once(app.state.db_path, app.state.data_root, run["id"])
+        paths = web_run_paths(
+            project_paths(app.state.data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        original_is_junction = Path.is_junction
+        original_is_symlink = Path.is_symlink
+
+        with patch.object(
+            Path,
+            "is_junction",
+            autospec=True,
+            side_effect=lambda path: path == paths.root or original_is_junction(path),
+        ):
+            junction = client.get(f"/api/runs/{run['id']}/artifacts/index")
+        with patch.object(
+            Path,
+            "is_symlink",
+            autospec=True,
+            side_effect=lambda path: path == paths.artifacts or original_is_symlink(path),
+        ):
+            symlink = client.get(f"/api/runs/{run['id']}/artifacts/index")
+
+        for response in (junction, symlink):
+            self.assertEqual(response.status_code, 404, response.text)
+            self.assertEqual(response.json(), {"detail": "artifact not found"})
+
+    def test_artifact_reparse_attribute_is_rejected(self):
+        checker = getattr(web_app_module, "_is_link_or_reparse", lambda _path, _stat: False)
+        file_stat = type(
+            "ReparseStat",
+            (),
+            {
+                "st_mode": stat.S_IFREG,
+                "st_file_attributes": stat.FILE_ATTRIBUTE_REPARSE_POINT,
+            },
+        )()
+
+        with patch.object(Path, "is_junction", return_value=False):
+            self.assertTrue(checker(Path("artifact"), file_stat))
+
+    def test_artifact_download_uses_opened_file_when_path_is_replaced(self):
+        client, app = self.make_client()
+        user = self.register(client)["user"]
+        project = self.create_project(client)
+        with patch("specgate.web_app.start_run_background"):
+            run = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "Build the result"},
+            ).json()["run"]
+        execute_run_once(app.state.db_path, app.state.data_root, run["id"])
+        paths = web_run_paths(
+            project_paths(app.state.data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        original_content = paths.index_artifact.read_bytes()
+        replacement = paths.artifacts / "replacement.html"
+        replacement_content = b"replacement artifact"
+        replacement.write_bytes(replacement_content)
+        real_os_open = os.open
+        real_file_response = FileResponse
+
+        def open_then_replace(path, flags):
+            descriptor = real_os_open(path, flags)
+            try:
+                replacement.replace(paths.index_artifact)
+            except OSError:
+                os.close(descriptor)
+                raise
+            return descriptor
+
+        def legacy_file_response(path, *args, **kwargs):
+            replacement.replace(paths.index_artifact)
+            return real_file_response(path, *args, **kwargs)
+
+        with (
+            patch("specgate.web_app.os.open", side_effect=open_then_replace),
+            patch("specgate.web_app.FileResponse", side_effect=legacy_file_response, create=True),
+        ):
+            response = client.get(f"/api/runs/{run['id']}/artifacts/index")
+
+        self.assertIn(response.status_code, {200, 404}, response.text)
+        if response.status_code == 200:
+            self.assertEqual(response.content, original_content)
+            self.assertNotEqual(response.content, replacement_content)
+
+    def test_artifact_download_rejects_run_directory_symlink_to_external(self):
+        client, app = self.make_client()
+        user = self.register(client)["user"]
+        project = self.create_project(client)
+        with patch("specgate.web_app.start_run_background"):
+            run = client.post(
+                f"/api/projects/{project['id']}/runs",
+                json={"prompt": "Build the result"},
+            ).json()["run"]
+        execute_run_once(app.state.db_path, app.state.data_root, run["id"])
+        paths = web_run_paths(
+            project_paths(app.state.data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        backup = paths.root.with_name(f"{paths.root.name}-real")
+        external = app.state.data_root.parent / "external-run"
+        (external / "artifacts").mkdir(parents=True)
+        (external / "artifacts" / "index.html").write_text("external", encoding="utf-8")
+        paths.root.rename(backup)
+        try:
+            try:
+                os.symlink(external, paths.root, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
+
+            response = client.get(f"/api/runs/{run['id']}/artifacts/index")
+
+            self.assertEqual(response.status_code, 404, response.text)
+        finally:
+            if paths.root.is_symlink():
+                paths.root.unlink()
+            if backup.exists() and not paths.root.exists():
+                backup.rename(paths.root)
 
     def test_project_responses_include_latest_run_id_without_paths(self):
         client, _app = self.make_client()

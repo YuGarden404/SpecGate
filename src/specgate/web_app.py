@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import stat
 import threading
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
@@ -9,7 +10,7 @@ from time import monotonic
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -322,6 +323,7 @@ def create_app(
         return _artifact_response(
             run["index_artifact_path"],
             paths.index_artifact,
+            app.state.data_root,
             "text/html",
             headers={
                 "Content-Disposition": 'attachment; filename="index.html"',
@@ -339,6 +341,7 @@ def create_app(
         return _artifact_response(
             run["zip_artifact_path"],
             paths.zip_artifact,
+            app.state.data_root,
             "application/zip",
         )
 
@@ -477,25 +480,67 @@ def _load_run_for_artifact(db_path: Path, user_id: int, run_id: int):
 def _artifact_response(
     path_value: str | None,
     expected_path: Path,
+    data_root: Path,
     media_type: str,
     headers: dict[str, str] | None = None,
 ):
-    if not path_value:
+    if not path_value or Path(path_value) != expected_path:
         raise HTTPException(status_code=404, detail="artifact not found")
-    path = Path(path_value)
     try:
-        if Path(os.path.abspath(path)) != Path(os.path.abspath(expected_path)):
-            raise HTTPException(status_code=404, detail="artifact not found")
-        resolved_path = path.resolve()
-        resolved_artifacts = expected_path.parent.resolve()
-        resolved_run = expected_path.parent.parent.resolve()
-    except OSError as exc:
+        content = _read_trusted_artifact(data_root, expected_path)
+    except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="artifact not found") from exc
-    if resolved_artifacts.parent != resolved_run or resolved_path.parent != resolved_artifacts:
-        raise HTTPException(status_code=404, detail="artifact not found")
-    if not resolved_path.is_file():
-        raise HTTPException(status_code=404, detail="artifact not found")
-    return FileResponse(resolved_path, media_type=media_type, headers=headers)
+    return Response(content=content, media_type=media_type, headers=headers)
+
+
+def _read_trusted_artifact(data_root: Path, expected_path: Path) -> bytes:
+    trusted_path = _validate_trusted_path(data_root, expected_path)
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(trusted_path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("artifact is not a regular file")
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            return handle.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _validate_trusted_path(data_root: Path, expected_path: Path) -> Path:
+    root = Path(os.path.abspath(data_root))
+    expected = Path(os.path.abspath(expected_path))
+    relative = expected.relative_to(root)
+    trusted_root = root.resolve(strict=True)
+    resolved_expected = expected.resolve(strict=False)
+    resolved_expected.relative_to(trusted_root)
+
+    for current in (root, *(root / part for part in _cumulative_parts(relative))):
+        try:
+            file_stat = os.lstat(current)
+        except FileNotFoundError:
+            break
+        if _is_link_or_reparse(current, file_stat):
+            raise ValueError("artifact path contains an untrusted link")
+    return expected
+
+
+def _cumulative_parts(relative: Path):
+    current = Path()
+    for part in relative.parts:
+        current /= part
+        yield current
+
+
+def _is_link_or_reparse(path: Path, file_stat) -> bool:
+    if stat.S_ISLNK(file_stat.st_mode) or path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    if is_junction is not None and is_junction():
+        return True
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return bool(getattr(file_stat, "st_file_attributes", 0) & reparse_flag)
 
 
 def _is_sqlite_lock_error(exc: sqlite3.OperationalError) -> bool:

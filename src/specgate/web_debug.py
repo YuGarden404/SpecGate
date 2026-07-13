@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import stat
 from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 from specgate.trace import redact
 from specgate.web_db import connect_db
-from specgate.web_projects import project_paths, web_run_paths
+from specgate.web_projects import RunPaths, project_paths, web_run_paths
 
 
 DEFAULT_MAX_TRACE_EVENTS = 200
@@ -55,7 +57,7 @@ def build_run_debug(
         project_paths(data_root, user_id, int(project["id"])),
         run_id,
     )
-    artifact_payloads = [_artifact_dict(row, run_id) for row in artifacts]
+    artifact_payloads = [_artifact_dict(row, run_id, paths, data_root) for row in artifacts]
     approval_payloads = [_approval_dict(row) for row in approvals]
     trace = _read_trace(paths.audit / "trace.jsonl", max_trace_events, max_event_chars)
     evidence = {
@@ -116,11 +118,17 @@ def _project_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def _artifact_dict(row: sqlite3.Row, run_id: int) -> dict[str, Any]:
+def _artifact_dict(row: sqlite3.Row, run_id: int, paths: RunPaths, data_root: Path) -> dict[str, Any]:
     data = _row_dict(row)
-    path = Path(data["path"])
     kind = data["kind"]
-    size_bytes = path.stat().st_size if path.is_file() else None
+    expected_path = {
+        "index": paths.index_artifact,
+        "zip": paths.zip_artifact,
+    }.get(kind)
+    exists = False
+    size_bytes = 0
+    if expected_path is not None and Path(data["path"]) == expected_path:
+        exists, size_bytes = _trusted_file_metadata(data_root, expected_path)
     download_url = None
     if kind == "index":
         download_url = f"/api/runs/{run_id}/artifacts/index"
@@ -129,11 +137,57 @@ def _artifact_dict(row: sqlite3.Row, run_id: int) -> dict[str, Any]:
     return {
         "id": data["id"],
         "kind": kind,
-        "exists": path.is_file(),
+        "exists": exists,
         "size_bytes": size_bytes,
         "download_url": download_url,
         "created_at": data["created_at"],
     }
+
+
+def _trusted_file_metadata(data_root: Path, expected_path: Path) -> tuple[bool, int]:
+    try:
+        trusted_path = _validate_trusted_path(data_root, expected_path)
+        file_stat = os.stat(trusted_path, follow_symlinks=False)
+    except (OSError, RuntimeError, ValueError):
+        return False, 0
+    if not stat.S_ISREG(file_stat.st_mode):
+        return False, 0
+    return True, file_stat.st_size
+
+
+def _validate_trusted_path(data_root: Path, expected_path: Path) -> Path:
+    root = Path(os.path.abspath(data_root))
+    expected = Path(os.path.abspath(expected_path))
+    relative = expected.relative_to(root)
+    trusted_root = root.resolve(strict=True)
+    resolved_expected = expected.resolve(strict=False)
+    resolved_expected.relative_to(trusted_root)
+
+    for current in (root, *(root / part for part in _cumulative_parts(relative))):
+        try:
+            file_stat = os.lstat(current)
+        except FileNotFoundError:
+            break
+        if _is_link_or_reparse(current, file_stat):
+            raise ValueError("artifact path contains an untrusted link")
+    return expected
+
+
+def _cumulative_parts(relative: Path):
+    current = Path()
+    for part in relative.parts:
+        current /= part
+        yield current
+
+
+def _is_link_or_reparse(path: Path, file_stat) -> bool:
+    if stat.S_ISLNK(file_stat.st_mode) or path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    if is_junction is not None and is_junction():
+        return True
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return bool(getattr(file_stat, "st_file_attributes", 0) & reparse_flag)
 
 
 def _approval_dict(row: sqlite3.Row) -> dict[str, Any]:
