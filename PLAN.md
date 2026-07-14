@@ -2079,3 +2079,24 @@ SPEC 覆盖：
 - 每个任务完成后进行 spec review 和 code quality review。
 - 每个任务独立提交，并把 commit hash 记录回本文件、`SPEC_PROCESS.md` 和 `AGENT_LOG.md`。
 - 不提交 `examples/eval_cases/eval-runs/` 运行产物。
+
+# 2026-07-14 Gate 与 HITL 正确性加固
+
+详细设计与逐步计划：
+
+- `docs/superpowers/specs/2026-07-14-gate-hitl-correctness-design.md`
+- `docs/superpowers/plans/2026-07-14-gate-hitl-correctness.md`
+
+完成状态：
+
+- [x] Task 1：Checklist 确定性规则解析与评估。
+- [x] Task 2：Gate 集成、输入摘要绑定与领域硬编码清理。
+- [x] Task 3：Action schema 与 Runner outcome。
+- [x] Task 4：审批队列 revision、跨进程锁与 CAS。
+- [x] Task 5：Runner 真正暂停、最终 Gate 与可恢复 resume。
+- [x] Task 6：Web 默认覆盖审批与发布摘要绑定。
+- [x] Task 7：Web 审批 API、数据库协调与前端 revision。
+- [x] Task 8：真实 approve/deny Web 流程、示例扫描、中文文档与回归。
+- [ ] Git 提交哈希：等待用户按课程要求自行分批提交后回填。
+
+本轮 Agent 不执行 `git add`、`git commit`、`git push` 或 PR 操作。所有新增行为均使用 mock/stub LLM 或纯确定性组件测试，不依赖真实 LLM 与网络。

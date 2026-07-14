@@ -17,6 +17,14 @@ class Action:
     reason: str = ""
 
 
+def _validate_action_args(action: str, args: dict[str, Any]) -> None:
+    if action in {"write_file", "replace_file"}:
+        if not isinstance(args.get("path"), str) or not isinstance(args.get("content"), str):
+            raise ActionParseError(
+                "invalid_action_payload: write action requires string path and content"
+            )
+
+
 def parse_action(raw: str) -> Action:
     text = raw.strip()
     if not text.startswith("{") or not text.endswith("}"):
@@ -42,6 +50,8 @@ def parse_action(raw: str) -> Action:
         raise ActionParseError("action must be a string")
     if not isinstance(payload["args"], dict):
         raise ActionParseError("args must be an object")
+
+    _validate_action_args(payload["action"], payload["args"])
 
     reason = payload.get("reason", "")
     if not isinstance(reason, str):

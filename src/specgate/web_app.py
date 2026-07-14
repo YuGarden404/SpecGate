@@ -9,9 +9,10 @@ from time import monotonic
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import PlainTextResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictInt
 from starlette.concurrency import run_in_threadpool
 
 from specgate.web_approvals import approve_web_approval, deny_web_approval, list_web_approvals
@@ -84,7 +85,11 @@ class ApiKeyRequest(BaseModel):
     api_key: str
 
 
-class DenyRequest(BaseModel):
+class ApprovalDecisionRequest(BaseModel):
+    expected_revision: StrictInt = Field(ge=0)
+
+
+class DenyRequest(ApprovalDecisionRequest):
     reason: str
 
 
@@ -128,6 +133,19 @@ def create_app(
             thread.join(timeout=remaining)
 
     app = FastAPI(title="SpecGate Web", lifespan=lifespan)
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error(_request: Request, exc: RequestValidationError):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": {
+                    "code": "invalid_request",
+                    "message": "请求参数无效 / Invalid request payload",
+                    "errors": exc.errors(),
+                }
+            },
+        )
     app.state.data_root = resolved_data_root
     app.state.db_path = resolved_db_path
     app.state.api_key_encryption_secret = os.environ.get("SPECGATE_WEB_SECRET") or os.environ.get(
@@ -385,17 +403,26 @@ def create_app(
 
     @app.get("/api/approvals")
     def list_approvals(user=Depends(current_user)) -> dict[str, Any]:
-        approvals = list_web_approvals(app.state.db_path, int(user["id"]))
+        approvals = list_web_approvals(
+            app.state.db_path,
+            app.state.data_root,
+            int(user["id"]),
+        )
         return {"approvals": [_approval_dict(row) for row in approvals]}
 
     @app.post("/api/approvals/{approval_id}/approve")
-    def approve(approval_id: int, user=Depends(current_user)) -> dict[str, Any]:
+    def approve(
+        approval_id: int,
+        payload: ApprovalDecisionRequest,
+        user=Depends(current_user),
+    ) -> dict[str, Any]:
         try:
             approval = approve_web_approval(
                 app.state.db_path,
                 app.state.data_root,
                 int(user["id"]),
                 approval_id,
+                payload.expected_revision,
             )
         except ValueError as exc:
             raise _http_error_for_value_error(exc) from exc
@@ -410,6 +437,7 @@ def create_app(
                 int(user["id"]),
                 approval_id,
                 payload.reason,
+                payload.expected_revision,
             )
         except ValueError as exc:
             raise _http_error_for_value_error(exc) from exc
@@ -540,6 +568,12 @@ def _is_sqlite_lock_error(exc: sqlite3.OperationalError) -> bool:
 
 
 def _http_error_for_value_error(exc: ValueError) -> HTTPException:
+    code = getattr(exc, "code", None)
+    if code in {"approval_conflict", "approval_consistency_error"}:
+        return HTTPException(
+            status_code=409,
+            detail={"code": code, "message": str(exc)},
+        )
     message = str(exc)
     status_code = 404 if "not found" in message else 400
     return HTTPException(status_code=status_code, detail=message)
@@ -607,4 +641,5 @@ def _approval_dict(row) -> dict[str, Any]:
         "preview_json": data["preview_json"],
         "created_at": data["created_at"],
         "decided_at": data["decided_at"],
+        "queue_revision": data["queue_revision"],
     }

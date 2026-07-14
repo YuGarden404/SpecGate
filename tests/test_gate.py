@@ -1,3 +1,4 @@
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -33,6 +34,96 @@ VALID_HTML = """<!doctype html>
 
 
 class HtmlGateTests(unittest.TestCase):
+    def test_page_without_search_passes_when_checklist_does_not_require_search(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            html = """<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>News</title>
+</head>
+<body><main><h1>News</h1></main></body>
+</html>"""
+            (root / "index.html").write_text(html, encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+
+            result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
+
+            self.assertTrue(result.passed)
+            self.assertNotIn("search", {issue.code for issue in result.issues})
+
+    def test_unsupported_checkbox_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "index.html").write_text(VALID_HTML, encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("- [ ] 页面要看起来高级\n", encoding="utf-8")
+
+            result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
+
+            self.assertFalse(result.passed)
+            self.assertIn("unsupported_check", {issue.code for issue in result.issues})
+
+    def test_gate_records_input_hashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            html_path = root / "index.html"
+            checklist_path = root / "CHECKLIST.md"
+            html_path.write_text(VALID_HTML, encoding="utf-8")
+            checklist_path.write_text("", encoding="utf-8")
+
+            result = run_html_gate(html_path, checklist_path)
+
+            self.assertEqual(
+                result.artifact_sha256,
+                hashlib.sha256(
+                    workspace_fs.read_workspace_text(
+                        root,
+                        "index.html",
+                        encoding="utf-8-sig",
+                    ).encode("utf-8")
+                ).hexdigest(),
+            )
+            self.assertEqual(
+                result.checklist_sha256,
+                hashlib.sha256(b"").hexdigest(),
+            )
+
+    def test_gate_hashes_exact_input_bytes_including_utf8_bom(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            html_path = root / "index.html"
+            checklist_path = root / "CHECKLIST.md"
+            html_bytes = b"\xef\xbb\xbf" + VALID_HTML.encode("utf-8")
+            checklist_bytes = b"\xef\xbb\xbf"
+            html_path.write_bytes(html_bytes)
+            checklist_path.write_bytes(checklist_bytes)
+
+            result = run_html_gate(html_path, checklist_path)
+
+            self.assertEqual(
+                result.artifact_sha256,
+                hashlib.sha256(html_bytes).hexdigest(),
+            )
+            self.assertEqual(
+                result.checklist_sha256,
+                hashlib.sha256(checklist_bytes).hexdigest(),
+            )
+
+    def test_structured_selector_rule_is_enforced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "index.html").write_text(VALID_HTML, encoding="utf-8")
+            (root / "CHECKLIST.md").write_text(
+                '- [ ] 至少 2 个 article\n  <!-- specgate: selector "article" min=2 -->\n',
+                encoding="utf-8",
+            )
+
+            result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
+
+            self.assertFalse(result.passed)
+            self.assertIn("checklist_selector", {issue.code for issue in result.issues})
+
     def test_valid_html_passes_core_gate(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -205,14 +296,14 @@ class HtmlGateTests(unittest.TestCase):
             root = Path(tmp)
             (root / "index.html").write_text(VALID_HTML.replace("</body>", f"{sentinel}</body>"), encoding="utf-8")
             (root / "CHECKLIST.md").write_text("", encoding="utf-8")
-            real_read = workspace_fs.read_workspace_text
+            real_read = workspace_fs.read_workspace_bytes
 
             def race_html(read_root, relative, **kwargs):
                 if Path(read_root) == root and relative == "index.html":
                     raise workspace_fs.WorkspacePathError(f"ancestor replaced: {sentinel}", "path_race")
-                return real_read(read_root, relative, **kwargs)
+                return real_read(read_root, relative)
 
-            with mock.patch.object(workspace_fs, "read_workspace_text", side_effect=race_html):
+            with mock.patch.object(workspace_fs, "read_workspace_bytes", side_effect=race_html):
                 result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
 
             self.assertFalse(result.passed)
@@ -224,14 +315,14 @@ class HtmlGateTests(unittest.TestCase):
             root = Path(tmp)
             (root / "index.html").write_text(VALID_HTML, encoding="utf-8")
             (root / "CHECKLIST.md").write_text(f"- must include {sentinel}\n", encoding="utf-8")
-            real_read = workspace_fs.read_workspace_text
+            real_read = workspace_fs.read_workspace_bytes
 
             def race_checklist(read_root, relative, **kwargs):
                 if Path(read_root) == root and relative == "CHECKLIST.md":
                     raise workspace_fs.WorkspacePathError(f"ancestor replaced: {sentinel}", "path_race")
-                return real_read(read_root, relative, **kwargs)
+                return real_read(read_root, relative)
 
-            with mock.patch.object(workspace_fs, "read_workspace_text", side_effect=race_checklist):
+            with mock.patch.object(workspace_fs, "read_workspace_bytes", side_effect=race_checklist):
                 result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
 
             self.assertFalse(result.passed)
@@ -364,7 +455,7 @@ class HtmlGateTests(unittest.TestCase):
                     missing_path="index.html",
                 )
 
-                with mock.patch.object(workspace_fs, "read_workspace_text", side_effect=error):
+                with mock.patch.object(workspace_fs, "read_workspace_bytes", side_effect=error):
                     result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
 
                 self.assertFalse(result.passed)
@@ -378,7 +469,7 @@ class HtmlGateTests(unittest.TestCase):
             with self.subTest(family=family), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 (root / "index.html").write_text(VALID_HTML, encoding="utf-8")
-                real_read = workspace_fs.read_workspace_text
+                real_read = workspace_fs.read_workspace_bytes
 
                 def reject_checklist(read_root, relative, **kwargs):
                     if relative == "CHECKLIST.md":
@@ -387,11 +478,11 @@ class HtmlGateTests(unittest.TestCase):
                             family,
                             missing_path="CHECKLIST.md",
                         )
-                    return real_read(read_root, relative, **kwargs)
+                    return real_read(read_root, relative)
 
                 with mock.patch.object(
                     workspace_fs,
-                    "read_workspace_text",
+                    "read_workspace_bytes",
                     side_effect=reject_checklist,
                 ):
                     result = run_html_gate(root / "index.html", root / "CHECKLIST.md")

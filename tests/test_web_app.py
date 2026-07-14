@@ -23,7 +23,7 @@ import specgate.web_runs as web_runs
 from specgate.web_app import create_app
 from specgate.web_db import connect_db
 from specgate.web_projects import project_paths, web_run_paths
-from specgate.web_runs import execute_run_once
+from specgate.web_runs import create_run, execute_run_once
 from specgate.workspace_fs import WorkspacePathError, read_workspace_bytes
 
 
@@ -78,14 +78,19 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
-    def create_project(self, client, name="Manual Site"):
+    def create_project(
+        self,
+        client,
+        name="Manual Site",
+        index_html="<!doctype html><title>Seed</title>",
+    ):
         response = client.post(
             "/api/projects",
             json={
                 "name": name,
                 "spec_text": "# Spec\nBuild a small page.",
                 "checklist_text": "- Ship HTML.",
-                "index_html": "<!doctype html><title>Seed</title>",
+                "index_html": index_html,
             },
         )
         self.assertEqual(response.status_code, 200, response.text)
@@ -97,6 +102,38 @@ class WebAppTests(unittest.TestCase):
         response = client.get("/api/projects")
 
         self.assertEqual(response.status_code, 401)
+
+    def test_approve_requires_expected_revision(self):
+        client, _app = self.make_client()
+        self.register(client)
+
+        response = client.post("/api/approvals/1/approve", json={})
+
+        self.assertEqual(response.status_code, 400, response.text)
+
+    def test_stale_approval_revision_returns_409(self):
+        client, app = self.make_client()
+        registered = self.register(client)
+        project = self.create_project(client)
+        run = create_run(
+            app.state.db_path,
+            project["id"],
+            registered["user"]["id"],
+            "Overwrite the existing page",
+            data_root=app.state.data_root,
+        )
+        execute_run_once(app.state.db_path, app.state.data_root, run["id"])
+        approvals = client.get("/api/approvals").json()["approvals"]
+        self.assertEqual(len(approvals), 1)
+        self.assertEqual(approvals[0]["queue_revision"], 1)
+
+        response = client.post(
+            f"/api/approvals/{approvals[0]['id']}/approve",
+            json={"expected_revision": 0},
+        )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["detail"]["code"], "approval_conflict")
 
     def test_register_login_me_and_logout_use_session_cookie(self):
         client, _app = self.make_client()
@@ -206,7 +243,12 @@ class WebAppTests(unittest.TestCase):
             side_effect=replace_source_and_fail_quarantine,
         ):
             with self.assertRaises(web_runs.RunStoragePostRenameError):
-                execute_run_once(app.state.db_path, app.state.data_root, run["id"])
+                execute_run_once(
+                    app.state.db_path,
+                    app.state.data_root,
+                    run["id"],
+                    review_existing_writes=False,
+                )
 
         with patch("specgate.web_app.read_workspace_text") as read_text:
             preview = client.get(f"/api/projects/{project['id']}/preview")
@@ -345,7 +387,12 @@ class WebAppTests(unittest.TestCase):
             side_effect=fail_publish_and_rollback,
         ):
             with self.assertRaises(web_runs.RunStoragePostRenameError):
-                execute_run_once(app.state.db_path, app.state.data_root, run["id"])
+                execute_run_once(
+                    app.state.db_path,
+                    app.state.data_root,
+                    run["id"],
+                    review_existing_writes=False,
+                )
 
         self.assertEqual(client.get(f"/api/runs/{run['id']}").json()["run"]["status"], "publishing")
         with patch("specgate.web_app.read_workspace_text") as read_text:
@@ -356,7 +403,7 @@ class WebAppTests(unittest.TestCase):
     def test_post_run_returns_queued_and_run_can_be_read(self):
         client, app = self.make_client()
         self.register(client)
-        project = self.create_project(client)
+        project = self.create_project(client, index_html=None)
 
         with patch("specgate.web_app.start_run_background") as starter:
             response = client.post(
@@ -432,7 +479,7 @@ class WebAppTests(unittest.TestCase):
     def test_post_run_returns_409_for_active_run_without_starting_thread(self):
         client, _app = self.make_client()
         self.register(client)
-        project = self.create_project(client)
+        project = self.create_project(client, index_html=None)
 
         with patch("specgate.web_app.start_run_background") as starter:
             first = client.post(
@@ -457,7 +504,7 @@ class WebAppTests(unittest.TestCase):
     def test_post_run_returns_stable_503_when_database_is_locked(self):
         client, _app = self.make_client(raise_server_exceptions=False)
         self.register(client)
-        project = self.create_project(client)
+        project = self.create_project(client, index_html=None)
 
         with patch(
             "specgate.web_app.create_run",
@@ -478,7 +525,7 @@ class WebAppTests(unittest.TestCase):
     def test_run_debug_endpoint_returns_backend_audit_payload(self):
         client, app = self.make_client()
         self.register(client)
-        project = self.create_project(client)
+        project = self.create_project(client, index_html=None)
         with patch("specgate.web_app.start_run_background"):
             run = client.post(
                 f"/api/projects/{project['id']}/runs",
@@ -571,7 +618,7 @@ class WebAppTests(unittest.TestCase):
     def test_artifact_index_is_not_served_as_executable_same_origin_html(self):
         client, app = self.make_client()
         self.register(client)
-        project = self.create_project(client)
+        project = self.create_project(client, index_html=None)
         with patch("specgate.web_app.start_run_background"):
             run = client.post(
                 f"/api/projects/{project['id']}/runs",
@@ -597,7 +644,7 @@ class WebAppTests(unittest.TestCase):
     def test_artifact_downloads_reject_tampered_paths_without_leaking_existence(self):
         client, app = self.make_client()
         user = self.register(client)["user"]
-        project = self.create_project(client)
+        project = self.create_project(client, index_html=None)
         with patch("specgate.web_app.start_run_background"):
             run1 = client.post(
                 f"/api/projects/{project['id']}/runs",
@@ -609,7 +656,12 @@ class WebAppTests(unittest.TestCase):
                 f"/api/projects/{project['id']}/runs",
                 json={"prompt": "Build the second result"},
             ).json()["run"]
-        execute_run_once(app.state.db_path, app.state.data_root, run2["id"])
+        execute_run_once(
+            app.state.db_path,
+            app.state.data_root,
+            run2["id"],
+            review_existing_writes=False,
+        )
 
         project_root = project_paths(app.state.data_root, user["id"], project["id"])
         run2_paths = web_run_paths(project_root, run2["id"])
@@ -653,7 +705,7 @@ class WebAppTests(unittest.TestCase):
     def test_artifact_download_rejects_mocked_junction_or_symlink_components(self):
         client, app = self.make_client()
         user = self.register(client)["user"]
-        project = self.create_project(client)
+        project = self.create_project(client, index_html=None)
         with patch("specgate.web_app.start_run_background"):
             run = client.post(
                 f"/api/projects/{project['id']}/runs",
@@ -683,7 +735,7 @@ class WebAppTests(unittest.TestCase):
     def test_artifact_safe_read_rejection_returns_nonleaking_404(self):
         client, app = self.make_client()
         self.register(client)
-        project = self.create_project(client)
+        project = self.create_project(client, index_html=None)
         with patch("specgate.web_app.start_run_background"):
             run = client.post(
                 f"/api/projects/{project['id']}/runs",
@@ -718,7 +770,7 @@ class WebAppTests(unittest.TestCase):
     def test_artifact_download_uses_opened_file_when_path_is_replaced(self):
         client, app = self.make_client()
         user = self.register(client)["user"]
-        project = self.create_project(client)
+        project = self.create_project(client, index_html=None)
         with patch("specgate.web_app.start_run_background"):
             run = client.post(
                 f"/api/projects/{project['id']}/runs",

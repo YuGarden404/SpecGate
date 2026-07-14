@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,7 +8,9 @@ from unittest import mock
 from specgate import approvals as approvals_module
 from specgate.actions import Action
 from specgate.approvals import (
+    ApprovalConflictError,
     ApprovalQueue,
+    ApprovalStore,
     GovernanceConfig,
     PendingApproval,
     capture_target_state,
@@ -19,12 +22,160 @@ from specgate.policy import WorkspacePolicy
 from specgate.workspace_fs import WorkspacePathError
 
 
+def _approval_store_decision_worker(
+    queue_path: str,
+    status: str,
+    ready,
+    start,
+    results,
+) -> None:
+    store = ApprovalStore(Path(queue_path))
+    ready.set()
+    start.wait(timeout=10)
+    try:
+        updated = store.decide(
+            "approval-step-1",
+            status,
+            expected_revision=0,
+            decided_at="2026-07-14T10:00:00Z",
+            reason="not approved" if status == "denied" else None,
+        )
+    except ApprovalConflictError as exc:
+        results.put(("conflict", exc.code))
+    else:
+        results.put(("success", updated.revision))
+
+
 class ApprovalTests(unittest.TestCase):
+    def _pending_approval(self) -> PendingApproval:
+        return PendingApproval(
+            id="approval-step-1",
+            step=1,
+            action="replace_file",
+            path="README.md",
+            risk_level="review",
+            reason="requires human review",
+            profile="review",
+            status="pending",
+        )
+
     def _symlink_or_skip(self, link: Path, target: Path, *, directory: bool = False) -> None:
         try:
             link.symlink_to(target, target_is_directory=directory)
         except OSError as exc:
             self.skipTest(f"symlink creation unavailable: {exc}")
+
+    def test_legacy_queue_loads_as_schema_one_revision_zero(self):
+        queue = ApprovalQueue.from_dict({"approvals": []})
+
+        self.assertEqual(queue.schema_version, "1")
+        self.assertEqual(queue.revision, 0)
+
+    def test_new_queue_serializes_schema_two_and_revision(self):
+        queue = ApprovalQueue(revision=3)
+
+        self.assertEqual(
+            queue.to_dict(),
+            {"schema_version": "2", "revision": 3, "approvals": []},
+        )
+
+    def test_store_append_upgrades_legacy_queue_and_increments_revision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+            queue_path.write_text('{"approvals": []}', encoding="utf-8")
+
+            updated = ApprovalStore(queue_path).append(
+                self._pending_approval(),
+                expected_revision=0,
+            )
+
+            self.assertEqual(updated.schema_version, "2")
+            self.assertEqual(updated.revision, 1)
+            self.assertEqual(updated.approvals[0].id, "approval-step-1")
+
+    def test_stale_revision_is_rejected_without_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+            ApprovalQueue([self._pending_approval()]).write(queue_path)
+            store = ApprovalStore(queue_path)
+            approved = store.decide(
+                "approval-step-1",
+                "approved",
+                expected_revision=0,
+                decided_at="2026-07-14T10:00:00Z",
+            )
+
+            with self.assertRaises(ApprovalConflictError) as raised:
+                store.decide(
+                    "approval-step-1",
+                    "denied",
+                    expected_revision=0,
+                    decided_at="2026-07-14T10:00:01Z",
+                    reason="too broad",
+                )
+
+            self.assertEqual(raised.exception.code, "approval_conflict")
+            current = store.read()
+            self.assertEqual(current, approved)
+            self.assertEqual(current.revision, 1)
+            self.assertEqual(current.approvals[0].status, "approved")
+
+    def test_store_transition_supports_applying_lifecycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+            approval = self._pending_approval()
+            approval.status = "approved"
+            ApprovalQueue([approval]).write(queue_path)
+            store = ApprovalStore(queue_path)
+
+            applying = store.transition(
+                "approval-step-1",
+                "applying",
+                expected_revision=0,
+                resolved_at="2026-07-14T10:01:00Z",
+            )
+            applied = store.transition(
+                "approval-step-1",
+                "applied",
+                expected_revision=1,
+                resolved_at="2026-07-14T10:02:00Z",
+            )
+
+            self.assertEqual(applying.approvals[0].status, "applying")
+            self.assertEqual(applying.revision, 1)
+            self.assertEqual(applied.approvals[0].status, "applied")
+            self.assertEqual(applied.revision, 2)
+
+    def test_concurrent_decisions_with_same_revision_allow_one_winner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+            ApprovalQueue([self._pending_approval()]).write(queue_path)
+            context = multiprocessing.get_context("spawn")
+            ready_events = [context.Event(), context.Event()]
+            start = context.Event()
+            results = context.Queue()
+            processes = [
+                context.Process(
+                    target=_approval_store_decision_worker,
+                    args=(str(queue_path), status, ready_events[index], start, results),
+                )
+                for index, status in enumerate(("approved", "denied"))
+            ]
+            for process in processes:
+                process.start()
+            try:
+                self.assertTrue(all(event.wait(timeout=10) for event in ready_events))
+                start.set()
+                outcomes = [results.get(timeout=10) for _ in processes]
+            finally:
+                for process in processes:
+                    process.join(timeout=10)
+                    if process.is_alive():
+                        process.terminate()
+                        process.join(timeout=5)
+
+            self.assertEqual(sorted(outcome[0] for outcome in outcomes), ["conflict", "success"])
+            self.assertEqual(ApprovalQueue.read(queue_path).revision, 1)
 
     def test_read_existing_queue_fails_when_final_file_is_missing(self):
         self.assertTrue(hasattr(approvals_module, "read_existing_approval_queue"))
@@ -75,7 +226,10 @@ class ApprovalTests(unittest.TestCase):
                     root / "runs" / "latest" / "pending_approvals.json",
                 )
 
-            self.assertEqual(queue, ApprovalQueue())
+            self.assertIsNotNone(queue)
+            self.assertEqual(queue.schema_version, "1")
+            self.assertEqual(queue.revision, 0)
+            self.assertEqual(queue.approvals, [])
             read.assert_called_once_with(
                 root,
                 "runs/latest/pending_approvals.json",
@@ -135,6 +289,27 @@ class ApprovalTests(unittest.TestCase):
         self.assertEqual(risk.level, "safe")
         self.assertEqual(risk.reason, "safe action")
 
+    def test_existing_target_requires_review_when_overwrite_review_is_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            policy = WorkspacePolicy(root, {"write_file"}, set(), {"index.html"})
+            action = Action(
+                "1",
+                "write_file",
+                {"path": "index.html", "content": "new"},
+            )
+            governance = GovernanceConfig(
+                profile="review",
+                review_existing_writes=True,
+            )
+
+            new_target_risk = classify_action_risk(action, policy, governance)
+            (root / "index.html").write_text("old", encoding="utf-8")
+            existing_target_risk = classify_action_risk(action, policy, governance)
+
+            self.assertEqual(new_target_risk.level, "safe")
+            self.assertEqual(existing_target_risk.level, "review")
+            self.assertEqual(existing_target_risk.rule_family, "existing_target")
     def test_protected_replace_requires_review(self):
         policy = WorkspacePolicy(Path("."), {"replace_file"}, set(), {"README.md"})
         config = GovernanceConfig(

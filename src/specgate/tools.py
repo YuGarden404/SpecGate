@@ -96,7 +96,7 @@ class ToolDispatcher:
                     rule_family=snapshot_decision.rule_family,
                 )
 
-        content = action.args.get("content", "")
+        content = action.args["content"]
         if not isinstance(content, str):
             return ToolResult(False, action.action, "content must be a string")
         try:

@@ -186,6 +186,13 @@ class WebStaticTests(unittest.TestCase):
             with self.subTest(function_name=function_name):
                 self.assertIn(f"async function {function_name}", app_js)
 
+    def test_approval_requests_carry_revision_and_refresh_after_conflict(self) -> None:
+        app_js = read_static("app.js")
+
+        self.assertIn("expected_revision: approval.queue_revision", app_js)
+        self.assertIn("error.status === 409", app_js)
+        self.assertIn("审批状态已变化，请重新确认", app_js)
+
     def test_app_contains_report_render_workflow(self) -> None:
         app_js = read_static("app.js")
         self.assertIn('state.activeTab === "report"', app_js)

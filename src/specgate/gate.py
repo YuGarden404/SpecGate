@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from html.parser import HTMLParser
 from pathlib import Path
 import re
 
 from specgate import workspace_fs
+from specgate.checklist_rules import evaluate_rule, parse_checklist, parse_html_features
 from specgate.security import contains_secret_like_text
 
 
@@ -31,6 +33,8 @@ class GateResult:
     checks: list[GateCheck]
     issues: list[GateIssue]
     summary: str
+    artifact_sha256: str | None = None
+    checklist_sha256: str | None = None
 
 
 class _HtmlFeatureParser(HTMLParser):
@@ -67,11 +71,12 @@ def _check(code: str, passed: bool, message: str) -> GateCheck:
     return GateCheck(code, passed, message)
 
 
-def _read_gate_file(path: Path) -> str | None:
+def _read_gate_file(path: Path) -> tuple[str, str] | None:
     root = path.parent
     relative = path.name
     try:
-        return workspace_fs.read_workspace_text(root, relative, encoding="utf-8-sig")
+        content = workspace_fs.read_workspace_bytes(root, relative)
+        return content.decode("utf-8-sig"), hashlib.sha256(content).hexdigest()
     except workspace_fs.WorkspacePathError as exc:
         if exc.rule_family == "path_race" and exc.missing_path == relative:
             return None
@@ -118,19 +123,23 @@ def run_html_gate(html_path: Path, checklist_path: Path | None) -> GateResult:
     issues: list[GateIssue] = []
 
     try:
-        content = _read_gate_file(html_path)
+        artifact_input = _read_gate_file(html_path)
     except workspace_fs.WorkspacePathError as exc:
         return _unsafe_input_result("artifact", exc)
-    if content is None:
+    if artifact_input is None:
         issue = _issue("missing_artifact", "index.html 不存在", str(html_path), "写入 index.html")
         return GateResult(False, [_check("exists", False, "index.html missing")], [issue], "index.html 不存在")
+    content, artifact_sha256 = artifact_input
 
     checklist_text = ""
+    checklist_sha256 = hashlib.sha256(b"").hexdigest()
     if checklist_path is not None:
         try:
-            checklist_text = _read_gate_file(checklist_path) or ""
+            checklist_input = _read_gate_file(checklist_path)
         except workspace_fs.WorkspacePathError as exc:
             return _unsafe_input_result("checklist", exc)
+        if checklist_input is not None:
+            checklist_text, checklist_sha256 = checklist_input
     parser = _HtmlFeatureParser()
     parser.feed(content)
     lower = content.lower()
@@ -143,7 +152,6 @@ def run_html_gate(html_path: Path, checklist_path: Path | None) -> GateResult:
         ("title_tag", "title" in parser.tags, "需要 title 标签", "添加页面标题"),
         ("body_tag", "body" in parser.tags, "需要 body 标签", "添加 body"),
         ("viewport", parser.has_viewport, "需要 viewport meta", "添加移动端 viewport meta"),
-        ("search", parser.has_search or "filter" in lower, "需要搜索或过滤 UI", "添加 search input 或 filter 控件"),
         ("offline", "https://" not in lower and "http://" not in lower, "不能依赖外部网络资源", "移除外部脚本和样式"),
         ("no_secret", not contains_secret_like_text(content), "不能包含疑似密钥", "移除密钥样文本"),
     ]
@@ -183,7 +191,48 @@ def run_html_gate(html_path: Path, checklist_path: Path | None) -> GateResult:
         if not passed:
             issues.append(_issue("missing_checklist_term", f"缺少 checklist 项：{term}", term, f"在页面内容中加入 {term}"))
 
+    checklist = parse_checklist(checklist_text)
+    for parse_issue in checklist.issues:
+        checks.append(_check(parse_issue.code, False, parse_issue.message))
+        issues.append(
+            _issue(
+                parse_issue.code,
+                parse_issue.message,
+                parse_issue.label,
+                "为该 Checklist 项添加受支持的 specgate 指令",
+            )
+        )
+
+    document = parse_html_features(content)
+    for index, rule in enumerate(checklist.rules, start=1):
+        if rule.label.startswith("- 必须包含 "):
+            continue
+        evaluation = evaluate_rule(rule, document)
+        checks.append(
+            _check(
+                f"checklist_{rule.kind}_{index}",
+                evaluation.passed,
+                evaluation.message,
+            )
+        )
+        if not evaluation.passed:
+            issues.append(
+                _issue(
+                    f"checklist_{rule.kind}",
+                    evaluation.message,
+                    evaluation.evidence,
+                    f"满足 Checklist 项：{rule.label}",
+                )
+            )
+
     passed = not issues
     summary_issues = sorted(issues, key=lambda issue: 0 if issue.code == "too_few_nodes" else 1)
     summary = "Gate 通过" if passed else "Gate 失败：" + "；".join(issue.repair_hint for issue in summary_issues[:4])
-    return GateResult(passed, checks, issues, summary)
+    return GateResult(
+        passed,
+        checks,
+        issues,
+        summary,
+        artifact_sha256=artifact_sha256,
+        checklist_sha256=checklist_sha256,
+    )

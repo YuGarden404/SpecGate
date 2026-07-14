@@ -312,6 +312,21 @@ def quarantine_parent_lock(binding: WorkspaceTreeBinding) -> Iterator[None]:
             _unlock_quarantine_handle(handle)
 
 
+@contextlib.contextmanager
+def workspace_file_lock(
+    root: str | os.PathLike[str],
+    relative: str,
+) -> Iterator[None]:
+    """Acquire an exclusive cross-process lock backed by a safe workspace file."""
+    with open_workspace_file(root, relative, "update", create=True) as handle:
+        _prepare_quarantine_lock_handle(handle)
+        _lock_quarantine_handle(handle)
+        try:
+            yield
+        finally:
+            _unlock_quarantine_handle(handle)
+
+
 def _prepare_quarantine_lock_handle(handle: BinaryIO) -> None:
     handle.seek(0, os.SEEK_END)
     if handle.tell() == 0:

@@ -20,12 +20,17 @@ VALID_APPROVAL_STATUSES = {
     "pending",
     "approved",
     "denied",
+    "applying",
     "applied",
     "rejected",
     "failed",
 }
-RESUMABLE_APPROVAL_STATUSES = {"approved", "denied"}
+RESUMABLE_APPROVAL_STATUSES = {"approved", "denied", "applying"}
 TERMINAL_APPROVAL_STATUSES = {"applied", "rejected", "failed"}
+
+
+class ApprovalConflictError(ValueError):
+    code = "approval_conflict"
 
 
 @dataclass
@@ -34,6 +39,7 @@ class GovernanceConfig:
     review_actions: set[str] = field(default_factory=set)
     review_paths: set[str] = field(default_factory=set)
     blocked_paths: set[str] = field(default_factory=lambda: {".env", "**/.env"})
+    review_existing_writes: bool = False
 
     def __post_init__(self) -> None:
         if self.profile not in VALID_GOVERNANCE_PROFILES:
@@ -99,9 +105,47 @@ class PendingApproval:
 @dataclass
 class ApprovalQueue:
     approvals: list[PendingApproval] = field(default_factory=list)
+    schema_version: str = "2"
+    revision: int = 0
+
+    def __post_init__(self) -> None:
+        if self.schema_version not in {"1", "2"}:
+            raise ValueError("unsupported approval queue schema version")
+        if not isinstance(self.revision, int) or isinstance(self.revision, bool):
+            raise ValueError("approval queue revision must be an integer")
+        if self.revision < 0:
+            raise ValueError("approval queue revision must not be negative")
 
     def to_dict(self) -> dict[str, Any]:
-        return {"approvals": [approval.to_dict() for approval in self.approvals]}
+        return {
+            "schema_version": self.schema_version,
+            "revision": self.revision,
+            "approvals": [approval.to_dict() for approval in self.approvals],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ApprovalQueue":
+        if not isinstance(payload, dict):
+            raise ValueError("pending approvals payload must be an object")
+
+        schema_version = payload.get("schema_version", "1")
+        revision = payload.get("revision", 0)
+        if not isinstance(schema_version, str) or schema_version not in {"1", "2"}:
+            raise ValueError("unsupported approval queue schema version")
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+            raise ValueError("approval queue revision must be a non-negative integer")
+
+        raw_approvals = payload.get("approvals", [])
+        if not isinstance(raw_approvals, list):
+            raise ValueError("pending approvals must be a list")
+        if not all(isinstance(approval, dict) for approval in raw_approvals):
+            raise ValueError("pending approval entries must be objects")
+
+        return cls(
+            approvals=[_parse_pending_approval(approval) for approval in raw_approvals],
+            schema_version=schema_version,
+            revision=revision,
+        )
 
     def write(self, path: Path) -> None:
         root, relative_path = _approval_queue_location(path)
@@ -122,7 +166,7 @@ class ApprovalQueue:
             raise
 
     def append(self, approval: PendingApproval) -> "ApprovalQueue":
-        return ApprovalQueue([*self.approvals, approval])
+        return replace(self, approvals=[*self.approvals, approval])
 
     def find(self, approval_id: str) -> PendingApproval:
         for approval in self.approvals:
@@ -140,7 +184,10 @@ class ApprovalQueue:
             decided_at=decided_at,
             decision_reason=None,
         )
-        return ApprovalQueue(_replace_approval(self.approvals, approval_id, replacement))
+        return replace(
+            self,
+            approvals=_replace_approval(self.approvals, approval_id, replacement),
+        )
 
     def deny(self, approval_id: str, reason: str, decided_at: str) -> "ApprovalQueue":
         approval = self.find(approval_id)
@@ -152,7 +199,38 @@ class ApprovalQueue:
             decided_at=decided_at,
             decision_reason=reason,
         )
-        return ApprovalQueue(_replace_approval(self.approvals, approval_id, replacement))
+        return replace(
+            self,
+            approvals=_replace_approval(self.approvals, approval_id, replacement),
+        )
+
+    def transition(
+        self,
+        approval_id: str,
+        status: str,
+        resolved_at: str,
+        reason: str | None = None,
+    ) -> "ApprovalQueue":
+        approval = self.find(approval_id)
+        allowed_targets = {
+            "approved": {"applying", "applied", "failed"},
+            "applying": {"applied", "failed"},
+            "denied": {"rejected"},
+        }
+        if approval.status not in allowed_targets:
+            raise ValueError("approval is not resumable")
+        if status not in allowed_targets[approval.status]:
+            raise ValueError("invalid approval transition")
+        replacement = replace(
+            approval,
+            status=status,
+            resolved_at=(resolved_at if status in TERMINAL_APPROVAL_STATUSES else None),
+            decision_reason=reason if reason is not None else approval.decision_reason,
+        )
+        return replace(
+            self,
+            approvals=_replace_approval(self.approvals, approval_id, replacement),
+        )
 
     def resolve(
         self,
@@ -163,22 +241,7 @@ class ApprovalQueue:
     ) -> "ApprovalQueue":
         if status not in TERMINAL_APPROVAL_STATUSES:
             raise ValueError("resolved approval status must be applied, rejected, or failed")
-        approval = self.find(approval_id)
-        if approval.status not in RESUMABLE_APPROVAL_STATUSES:
-            raise ValueError("approval is not resumable")
-        allowed_targets = {
-            "approved": {"applied", "failed"},
-            "denied": {"rejected"},
-        }
-        if status not in allowed_targets[approval.status]:
-            raise ValueError("invalid approval transition")
-        replacement = replace(
-            approval,
-            status=status,
-            resolved_at=resolved_at,
-            decision_reason=reason if reason is not None else approval.decision_reason,
-        )
-        return ApprovalQueue(_replace_approval(self.approvals, approval_id, replacement))
+        return self.transition(approval_id, status, resolved_at, reason)
 
     def next_resume_candidate(self) -> PendingApproval | None:
         for approval in self.approvals:
@@ -207,6 +270,88 @@ def _replace_approval(
 
 def approval_queue_path(root: Path) -> Path:
     return root / "runs" / "latest" / "pending_approvals.json"
+
+
+class ApprovalStore:
+    def __init__(self, path: Path):
+        self.path = Path(path)
+
+    def read(self) -> ApprovalQueue:
+        with _approval_queue_lock(self.path):
+            return ApprovalQueue.read(self.path)
+
+    def read_existing(self) -> ApprovalQueue:
+        with _approval_queue_lock(self.path):
+            return read_existing_approval_queue(self.path)
+
+    def append(
+        self,
+        approval: PendingApproval,
+        *,
+        expected_revision: int,
+    ) -> ApprovalQueue:
+        return self._mutate(
+            expected_revision,
+            lambda queue: queue.append(approval),
+        )
+
+    def decide(
+        self,
+        approval_id: str,
+        status: str,
+        *,
+        expected_revision: int,
+        decided_at: str,
+        reason: str | None = None,
+    ) -> ApprovalQueue:
+        def mutation(queue: ApprovalQueue) -> ApprovalQueue:
+            if status == "approved":
+                return queue.approve(approval_id, decided_at)
+            if status == "denied":
+                return queue.deny(approval_id, reason or "", decided_at)
+            raise ValueError("invalid approval decision")
+
+        return self._mutate(expected_revision, mutation)
+
+    def transition(
+        self,
+        approval_id: str,
+        status: str,
+        *,
+        expected_revision: int,
+        resolved_at: str,
+        reason: str | None = None,
+    ) -> ApprovalQueue:
+        return self._mutate(
+            expected_revision,
+            lambda queue: queue.transition(
+                approval_id,
+                status,
+                resolved_at,
+                reason,
+            ),
+        )
+
+    def _mutate(self, expected_revision: int, mutation) -> ApprovalQueue:
+        if not isinstance(expected_revision, int) or isinstance(expected_revision, bool):
+            raise ValueError("expected revision must be an integer")
+        with _approval_queue_lock(self.path):
+            current = ApprovalQueue.read(self.path)
+            if current.revision != expected_revision:
+                raise ApprovalConflictError("approval queue revision changed")
+            changed = mutation(current)
+            updated = replace(
+                changed,
+                schema_version="2",
+                revision=current.revision + 1,
+            )
+            updated.write(self.path)
+            return updated
+
+
+def _approval_queue_lock(path: Path):
+    root, relative_path = _approval_queue_location(path)
+    return workspace_fs.workspace_file_lock(root, f"{relative_path}.lock")
 
 
 def _approval_queue_location(path: Path) -> tuple[Path, str]:
@@ -264,18 +409,7 @@ def read_approval_queue_if_present(
 
 def _parse_approval_queue_content(content: str) -> ApprovalQueue:
     payload = json.loads(content)
-    if not isinstance(payload, dict):
-        raise ValueError("pending approvals payload must be an object")
-
-    raw_approvals = payload.get("approvals", [])
-    if not isinstance(raw_approvals, list):
-        raise ValueError("pending approvals must be a list")
-
-    if not all(isinstance(approval, dict) for approval in raw_approvals):
-        raise ValueError("pending approval entries must be objects")
-
-    approvals = [_parse_pending_approval(approval) for approval in raw_approvals]
-    return ApprovalQueue(approvals)
+    return ApprovalQueue.from_dict(payload)
 
 
 def _parse_pending_approval(approval: dict[str, Any]) -> PendingApproval:
@@ -404,6 +538,22 @@ def classify_action_risk(
             "review",
             f"{action.action} on protected path requires human review",
         )
+
+    if (
+        config.review_existing_writes
+        and action.action in {"write_file", "replace_file"}
+        and path is not None
+    ):
+        try:
+            target_state = workspace_fs.workspace_file_state(policy.root, path)
+        except workspace_fs.WorkspacePathError as exc:
+            return ActionRisk("blocked", str(exc), exc.rule_family)
+        if target_state.exists:
+            return ActionRisk(
+                "review",
+                f"{action.action} would overwrite an existing target",
+                "existing_target",
+            )
 
     return ActionRisk("safe", "safe action")
 

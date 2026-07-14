@@ -1,9 +1,11 @@
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+from specgate.actions import ActionParseError, parse_action
 from specgate.llm import MockLLM
 from specgate.metrics import RunMetrics
 from specgate.policy import WorkspacePolicy
@@ -90,7 +92,99 @@ class ApprovalFeedbackLLM:
         return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
 
 
+class FinishAfterExternalMutationLLM:
+    def __init__(self, root: Path):
+        self.root = root
+        self.contexts: list[str] = []
+
+    def complete(self, context: str) -> str:
+        self.contexts.append(context)
+        call = len(self.contexts)
+        if call == 1:
+            return json.dumps(
+                {
+                    "schema_version": "1",
+                    "action": "write_file",
+                    "args": {"path": "index.html", "content": FIXED_HTML},
+                }
+            )
+        if call == 2:
+            self.root.joinpath("index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
+        if call == 3:
+            return json.dumps(
+                {
+                    "schema_version": "1",
+                    "action": "replace_file",
+                    "args": {"path": "index.html", "content": FIXED_HTML},
+                }
+            )
+        return '{"schema_version":"1","action":"finish","args":{"summary":"done"}}'
+
+
 class RunnerTests(unittest.TestCase):
+    def test_write_actions_require_string_path_and_content(self):
+        invalid_args = (
+            {"path": "index.html"},
+            {"path": "index.html", "content": 3},
+            {"content": "page"},
+            {"path": 3, "content": "page"},
+        )
+
+        for action_name in ("write_file", "replace_file"):
+            for args in invalid_args:
+                with self.subTest(action=action_name, args=args):
+                    raw = json.dumps(
+                        {
+                            "schema_version": "1",
+                            "action": action_name,
+                            "args": args,
+                        }
+                    )
+                    with self.assertRaisesRegex(
+                        ActionParseError,
+                        "invalid_action_payload",
+                    ):
+                        parse_action(raw)
+
+    def test_invalid_write_payload_never_enters_approval_queue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"write_file"},
+                {"TASK_SPEC.md", "CHECKLIST.md"},
+                {"index.html"},
+            )
+            governance = GovernanceConfig(
+                profile="review",
+                review_actions={"write_file"},
+                review_paths={"index.html"},
+            )
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html"},
+                    }
+                ]
+            )
+
+            result = AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=1,
+                governance_config=governance,
+            ).run()
+
+            self.assertEqual(result.metrics.parse_errors, 1)
+            self.assertEqual(result.metrics.approval_requests, 0)
+            self.assertEqual(ApprovalQueue.read(approval_queue_path(root)).approvals, [])
+
     def test_new_run_writes_empty_queue_at_custom_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
@@ -1175,7 +1269,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result.metrics.llm_calls, 2)
             self.assertEqual(result.metrics.tool_calls, 2)
             self.assertEqual(result.metrics.successful_tool_calls, 2)
-            self.assertEqual(result.metrics.gate_runs, 1)
+            self.assertEqual(result.metrics.gate_runs, 2)
             self.assertEqual(result.metrics.gate_failures, 0)
             self.assertEqual(result.metrics.finish_actions, 1)
             self.assertIsNotNone(result.trust)
@@ -1220,7 +1314,7 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("permission_decision", trace_events)
             self.assertIn("run_summary", trace_events)
 
-    def test_failed_unblocked_write_records_disallowed_permission_decision(self):
+    def test_invalid_write_payload_stops_before_permission_and_tool_dispatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
@@ -1244,12 +1338,10 @@ class RunnerTests(unittest.TestCase):
             result = AgentRunner(root, llm, policy, max_steps=1).run()
 
             self.assertIsNotNone(result.permission_decisions)
-            decision = result.permission_decisions[0]
-            self.assertFalse(decision.allowed)
-            self.assertFalse(decision.blocked)
-            self.assertIn("content must be a string", decision.reason)
+            self.assertEqual(result.permission_decisions, [])
             self.assertIsNotNone(result.metrics)
-            self.assertEqual(result.metrics.tool_calls, 1)
+            self.assertEqual(result.metrics.parse_errors, 1)
+            self.assertEqual(result.metrics.tool_calls, 0)
             self.assertEqual(result.metrics.successful_tool_calls, 0)
 
     def test_permission_decision_uses_action_risk_rule_family(self):
@@ -1626,7 +1718,7 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("file changed since run started", trace_text)
             self.assertEqual((root / "index.html").read_text(encoding="utf-8"), "external edit")
 
-    def test_review_profile_creates_pending_approval_without_mutating_file(self):
+    def test_review_action_pauses_before_next_llm_call(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
@@ -1662,6 +1754,9 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(approval.action_payload["args"]["content"], "changed")
             self.assertEqual(result.metrics.approval_requests, 1)
             self.assertEqual(result.metrics.pending_approvals, 1)
+            self.assertEqual(result.outcome, "needs_approval")
+            self.assertFalse(result.passed)
+            self.assertEqual(result.pending_approval_id, "approval-step-1")
             self.assertIsNotNone(result.permission_decisions)
             self.assertGreaterEqual(len(result.permission_decisions), 1)
             decision = result.permission_decisions[0]
@@ -1671,14 +1766,23 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("requires human review", decision.reason)
             self.assertEqual(decision.profile, "review")
             self.assertEqual(result.trust.status, "warning")
-            self.assertEqual(len(llm.contexts), 2)
-            self.assertIn("approval_requested", llm.contexts[1])
-            trace_events = [
-                json.loads(line)["event_type"]
+            self.assertEqual(result.metrics.llm_calls, 1)
+            self.assertEqual(result.metrics.tool_calls, 0)
+            self.assertEqual(len(llm.contexts), 1)
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            self.assertEqual(queue.schema_version, "2")
+            self.assertEqual(queue.revision, 1)
+            trace_entries = [
+                json.loads(line)
                 for line in (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
             ]
+            trace_events = [entry["event_type"] for entry in trace_entries]
             self.assertIn("permission_decision", trace_events)
             self.assertIn("approval_requested", trace_events)
+            requested = next(
+                entry for entry in trace_entries if entry["event_type"] == "approval_requested"
+            )
+            self.assertEqual(requested["payload"]["queue_revision"], 1)
 
     def test_approved_resume_fails_when_target_changed_after_approval_request(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1731,10 +1835,35 @@ class RunnerTests(unittest.TestCase):
             self.assertIsNotNone(result.trust)
             self.assertEqual(result.trust.status, "failed")
             self.assertIn("approval_failed", result.trust.reasons)
+            self.assertEqual(
+                result.permission_decisions[0].rule_family,
+                "approval_target_changed",
+            )
             trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("approval_failed", trace_text)
-            self.assertIn("changed since approval request", trace_text)
+            self.assertIn("approval_target_changed", trace_text)
             self.assertNotIn(secret, trace_text)
+
+    def test_finish_always_reruns_gate_after_external_artifact_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            llm = FinishAfterExternalMutationLLM(root)
+            policy = WorkspacePolicy(
+                root,
+                {"write_file", "replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            result = AgentRunner(root, llm, policy, max_steps=4).run()
+
+            self.assertFalse(result.passed)
+            self.assertEqual(result.outcome, "failed")
+            self.assertEqual(len(llm.contexts), 4)
+            self.assertIn("gate_result", llm.contexts[2])
+            self.assertGreaterEqual(result.metrics.gate_failures, 1)
 
     def test_workspace_review_governance_config_sets_runner_profile_when_not_overridden(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1803,6 +1932,100 @@ class RunnerTests(unittest.TestCase):
                 {"README.md"},
             )
 
+            runner = AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=1,
+                governance_config=GovernanceConfig(
+                    profile="review",
+                    review_actions={"replace_file"},
+                    review_paths={"README.md"},
+                ),
+            )
+            original_dispatch = runner.dispatcher.dispatch
+
+            def dispatch_after_claim(action):
+                if action.action == "replace_file":
+                    claimed = ApprovalQueue.read(approval_queue_path(root))
+                    self.assertEqual(claimed.approvals[0].status, "applying")
+                return original_dispatch(action)
+
+            with mock.patch.object(runner.dispatcher, "dispatch", side_effect=dispatch_after_claim):
+                result = runner.resume_from_approval()
+
+            self.assertTrue(result.passed)
+            self.assertEqual((root / "README.md").read_text(encoding="utf-8"), f"approved content {secret}")
+            queue = ApprovalQueue.read(approval_queue_path(root))
+            self.assertEqual(queue.approvals[0].status, "applied")
+            self.assertIsNotNone(result.metrics)
+            self.assertEqual(result.metrics.approved_approvals, 1)
+            self.assertEqual(result.metrics.applied_approvals, 1)
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("resume_started", trace_text)
+            self.assertIn("approval_claimed", trace_text)
+            self.assertIn("approval_applied", trace_text)
+            self.assertIn("resume_finished", trace_text)
+            self.assertNotIn(secret, trace_text)
+            trace_entries = [json.loads(line) for line in trace_text.splitlines()]
+            resume_started = next(
+                entry for entry in trace_entries if entry["event_type"] == "resume_started"
+            )
+            approval_claimed = next(
+                entry for entry in trace_entries if entry["event_type"] == "approval_claimed"
+            )
+            resume_finished = next(
+                entry for entry in trace_entries if entry["event_type"] == "resume_finished"
+            )
+            self.assertEqual(resume_started["payload"]["queue_revision"], 0)
+            self.assertEqual(approval_claimed["payload"]["queue_revision"], 1)
+            self.assertEqual(resume_finished["payload"]["queue_revision"], 2)
+            self.assertEqual(llm.calls, 1)
+
+    def test_resume_from_applying_approval_accepts_already_applied_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            original = "original"
+            expected = "approved content"
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "README.md").write_text(expected, encoding="utf-8")
+            (root / "index.html").write_text(FIXED_HTML, encoding="utf-8")
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-step-1",
+                        step=1,
+                        action="replace_file",
+                        path="README.md",
+                        risk_level="review",
+                        reason="replace_file requires human review",
+                        profile="review",
+                        status="applying",
+                        action_payload={
+                            "schema_version": "1",
+                            "action": "replace_file",
+                            "args": {"path": "README.md", "content": expected},
+                        },
+                        target_state={
+                            "path": "README.md",
+                            "exists": True,
+                            "sha256": hashlib.sha256(original.encode()).hexdigest(),
+                        },
+                    )
+                ],
+                revision=1,
+            ).write(approval_queue_path(root))
+            llm = MockLLM(
+                [{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}]
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"README.md"},
+            )
+
             result = AgentRunner(
                 root,
                 llm,
@@ -1815,19 +2038,11 @@ class RunnerTests(unittest.TestCase):
                 ),
             ).resume_from_approval()
 
-            self.assertTrue(result.passed)
-            self.assertEqual((root / "README.md").read_text(encoding="utf-8"), f"approved content {secret}")
             queue = ApprovalQueue.read(approval_queue_path(root))
             self.assertEqual(queue.approvals[0].status, "applied")
-            self.assertIsNotNone(result.metrics)
-            self.assertEqual(result.metrics.approved_approvals, 1)
+            self.assertEqual((root / "README.md").read_text(encoding="utf-8"), expected)
             self.assertEqual(result.metrics.applied_approvals, 1)
-            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("resume_started", trace_text)
-            self.assertIn("approval_applied", trace_text)
-            self.assertIn("resume_finished", trace_text)
-            self.assertNotIn(secret, trace_text)
-            self.assertEqual(llm.calls, 1)
+            self.assertEqual(result.metrics.tool_calls, 1)
 
     def test_resume_generates_unique_pending_approval_id_after_applying_old_approval(self):
         with tempfile.TemporaryDirectory() as tmp:

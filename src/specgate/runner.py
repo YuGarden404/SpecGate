@@ -2,19 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 
 from specgate.actions import Action, ActionParseError, parse_action
 from specgate.approvals import (
     ApprovalQueue,
+    ApprovalStore,
     GovernanceConfig,
     PendingApproval,
     approval_queue_path,
     capture_target_state,
     classify_action_risk,
     preview_args,
-    read_existing_approval_queue,
     target_state_matches,
 )
 from specgate.context import build_context_pack_with_metadata, build_role_context_pack_with_metadata
@@ -50,6 +51,9 @@ def _unique_approval_id(queue: ApprovalQueue, step: int) -> str:
     return f"{base}-{suffix}"
 
 
+VALID_RUN_OUTCOMES = {"completed", "needs_approval", "failed"}
+
+
 @dataclass(frozen=True)
 class RunResult:
     passed: bool
@@ -60,6 +64,8 @@ class RunResult:
     permission_decisions: list[PermissionDecision] | None = None
     trust: TrustSummary | None = None
     profile: str = "strict"
+    outcome: str = "failed"
+    pending_approval_id: str | None = None
 
 
 class AgentRunner:
@@ -179,7 +185,22 @@ class AgentRunner:
                 "trust": trust.to_dict(),
             },
         )
-        passed = final_gate.passed and not metrics.max_steps_reached and not metrics.role_cycle_limit_reached
+        queue = ApprovalQueue.read(self.approval_queue_file)
+        pending_approval = next(
+            (
+                approval
+                for approval in reversed(queue.approvals)
+                if approval.status == "pending"
+            ),
+            None,
+        )
+        if pending_approval is not None:
+            outcome = "needs_approval"
+        elif final_gate.passed and not metrics.max_steps_reached and not metrics.role_cycle_limit_reached:
+            outcome = "completed"
+        else:
+            outcome = "failed"
+        passed = outcome == "completed" and final_gate.passed
         result = RunResult(
             passed,
             step,
@@ -189,9 +210,42 @@ class AgentRunner:
             permission_decisions,
             trust,
             self.governance_profile,
+            outcome,
+            pending_approval.id if pending_approval is not None else None,
         )
         append_memory(self.root, result.passed, result.steps, final_gate.summary)
         return result
+
+    def _pause_result(
+        self,
+        step: int,
+        final_gate: GateResult | None,
+        metrics: RunMetrics,
+        permission_decisions: list[PermissionDecision],
+        approval: PendingApproval,
+    ) -> RunResult:
+        trust = TrustSummary("warning", ["pending_approvals_present"])
+        self.trace.append(
+            "run_summary",
+            {
+                "profile": self.governance_profile,
+                "outcome": "needs_approval",
+                "metrics": metrics.to_dict(),
+                "trust": trust.to_dict(),
+            },
+        )
+        return RunResult(
+            passed=False,
+            steps=step,
+            final_gate=final_gate,
+            context_chars_max=metrics.context_chars_max,
+            metrics=metrics,
+            permission_decisions=permission_decisions,
+            trust=trust,
+            profile=self.governance_profile,
+            outcome="needs_approval",
+            pending_approval_id=approval.id,
+        )
 
     def _record_tool_feedback(
         self,
@@ -359,7 +413,8 @@ class AgentRunner:
         risk = classify_action_risk(action, self.policy, self.governance_config)
         queue_path = self.approval_queue_file
         if risk.level == "review" and self.governance_profile == "review":
-            queue = read_existing_approval_queue(queue_path)
+            store = ApprovalStore(queue_path)
+            queue = store.read()
             approval = PendingApproval(
                 id=_unique_approval_id(queue, step),
                 step=step,
@@ -376,7 +431,7 @@ class AgentRunner:
                 },
                 target_state=capture_target_state(self.root, action_path),
             )
-            queue.append(approval).write(queue_path)
+            queue = store.append(approval, expected_revision=queue.revision)
             self._record_permission_decision(
                 permission_decisions,
                 step,
@@ -396,6 +451,7 @@ class AgentRunner:
                 "step": step,
                 "type": "approval_requested",
                 "approval": approval.to_dict(),
+                "queue_revision": queue.revision,
             }
             runtime_feedback.append(redact(event))
             self.trace.append("approval_requested", redact(event))
@@ -576,8 +632,11 @@ class AgentRunner:
 
         def finish_with_isolation(final_step: int, final_metrics: RunMetrics) -> RunResult:
             nonlocal latest_gate
-            if latest_gate is None:
-                latest_gate, final_metrics = self._run_gate_with_feedback(final_step, final_metrics, runtime_feedback)
+            latest_gate, final_metrics = self._run_gate_with_feedback(
+                final_step,
+                final_metrics,
+                runtime_feedback,
+            )
             evidence = build_isolation_evidence(
                 strategy=self.context_strategy,
                 executions=state.executions,
@@ -611,6 +670,19 @@ class AgentRunner:
 
         while True:
             run_role_if_budget("implementer")
+            queue = ApprovalStore(self.approval_queue_file).read()
+            pending_approval = next(
+                (approval for approval in reversed(queue.approvals) if approval.status == "pending"),
+                None,
+            )
+            if pending_approval is not None:
+                return self._pause_result(
+                    step,
+                    latest_gate,
+                    metrics,
+                    permission_decisions,
+                    pending_approval,
+                )
             if metrics.max_steps_reached:
                 return finish_with_isolation(step, metrics)
 
@@ -691,7 +763,8 @@ class AgentRunner:
             action_path = action_path_value if isinstance(action_path_value, str) else None
             risk = classify_action_risk(action, self.policy, self.governance_config)
             if risk.level == "review" and self.governance_profile == "review":
-                queue = read_existing_approval_queue(queue_path)
+                store = ApprovalStore(queue_path)
+                queue = store.read()
                 approval = PendingApproval(
                     id=_unique_approval_id(queue, step),
                     step=step,
@@ -708,7 +781,7 @@ class AgentRunner:
                     },
                     target_state=capture_target_state(self.root, action_path),
                 )
-                queue.append(approval).write(queue_path)
+                queue = store.append(approval, expected_revision=queue.revision)
                 self._record_permission_decision(
                     permission_decisions,
                     step,
@@ -728,10 +801,17 @@ class AgentRunner:
                     "step": step,
                     "type": "approval_requested",
                     "approval": approval.to_dict(),
+                    "queue_revision": queue.revision,
                 }
                 runtime_feedback.append(redact(event))
                 self.trace.append("approval_requested", redact(event))
-                continue
+                return self._pause_result(
+                    step,
+                    latest_gate,
+                    metrics,
+                    permission_decisions,
+                    approval,
+                )
 
             if risk.level in {"review", "blocked"}:
                 metrics = replace(metrics, blocked_actions=metrics.blocked_actions + 1)
@@ -795,8 +875,9 @@ class AgentRunner:
                 latest_gate, metrics = self._run_gate_with_feedback(step, metrics, runtime_feedback)
 
             if action.action == "finish":
-                if latest_gate is None:
-                    latest_gate, metrics = self._run_gate_with_feedback(step, metrics, runtime_feedback)
+                latest_gate, metrics = self._run_gate_with_feedback(step, metrics, runtime_feedback)
+                if not latest_gate.passed:
+                    continue
                 return self._finish_result(step, latest_gate, metrics, permission_decisions)
 
         if latest_gate is None:
@@ -806,7 +887,8 @@ class AgentRunner:
 
     def resume_from_approval(self) -> RunResult:
         queue_path = self.approval_queue_file
-        queue = read_existing_approval_queue(queue_path)
+        store = ApprovalStore(queue_path)
+        queue = store.read_existing()
         approval = queue.next_resume_candidate()
         if approval is None:
             raise ValueError("no approved or denied approval to resume")
@@ -819,6 +901,7 @@ class AgentRunner:
             "status": approval.status,
             "action": approval.action,
             "path": approval.path,
+            "queue_revision": queue.revision,
         }
         self.trace.append("resume_started", redact(started))
 
@@ -835,15 +918,22 @@ class AgentRunner:
             redacted_event = redact(event)
             runtime_feedback.append(redacted_event)
             self.trace.append("approval_denied", redacted_event)
-            read_existing_approval_queue(queue_path).resolve(
+            queue = store.transition(
                 approval.id,
                 "rejected",
+                expected_revision=queue.revision,
                 resolved_at=_utc_now_for_runner(),
                 reason=reason,
-            ).write(queue_path)
+            )
             self.trace.append(
                 "resume_finished",
-                redact({"approval_id": approval.id, "status": "rejected"}),
+                redact(
+                    {
+                        "approval_id": approval.id,
+                        "status": "rejected",
+                        "queue_revision": queue.revision,
+                    }
+                ),
             )
             return self._run_loop(
                 reset_queue=False,
@@ -852,8 +942,85 @@ class AgentRunner:
                 initial_permission_decisions=permission_decisions,
             )
 
-        if not target_state_matches(self.root, approval.target_state):
-            reason = f"target file changed since approval request: {approval.path}"
+        if approval.status == "approved":
+            queue = store.transition(
+                approval.id,
+                "applying",
+                expected_revision=queue.revision,
+                resolved_at=_utc_now_for_runner(),
+            )
+            approval = queue.find(approval.id)
+            self.trace.append(
+                "approval_claimed",
+                redact(
+                    {
+                        "approval_id": approval.id,
+                        "status": approval.status,
+                        "queue_revision": queue.revision,
+                    }
+                ),
+            )
+
+        action = parse_action(json.dumps(approval.action_payload))
+        action_path_value = action.args.get("path")
+        action_path = action_path_value if isinstance(action_path_value, str) else None
+        target_is_original = target_state_matches(self.root, approval.target_state)
+        target_is_expected = _target_matches_approved_content(self.root, action)
+
+        if not target_is_original and target_is_expected:
+            message = "approved action content already present"
+            metrics = replace(metrics, approved_approvals=1, applied_approvals=1)
+            decision = PermissionDecision(
+                step=approval.step,
+                action=action.action,
+                path=action_path,
+                allowed=True,
+                blocked=False,
+                reason=message,
+                profile=self.governance_profile,
+                rule_family="approval_resume",
+            )
+            permission_decisions.append(decision)
+            self.trace.append("permission_decision", decision.to_dict())
+            event = {
+                "type": "approval_applied",
+                "approval_id": approval.id,
+                "action": action.action,
+                "path": action_path,
+                "ok": True,
+                "blocked": False,
+                "message": message,
+                "data": {"recovered_without_reapply": True},
+            }
+            redacted_event = redact(event)
+            runtime_feedback.append(redacted_event)
+            self.trace.append("approval_applied", redacted_event)
+            queue = store.transition(
+                approval.id,
+                "applied",
+                expected_revision=queue.revision,
+                resolved_at=_utc_now_for_runner(),
+            )
+            self.trace.append(
+                "resume_finished",
+                redact(
+                    {
+                        "approval_id": approval.id,
+                        "status": "applied",
+                        "queue_revision": queue.revision,
+                    }
+                ),
+            )
+            return self._run_loop(
+                reset_queue=False,
+                initial_runtime_feedback=runtime_feedback,
+                initial_metrics=metrics,
+                initial_permission_decisions=permission_decisions,
+            )
+
+        if not target_is_original:
+            error_code = "approval_target_changed"
+            reason = f"{error_code}: target file changed since approval request: {approval.path}"
             metrics = replace(
                 metrics,
                 approved_approvals=1,
@@ -868,7 +1035,7 @@ class AgentRunner:
                 blocked=True,
                 reason=reason,
                 profile=self.governance_profile,
-                rule_family=classify_rule_family(reason),
+                rule_family=error_code,
             )
             permission_decisions.append(decision)
             self.trace.append("permission_decision", decision.to_dict())
@@ -877,20 +1044,28 @@ class AgentRunner:
                 "approval_id": approval.id,
                 "action": approval.action,
                 "path": approval.path,
+                "code": error_code,
                 "reason": reason,
             }
             redacted_event = redact(event)
             runtime_feedback.append(redacted_event)
             self.trace.append("approval_failed", redacted_event)
-            read_existing_approval_queue(queue_path).resolve(
+            queue = store.transition(
                 approval.id,
                 "failed",
+                expected_revision=queue.revision,
                 resolved_at=_utc_now_for_runner(),
                 reason=reason,
-            ).write(queue_path)
+            )
             self.trace.append(
                 "resume_finished",
-                redact({"approval_id": approval.id, "status": "failed"}),
+                redact(
+                    {
+                        "approval_id": approval.id,
+                        "status": "failed",
+                        "queue_revision": queue.revision,
+                    }
+                ),
             )
             return self._run_loop(
                 reset_queue=False,
@@ -899,9 +1074,6 @@ class AgentRunner:
                 initial_permission_decisions=permission_decisions,
             )
 
-        action = parse_action(json.dumps(approval.action_payload))
-        action_path_value = action.args.get("path")
-        action_path = action_path_value if isinstance(action_path_value, str) else None
         risk = classify_action_risk(action, self.policy, self.governance_config)
         if risk.level == "blocked":
             metrics = replace(
@@ -932,15 +1104,22 @@ class AgentRunner:
             redacted_event = redact(event)
             runtime_feedback.append(redacted_event)
             self.trace.append("approval_failed", redacted_event)
-            read_existing_approval_queue(queue_path).resolve(
+            queue = store.transition(
                 approval.id,
                 "failed",
+                expected_revision=queue.revision,
                 resolved_at=_utc_now_for_runner(),
                 reason=risk.reason,
-            ).write(queue_path)
+            )
             self.trace.append(
                 "resume_finished",
-                redact({"approval_id": approval.id, "status": "failed"}),
+                redact(
+                    {
+                        "approval_id": approval.id,
+                        "status": "failed",
+                        "queue_revision": queue.revision,
+                    }
+                ),
             )
             return self._run_loop(
                 reset_queue=False,
@@ -990,15 +1169,22 @@ class AgentRunner:
         redacted_event = redact(event)
         runtime_feedback.append(redacted_event)
         self.trace.append(event_type, redacted_event)
-        read_existing_approval_queue(queue_path).resolve(
+        queue = store.transition(
             approval.id,
             status,
+            expected_revision=queue.revision,
             resolved_at=_utc_now_for_runner(),
             reason=None if status == "applied" else tool_result.message,
-        ).write(queue_path)
+        )
         self.trace.append(
             "resume_finished",
-            redact({"approval_id": approval.id, "status": status}),
+            redact(
+                {
+                    "approval_id": approval.id,
+                    "status": status,
+                    "queue_revision": queue.revision,
+                }
+            ),
         )
         return self._run_loop(
             reset_queue=False,
@@ -1006,3 +1192,23 @@ class AgentRunner:
             initial_metrics=metrics,
             initial_permission_decisions=permission_decisions,
         )
+
+
+def _target_matches_approved_content(root: Path, action: Action) -> bool:
+    if action.action not in {"write_file", "replace_file"}:
+        return False
+    path = action.args.get("path")
+    content = action.args.get("content")
+    if not isinstance(path, str) or not isinstance(content, str):
+        return False
+    try:
+        current = capture_target_state(root, path)
+    except (OSError, ValueError):
+        return False
+    if current is None:
+        return False
+    return current == {
+        "path": current["path"],
+        "exists": True,
+        "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+    }
