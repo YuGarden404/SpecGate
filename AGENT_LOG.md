@@ -769,3 +769,12 @@
 - 最终语法、差异和旧接口扫描均通过；旧 `--env-file` 仅保留在“应被 argparse 拒绝”的回归测试中，`hmac_sha256$legacy` 仅保留在数据库迁移测试中。
 - GitHub Ubuntu CI：等待用户提交并 push 后回填。
 - Agent 未执行任何 Git 写操作；commit、push、PR 和远端 CI 均由用户负责。
+
+### GitHub Pages 合并后热修复
+
+- 现象：安全凭据 PR 的 unit-test 与 docker-build 通过，但合并到 `main` 后 Pages `build-pages` 在 `Regenerate mock demo` 阶段失败。
+- 根因证据：Ubuntu 日志显示 `ModuleNotFoundError: No module named 'keyring'`；`ci.yml` 和 Dockerfile 均先执行项目安装，只有 `pages.yml` 直接运行 CLI。
+- TDD RED：`tests.test_workflows` 明确失败，提示 Pages workflow 缺少 `python -m pip install -e .`。
+- GREEN：在 `Set up Python` 与 `Regenerate mock demo` 之间增加项目依赖安装步骤，聚焦 workflow 测试通过。
+- 本地全量回归：`python -m unittest discover -s tests`，结果为 `Ran 754 tests in 317.027s`、`OK (skipped=20)`。
+- Git 与远端 Pages 复验仍由用户执行。

@@ -1978,3 +1978,47 @@ feat: 实现 CLI keyring 与 Web 加密凭据存储
 - [ ] Web Runner 未读取或使用凭据。
 - [ ] 全量测试和 Ubuntu CI 通过。
 - [ ] README、部署文档、PLAN 和 AGENT_LOG 与行为一致。
+
+---
+
+### 合并后热修复：补齐 GitHub Pages 依赖安装
+
+**根因：** `pages.yml` 在全新 Ubuntu runner 中直接导入 `specgate.cli`，但没有像 CI 与 Docker 一样执行 `python -m pip install -e .`，因此新增的 `keyring` 依赖不可用。
+
+**Files:**
+- Create: `tests/test_workflows.py`
+- Modify: `.github/workflows/pages.yml`
+
+- [x] **Step 1: 写 Pages workflow 顺序 RED 测试**
+
+测试读取 `.github/workflows/pages.yml`，断言 `python -m pip install -e .` 存在，且位于 `run-mock-demo` 之前。
+
+- [x] **Step 2: 运行测试确认 RED**
+
+```powershell
+$env:PYTHONPATH="src"
+python -m unittest tests.test_workflows -v
+```
+
+Expected: FAIL，提示 Pages workflow 缺少依赖安装命令。
+
+- [x] **Step 3: 增加安装步骤**
+
+在 `Set up Python` 与 `Regenerate mock demo` 之间加入：
+
+```yaml
+      - name: Install package dependencies
+        run: python -m pip install -e .
+```
+
+- [x] **Step 4: 运行聚焦与全量测试**
+
+```powershell
+$env:PYTHONPATH="src"
+python -m unittest tests.test_workflows -v
+python -m unittest discover -s tests
+python -m compileall -q src tests
+git diff --check
+```
+
+Expected: 全部通过；GitHub Pages 在下一次合并到 `main` 后重新生成并部署静态站点。
