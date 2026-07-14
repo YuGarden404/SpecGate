@@ -18,6 +18,10 @@ from typing import Any, BinaryIO, Collection, Iterator
 
 QUARANTINE_NAME_MARKER = ".specgate-quarantine-"
 MAX_QUARANTINE_ENTRIES_PER_PARENT = 8
+_POSIX_OPEN_SUPPORTS_DIR_FD = os.open in os.supports_dir_fd
+_POSIX_MKDIR_SUPPORTS_DIR_FD = os.mkdir in os.supports_dir_fd
+_POSIX_STAT_SUPPORTS_DIR_FD = os.stat in os.supports_dir_fd
+_POSIX_SCANDIR_SUPPORTS_FD = os.scandir in os.supports_fd
 _LEGACY_UPLOAD_QUARANTINE_NAME_MARKER = ".specgate-upload-quarantine-"
 _QUARANTINE_PARENT_LOCK_NAME = ".specgate-quarantine.lock"
 _QUARANTINE_PARENT_LOCK_STATE = threading.local()
@@ -1052,8 +1056,8 @@ def _scan_posix_workspace(
     required = (
         hasattr(os, "O_NOFOLLOW")
         and hasattr(os, "O_DIRECTORY")
-        and os.open in os.supports_dir_fd
-        and os.scandir in os.supports_fd
+        and _POSIX_OPEN_SUPPORTS_DIR_FD
+        and _POSIX_SCANDIR_SUPPORTS_FD
     )
     if not required:
         raise WorkspacePathError(
@@ -1072,6 +1076,7 @@ def _scan_posix_workspace(
             for entry in sorted(scanner, key=lambda item: item.name):
                 relative = f"{prefix}/{entry.name}" if prefix else entry.name
                 normalized = normalize_workspace_relative(relative)
+                _reject_link_like(root / normalized)
                 try:
                     entry_stat = entry.stat(follow_symlinks=False)
                 except OSError as exc:
@@ -1212,8 +1217,8 @@ def _scan_posix_workspace_tolerant(
     required = (
         hasattr(os, "O_NOFOLLOW")
         and hasattr(os, "O_DIRECTORY")
-        and os.open in os.supports_dir_fd
-        and os.scandir in os.supports_fd
+        and _POSIX_OPEN_SUPPORTS_DIR_FD
+        and _POSIX_SCANDIR_SUPPORTS_FD
     )
     if not required:
         raise WorkspacePathError(
@@ -1775,9 +1780,9 @@ def _ensure_posix_workspace_directory(
     required = (
         hasattr(os, "O_NOFOLLOW")
         and hasattr(os, "O_DIRECTORY")
-        and os.open in os.supports_dir_fd
-        and os.mkdir in os.supports_dir_fd
-        and os.stat in os.supports_dir_fd
+        and _POSIX_OPEN_SUPPORTS_DIR_FD
+        and _POSIX_MKDIR_SUPPORTS_DIR_FD
+        and _POSIX_STAT_SUPPORTS_DIR_FD
     )
     if not required:
         raise WorkspacePathError(
@@ -1787,8 +1792,11 @@ def _ensure_posix_workspace_directory(
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     flags |= getattr(os, "O_CLOEXEC", 0)
     current_fd = _open_posix_root_fd(root, flags, root_identity)
+    current_path = root
     try:
         for part in parts:
+            current_path /= part
+            _reject_link_like(current_path)
             try:
                 before = os.stat(part, dir_fd=current_fd, follow_symlinks=False)
             except FileNotFoundError:
@@ -2315,9 +2323,9 @@ def _open_posix_workspace_fd(
     required = (
         hasattr(os, "O_NOFOLLOW")
         and hasattr(os, "O_DIRECTORY")
-        and os.open in os.supports_dir_fd
-        and os.mkdir in os.supports_dir_fd
-        and os.stat in os.supports_dir_fd
+        and _POSIX_OPEN_SUPPORTS_DIR_FD
+        and _POSIX_MKDIR_SUPPORTS_DIR_FD
+        and _POSIX_STAT_SUPPORTS_DIR_FD
     )
     if not required:
         raise WorkspacePathError(
