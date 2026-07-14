@@ -1,3 +1,4 @@
+import base64
 import os
 import sqlite3
 import threading
@@ -21,10 +22,14 @@ from fastapi.testclient import TestClient
 import specgate.workspace_fs as workspace_fs
 import specgate.web_runs as web_runs
 from specgate.web_app import create_app
+from specgate.web_credentials import WebCredentialService
 from specgate.web_db import connect_db
 from specgate.web_projects import project_paths, web_run_paths
 from specgate.web_runs import create_run, execute_run_once
 from specgate.workspace_fs import WorkspacePathError, read_workspace_bytes
+
+
+TEST_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode("ascii")
 
 
 def patch_is_junction(predicate, *, path_type=Path):
@@ -545,7 +550,7 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("evidence", debug)
 
     def test_settings_can_be_updated_and_api_key_cleared(self):
-        client, _app = self.make_client()
+        client, _app = self.make_client(credential_key=TEST_KEY)
         self.register(client)
 
         defaults = client.get("/api/settings")
@@ -569,6 +574,116 @@ class WebAppTests(unittest.TestCase):
         cleared = client.delete("/api/settings/api-key")
         self.assertEqual(cleared.status_code, 200, cleared.text)
         self.assertFalse(cleared.json()["settings"]["api_key_configured"])
+
+    def test_api_key_put_requires_configured_credential_store(self):
+        client, _app = self.make_client(credential_key=None)
+        self.register(client)
+
+        response = client.put(
+            "/api/settings/api-key",
+            json={"api_key": "SECRET_SENTINEL_missing_key"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json()["detail"]["code"],
+            "credential_store_unavailable",
+        )
+        self.assertNotIn("SECRET_SENTINEL_missing_key", response.text)
+
+    def test_api_key_is_encrypted_and_never_returned(self):
+        client, app = self.make_client(credential_key=TEST_KEY)
+        registered = self.register(client)
+        user_id = int(registered["user"]["id"])
+        db_path = app.state.db_path
+        secret = "SECRET_SENTINEL_api"
+
+        response = client.put(
+            "/api/settings/api-key",
+            json={"api_key": secret},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["settings"]["api_key_storage"],
+            "encrypted",
+        )
+        self.assertNotIn(secret, response.text)
+        self.assertNotIn(secret, repr(response.json()))
+        with closing(connect_db(db_path)) as conn:
+            row = conn.execute(
+                "select ciphertext from user_credentials"
+            ).fetchone()
+            table_names = [
+                item["name"]
+                for item in conn.execute(
+                    """
+                    select name from sqlite_master
+                    where type = 'table' and name != 'user_credentials'
+                    """
+                ).fetchall()
+            ]
+            other_values = [
+                value
+                for table_name in table_names
+                for record in conn.execute(
+                    f'select * from "{table_name}"'
+                ).fetchall()
+                for value in record
+            ]
+        self.assertNotIn(secret.encode("utf-8"), row["ciphertext"])
+        self.assertNotIn(secret, repr(other_values))
+
+        project = self.create_project(client)
+        run = create_run(
+            db_path,
+            int(project["id"]),
+            user_id,
+            "Build the result",
+            data_root=app.state.data_root,
+        )
+        execute_run_once(db_path, app.state.data_root, int(run["id"]))
+        trace_path = (
+            web_run_paths(
+                project_paths(
+                    app.state.data_root,
+                    user_id,
+                    int(project["id"]),
+                ),
+                int(run["id"]),
+            ).audit
+            / "trace.jsonl"
+        )
+        self.assertNotIn(secret, trace_path.read_text(encoding="utf-8"))
+
+    def test_delete_works_without_master_key(self):
+        client, app = self.make_client(credential_key=TEST_KEY)
+        registered = self.register(client)
+        user_id = int(registered["user"]["id"])
+        stored = client.put(
+            "/api/settings/api-key",
+            json={"api_key": "secret-value"},
+        )
+        self.assertEqual(stored.status_code, 200, stored.text)
+        app.state.web_credentials = WebCredentialService.from_key_value(
+            app.state.db_path,
+            None,
+        )
+
+        response = client.delete("/api/settings/api-key")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["settings"]["api_key_configured"])
+        self.assertEqual(
+            response.json()["settings"]["api_key_storage"],
+            "not_stored",
+        )
+        with closing(connect_db(app.state.db_path)) as conn:
+            count = conn.execute(
+                "select count(*) from user_credentials where user_id = ?",
+                (user_id,),
+            ).fetchone()[0]
+        self.assertEqual(count, 0)
 
     def test_artifact_endpoints_return_404_when_artifacts_are_missing(self):
         client, _app = self.make_client()
@@ -891,14 +1006,17 @@ class WebAppTests(unittest.TestCase):
             override = Path(tmp) / "custom-data"
             with patch.dict(
                 "os.environ",
-                {"SPECGATE_WEB_DATA": str(override), "SPECGATE_WEB_SECRET": "server-secret"},
+                {
+                    "SPECGATE_WEB_DATA": str(override),
+                    "SPECGATE_WEB_CREDENTIAL_KEY": TEST_KEY,
+                },
                 clear=False,
             ):
                 app = create_app()
 
             self.assertEqual(app.state.data_root, override)
             self.assertEqual(app.state.db_path, override / "web.sqlite3")
-            self.assertEqual(app.state.api_key_encryption_secret, "server-secret")
+            self.assertIsNotNone(app.state.web_credentials.cipher)
 
     def test_create_app_recovers_interrupted_run_initializations_after_database_setup(self):
         with tempfile.TemporaryDirectory() as tmp:

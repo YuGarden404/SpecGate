@@ -32,7 +32,7 @@ from specgate.trace import redact
 from specgate.web_auth import utc_now
 from specgate.web_db import connect_db
 from specgate.web_projects import ProjectPaths, RunPaths, project_paths, web_run_paths
-from specgate.web_settings import get_settings
+from specgate.web_settings import get_runtime_settings
 from specgate.workspace_fs import (
     WorkspaceTreeRenameError,
     open_workspace_file,
@@ -487,7 +487,7 @@ def execute_run_once(
             return
 
         index_before = _index_signature(paths.workspace / "index.html")
-        settings = get_settings(db_path, int(run["user_id"]))
+        settings = get_runtime_settings(db_path, int(run["user_id"]))
         settings = {**settings, "review_existing_writes": review_existing_writes}
         result = _run_mock_agent(paths, settings)
         queue = ApprovalQueue.read(paths.approval_queue)
@@ -595,7 +595,7 @@ def resume_run_once(
             return None
 
         index_before = _index_signature(paths.workspace / "index.html")
-        settings = get_settings(db_path, user_id)
+        settings = get_runtime_settings(db_path, user_id)
         settings = {**settings, "review_existing_writes": review_existing_writes}
         result = _run_resume_agent(paths, settings)
         queue = ApprovalQueue.read(paths.approval_queue)

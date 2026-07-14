@@ -2,9 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-from pathlib import Path
+from typing import Mapping
+
+from specgate.credential_store import (
+    CredentialStore,
+    CredentialStoreUnavailable,
+    KeyringCredentialStore,
+)
 
 
+MAX_CREDENTIAL_CHARS = 4096
 ENV_NAMES = {
     "openai": "OPENAI_API_KEY",
     "openai-compatible": "OPENAI_COMPATIBLE_API_KEY",
@@ -19,122 +26,109 @@ class CredentialStatus:
     provider: str
     configured: bool
     safe_to_run: bool
+    source: str
     message: str
 
 
-def credential_status(provider: str, env_file: Path | None = None) -> CredentialStatus:
-    return credential_status_from_env(provider, env_file)
+def _store(store: CredentialStore | None) -> CredentialStore:
+    return store if store is not None else KeyringCredentialStore()
 
 
-def _env_name(provider: str) -> str:
-    return ENV_NAMES[provider]
-
-
-def _unsupported_status(provider: str) -> CredentialStatus:
-    return CredentialStatus(
-        provider=provider,
-        configured=False,
-        safe_to_run=False,
-        message=f"{provider} provider is not supported by the credential fallback",
-    )
-
-
-def _read_env_file(env_file: Path) -> dict[str, str]:
-    if not env_file.exists():
-        return {}
-    values: dict[str, str] = {}
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        if not line or line.strip().startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip()
-    return values
-
-
-def _write_env_file(env_file: Path, values: dict[str, str]) -> None:
-    lines = [f"{key}={value}" for key, value in sorted(values.items())]
-    if lines:
-        env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    elif env_file.exists():
-        env_file.unlink()
-
-
-def _set_env_line(env_file: Path, key: str, value: str) -> None:
-    lines = env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []
-    output: list[str] = []
-    replaced = False
-    for line in lines:
-        stripped = line.lstrip()
-        candidate = stripped.removeprefix("export ").split("=", 1)[0].strip() if "=" in stripped else ""
-        if candidate == key:
-            output.append(f"{key}={value}")
-            replaced = True
-        else:
-            output.append(line)
-    if not replaced:
-        output.append(f"{key}={value}")
-    env_file.write_text("\n".join(output) + "\n", encoding="utf-8")
-
-
-def _remove_env_line(env_file: Path, key: str) -> None:
-    if not env_file.exists():
-        return
-    output: list[str] = []
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        stripped = line.lstrip()
-        candidate = stripped.removeprefix("export ").split("=", 1)[0].strip() if "=" in stripped else ""
-        if candidate != key:
-            output.append(line)
-    env_file.write_text("\n".join(output) + ("\n" if output else ""), encoding="utf-8")
-
-
-def credential_status_from_env(provider: str, env_file: Path | None = None) -> CredentialStatus:
+def _validate_provider(provider: str) -> None:
     if provider == "mock":
-        return CredentialStatus("mock", True, True, "mock mode does not require credentials")
+        return
     if provider not in SUPPORTED_PROVIDERS:
-        return _unsupported_status(provider)
-    env_name = _env_name(provider)
-    configured = bool(os.environ.get(env_name))
-    if not configured and env_file is not None:
-        configured = bool(_read_env_file(env_file).get(env_name))
-    if configured:
+        raise ValueError(f"unsupported provider: {provider}")
+
+
+def _validate_secret(secret: str) -> str:
+    normalized = secret.strip()
+    if not normalized or len(normalized) > MAX_CREDENTIAL_CHARS:
+        raise ValueError("invalid_credential")
+    if any(ord(char) < 32 or ord(char) == 127 for char in normalized):
+        raise ValueError("invalid_credential")
+    return normalized
+
+
+def read_credential(
+    provider: str,
+    *,
+    store: CredentialStore | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> str | None:
+    _validate_provider(provider)
+    if provider == "mock":
+        return None
+    values = os.environ if environ is None else environ
+    environment_value = values.get(ENV_NAMES[provider])
+    if environment_value:
+        return environment_value
+    return _store(store).get(provider)
+
+
+def credential_status(
+    provider: str,
+    *,
+    store: CredentialStore | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> CredentialStatus:
+    if provider == "mock":
         return CredentialStatus(
-            provider=provider,
-            configured=True,
-            safe_to_run=True,
-            message=f"{provider} credential is configured via {env_name}; secret value is hidden",
+            "mock",
+            True,
+            True,
+            "mock",
+            "mock mode does not require credentials",
+        )
+    _validate_provider(provider)
+    values = os.environ if environ is None else environ
+    if values.get(ENV_NAMES[provider]):
+        return CredentialStatus(
+            provider,
+            True,
+            True,
+            "environment",
+            f"{provider} credential is configured via environment",
+        )
+    try:
+        configured = bool(_store(store).get(provider))
+    except CredentialStoreUnavailable:
+        return CredentialStatus(
+            provider,
+            False,
+            False,
+            "unavailable",
+            "credential store is unavailable",
         )
     return CredentialStatus(
-        provider=provider,
-        configured=False,
-        safe_to_run=False,
-        message=f"{provider} credential is not configured; use credentials set or OS keyring before enabling this provider",
+        provider,
+        configured,
+        configured,
+        "keyring" if configured else "none",
+        (
+            f"{provider} credential is configured via system keyring"
+            if configured
+            else f"{provider} credential is not configured"
+        ),
     )
 
 
-def read_credential(provider: str, env_file: Path | None = None) -> str | None:
-    if provider not in SUPPORTED_PROVIDERS:
-        return None
-    env_name = _env_name(provider)
-    value = os.environ.get(env_name)
-    if value:
-        return value
-    if env_file is not None:
-        return _read_env_file(env_file).get(env_name)
-    return None
-
-
-def set_credential(provider: str, secret: str, env_file: Path) -> None:
+def set_credential(
+    provider: str,
+    secret: str,
+    *,
+    store: CredentialStore | None = None,
+) -> None:
+    _validate_provider(provider)
     if provider == "mock":
         raise ValueError("mock provider does not need credentials")
-    if provider not in SUPPORTED_PROVIDERS:
-        raise ValueError(f"unsupported provider: {provider}")
-    if not secret:
-        raise ValueError("secret must be non-empty")
-    _set_env_line(env_file, _env_name(provider), secret)
+    _store(store).set(provider, _validate_secret(secret))
 
 
-def clear_credential(provider: str, env_file: Path) -> None:
-    if provider not in SUPPORTED_PROVIDERS:
-        raise ValueError(f"unsupported provider: {provider}")
-    _remove_env_line(env_file, _env_name(provider))
+def clear_credential(
+    provider: str,
+    *,
+    store: CredentialStore | None = None,
+) -> None:
+    _validate_provider(provider)
+    _store(store).clear(provider)

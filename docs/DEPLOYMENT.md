@@ -31,11 +31,22 @@ docker build -t specgate:local .
 在本机运行 WebUI：
 
 ```powershell
+$bytes = New-Object byte[] 32
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+try {
+  $rng.GetBytes($bytes)
+} finally {
+  $rng.Dispose()
+}
+$credentialKey = [Convert]::ToBase64String($bytes).Replace("+", "-").Replace("/", "_")
+
 docker run --rm -p 8000:8000 `
-  -e SPECGATE_WEB_SECRET="local-dev-secret-change-me" `
+  -e SPECGATE_WEB_CREDENTIAL_KEY="$credentialKey" `
   -v "${PWD}\var\specgate_web_docker:/data/specgate-web" `
   specgate:local
 ```
+
+`SPECGATE_WEB_CREDENTIAL_KEY` 必须是 32 个随机字节的 URL-safe Base64 编码。主密钥缺失时，WebUI 的 MockLLM、项目和运行功能仍可使用，但保存 API key 会失败关闭。
 
 打开：
 
@@ -62,12 +73,13 @@ docker build -t specgate:latest .
 mkdir -p /opt/specgate/data
 ```
 
-生成一个随机 `SPECGATE_WEB_SECRET`。可以使用：
+生成一个随机 `SPECGATE_WEB_CREDENTIAL_KEY`：
 
 ```bash
 python - <<'PY'
-import secrets
-print(secrets.token_urlsafe(48))
+import base64
+import os
+print(base64.urlsafe_b64encode(os.urandom(32)).decode("ascii"))
 PY
 ```
 
@@ -78,7 +90,7 @@ docker run -d \
   --name specgate-web \
   --restart unless-stopped \
   -p 8000:8000 \
-  -e SPECGATE_WEB_SECRET="<替换为上一步生成的随机密钥>" \
+  -e SPECGATE_WEB_CREDENTIAL_KEY="<替换为上一步生成的主密钥>" \
   -e SPECGATE_WEB_DATA="/data/specgate-web" \
   -v /opt/specgate/data:/data/specgate-web \
   specgate:latest
@@ -165,7 +177,7 @@ docker run -d \
   --name specgate-web \
   --restart unless-stopped \
   -p 8000:8000 \
-  -e SPECGATE_WEB_SECRET="<原来的随机密钥>" \
+  -e SPECGATE_WEB_CREDENTIAL_KEY="<原来的主密钥>" \
   -e SPECGATE_WEB_DATA="/data/specgate-web" \
   -v /opt/specgate/data:/data/specgate-web \
   specgate:latest
@@ -179,8 +191,9 @@ tar -czf specgate-data-backup.tar.gz -C /opt/specgate data
 
 ## 7. 安全边界
 
-- 不要提交 `.env`、API key 或服务器密钥。
-- `SPECGATE_WEB_SECRET` 应使用随机长字符串。
-- 当前 WebUI 默认仍使用 MockLLM，不会自动调用真实模型。
+- 不要把 `.env`、API key 或 `SPECGATE_WEB_CREDENTIAL_KEY` 提交到 Git。
+- 主密钥必须与 SQLite 备份分开保存；只有同时持有数据库和主密钥才能恢复已加密凭据。
+- 更换或丢失主密钥后，已有 API key 会进入“需要重新录入”状态，不能在线轮换或自动恢复。
+- 当前 WebUI 仍只运行 MockLLM；保存 API key 不会启用或调用真实模型。
 - 用户项目会被导入 WebUI 数据目录，SpecGate 不直接修改用户原始目录。
 - 生成的 HTML 以下载或源码预览为主，避免在同源认证上下文中直接执行模型生成内容。

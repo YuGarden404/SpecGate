@@ -147,27 +147,34 @@ examples/eval_cases/eval-runs/latest/results.json
 
 当前 eval 默认使用 MockLLM / StubLLM，不需要真实 API key。真实 LLM eval 是可选演示/人工实验能力，不作为确定性单元测试前提。
 
-## 真实 LLM 运行
+## CLI 凭据管理
 
-真实 LLM 是可选能力，默认演示仍然使用 `MockLLM`。当前实现支持 OpenAI Chat Completions 兼容接口，适合第三方聚合平台。
+当前课程验收、WebUI 和默认演示均使用 `MockLLM`，不需要任何凭据。CLI 保留 OpenAI Chat Completions 兼容接口作为可选人工实验能力，但不属于确定性测试或项目验收前提。
 
-先在本机隐藏录入 API key，不要把 key 粘贴到聊天记录或提交到 Git：
-
-```powershell
-$env:PYTHONPATH="src"
-python -m specgate.cli credentials set openai-compatible --env-file .env
-```
-
-然后运行：
+日常持久化使用操作系统 keyring。命令不会回显凭据明文，SpecGate 也不再读取或写入 `.env`：
 
 ```powershell
 $env:PYTHONPATH="src"
-python -m specgate.cli run examples/knowledge_nav --provider openai-compatible --model <模型名> --base-url <平台的 /v1 地址> --env-file .env --max-steps 5
+python -m specgate.cli credentials set openai-compatible
+python -m specgate.cli credentials status openai-compatible
+python -m specgate.cli credentials clear openai-compatible
 ```
 
-如果第三方平台按请求指纹拦截，可以追加 `--user-agent "<另一个可用客户端的 User-Agent>"` 做兼容性排查。
+进程环境变量的优先级高于 keyring，适合 CI 或一次性人工实验：
 
-真实模型只负责输出下一步 JSON Action。文件读写仍然经过 `Tool Registry`、`WorkspacePolicy`、快照保护和 HTML Gate；缺少凭据时 CLI 会 fail closed，不会启动 runner，也不会生成 trace。
+```powershell
+$env:OPENAI_COMPATIBLE_API_KEY="<临时凭据>"
+```
+
+在 Linux 或 Docker 中如果没有可用的 keyring backend，请显式使用进程环境变量；系统会失败关闭，不会回退到明文文件。`credentials clear` 只删除 keyring 中的值，不修改环境变量，因此 status 仍可能显示有效来源为 environment。
+
+可选兼容接口的运行示例：
+
+```powershell
+python -m specgate.cli run examples/knowledge_nav --provider openai-compatible --model <模型名> --base-url <平台的 /v1 地址> --max-steps 5
+```
+
+即使使用该可选接口，文件读写仍然经过 `Tool Registry`、`WorkspacePolicy`、快照保护和 HTML Gate；缺少安全凭据时 CLI 会 fail closed，不会启动 runner，也不会生成 trace。
 
 示例任务目录说明：
 
@@ -306,7 +313,7 @@ http://127.0.0.1:8000
 当前 WebUI 包含：
 
 - 注册、登录、退出和会话 cookie。
-- 用户设置页，可保存 API key 配置状态；当前仍然默认 `MockLLM`，不会主动调用真实 LLM。
+- 用户设置页，可用 AES-256-GCM 加密保存 API key；当前仍然只运行 `MockLLM`，保存凭据不会启用或调用真实 LLM。
 - 手动创建项目，或上传 zip 项目。上传项目必须包含 `SPEC` / `TASK_SPEC` 之一和 `CHECKLIST`，导入后会规范化为 `TASK_SPEC.md` 和 `CHECKLIST.md`；也可以包含已有 `index.html` 和其他辅助文件。
 - Codex 风格的左侧项目列表、中央任务输入、右侧预览/报告/审批/设置面板。
 - 后台 run 状态轮询：`queued`、`running`、`needs_approval`、`completed`、`failed`。
@@ -325,10 +332,10 @@ var/specgate_web/
 $env:SPECGATE_WEB_DATA="D:\path\to\specgate-web-data"
 ```
 
-部署到服务器时建议设置随机密钥：
+如需在 Web 设置页保存 API key，必须设置按 `docs/DEPLOYMENT.md` 生成的 32 字节独立主密钥：
 
 ```powershell
-$env:SPECGATE_WEB_SECRET="<随机长密钥>"
+$env:SPECGATE_WEB_CREDENTIAL_KEY="<部署文档生成的主密钥>"
 ```
 
 如果使用 `http://公网IP:8000` 直接检查，不要开启 secure cookies；只有在 HTTPS 反向代理已经配置完成时，才设置：
@@ -337,7 +344,7 @@ $env:SPECGATE_WEB_SECRET="<随机长密钥>"
 $env:SPECGATE_WEB_SECURE_COOKIES="1"
 ```
 
-`SPECGATE_WEB_SECRET` 只用于 API key 配置状态的保护摘要；会话仍使用数据库里的随机 session token。WebUI 默认仍是 MockLLM，不会因为设置了 API key 就调用真实 LLM。
+Web API key 使用独立的 `SPECGATE_WEB_CREDENTIAL_KEY` 主密钥加密，不能复用其他服务密钥；生成、备份和恢复方式见 `docs/DEPLOYMENT.md`。会话仍使用数据库里的随机 session token。WebUI 仍只运行 MockLLM，不会因为保存 API key 就调用真实 LLM。
 
 上传 zip 当前限制为 5 MiB。导入逻辑会拒绝绝对路径、路径逃逸、Windows 盘符、反斜杠路径和空路径，避免 zip 内容写出隔离目录。
 
@@ -354,8 +361,9 @@ docker build -t specgate:local .
 本地运行 WebUI：
 
 ```powershell
+$credentialKey = $env:SPECGATE_WEB_CREDENTIAL_KEY
 docker run --rm -p 8000:8000 `
-  -e SPECGATE_WEB_SECRET="local-dev-secret-change-me" `
+  -e SPECGATE_WEB_CREDENTIAL_KEY="$credentialKey" `
   -v "${PWD}\var\specgate_web_docker:/data/specgate-web" `
   specgate:local
 ```
@@ -395,7 +403,7 @@ python -m unittest discover -s tests -v
 
 ## 安全边界
 
-Mock 模式不需要任何凭据。真实 LLM 支持如果后续加入，必须使用 credential manager，不能打印、记录或提交密钥。当前 CLI 提供 `specgate credentials status/set/clear <provider>` 的最低实现，使用 `.env` 作为本地开发 fallback；`.env` 已被忽略，命令不会回显密钥明文。
+Mock 模式不需要任何凭据。CLI 的 `specgate credentials status/set/clear <provider>` 使用系统 keyring，进程环境变量具有最高优先级；SpecGate 不读写 `.env`，keyring 不可用时失败关闭，也不会回退到明文文件。Web 凭据使用独立主密钥和 AES-256-GCM 加密，响应、异常、Trace 与普通数据库表不得出现凭据明文。
 
 运行期间，SpecGate 会对允许写入的文件建立快照。`write_file` / `replace_file` 写入前会检查目标文件是否被外部修改；如果用户在 run 期间改过文件，harness 会阻止覆盖并在 trace 中记录 blocked tool result。
 

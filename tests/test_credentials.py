@@ -1,14 +1,43 @@
-import tempfile
 import unittest
-from pathlib import Path
-from unittest.mock import patch
 
-from specgate.credentials import CredentialStatus, clear_credential, credential_status, set_credential
+from specgate.credential_store import CredentialStoreUnavailable
+from specgate.credentials import (
+    CredentialStatus,
+    clear_credential,
+    credential_status,
+    read_credential,
+    set_credential,
+)
+
+
+class MemoryStore:
+    def __init__(self):
+        self.values = {}
+
+    def get(self, provider):
+        return self.values.get(provider)
+
+    def set(self, provider, secret):
+        self.values[provider] = secret
+
+    def clear(self, provider):
+        self.values.pop(provider, None)
+
+
+class UnavailableStore:
+    def get(self, provider):
+        raise CredentialStoreUnavailable("credential store is unavailable")
+
+    def set(self, provider, secret):
+        raise CredentialStoreUnavailable("credential store is unavailable")
+
+    def clear(self, provider):
+        raise CredentialStoreUnavailable("credential store is unavailable")
 
 
 class CredentialTests(unittest.TestCase):
     def test_mock_mode_needs_no_credentials(self):
-        status = credential_status("mock")
+        status = credential_status("mock", environ={})
 
         self.assertEqual(
             status,
@@ -16,66 +45,87 @@ class CredentialTests(unittest.TestCase):
                 provider="mock",
                 configured=True,
                 safe_to_run=True,
+                source="mock",
                 message="mock mode does not require credentials",
             ),
         )
 
-    def test_unknown_real_provider_fails_closed(self):
-        status = credential_status("localtest")
+    def test_environment_overrides_keyring(self):
+        store = MemoryStore()
+        store.set("openai-compatible", "keyring-secret")
+        environ = {"OPENAI_COMPATIBLE_API_KEY": "environment-secret"}
+
+        self.assertEqual(
+            read_credential("openai-compatible", store=store, environ=environ),
+            "environment-secret",
+        )
+        self.assertEqual(
+            credential_status(
+                "openai-compatible",
+                store=store,
+                environ=environ,
+            ).source,
+            "environment",
+        )
+
+    def test_keyring_is_used_when_environment_is_missing(self):
+        store = MemoryStore()
+        set_credential("openai-compatible", "keyring-secret", store=store)
+
+        status = credential_status(
+            "openai-compatible",
+            store=store,
+            environ={},
+        )
+
+        self.assertEqual(status.source, "keyring")
+        self.assertEqual(
+            read_credential("openai-compatible", store=store, environ={}),
+            "keyring-secret",
+        )
+        clear_credential("openai-compatible", store=store)
+        self.assertFalse(
+            credential_status(
+                "openai-compatible",
+                store=store,
+                environ={},
+            ).configured
+        )
+
+    def test_clear_does_not_hide_active_environment_variable(self):
+        store = MemoryStore()
+        store.set("openai", "keyring-secret")
+        environ = {"OPENAI_API_KEY": "environment-secret"}
+
+        clear_credential("openai", store=store)
+        status = credential_status("openai", store=store, environ=environ)
+
+        self.assertTrue(status.configured)
+        self.assertEqual(status.source, "environment")
+
+    def test_unavailable_keyring_fails_closed_without_leaking_secret(self):
+        sentinel = "SECRET_SENTINEL_unavailable"
+
+        status = credential_status("openai", store=UnavailableStore(), environ={})
 
         self.assertFalse(status.configured)
         self.assertFalse(status.safe_to_run)
-        self.assertNotIn("sk-", status.message)
+        self.assertEqual(status.source, "unavailable")
+        self.assertNotIn(sentinel, status.message)
 
-    def test_unknown_provider_fails_closed_even_if_env_var_exists(self):
-        with patch.dict("os.environ", {"SPECGATE_LOCALTEST_API_KEY": "secret"}, clear=False):
-            status = credential_status("localtest")
+    def test_set_rejects_empty_oversized_and_control_character_secrets(self):
+        store = MemoryStore()
 
-        self.assertFalse(status.configured)
-        self.assertFalse(status.safe_to_run)
+        for secret in ("", "x" * 4097, "valid\nsecret"):
+            with self.subTest(secret_length=len(secret)):
+                with self.assertRaisesRegex(ValueError, "invalid_credential"):
+                    set_credential("openai", secret, store=store)
 
-    def test_env_file_credential_lifecycle(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            env_file = Path(tmp) / ".env"
+        self.assertEqual(store.values, {})
 
-            set_credential("openai", "sk-test-secret-123456", env_file)
-            status = credential_status("openai", env_file)
-
-            self.assertTrue(status.configured)
-            self.assertTrue(status.safe_to_run)
-            self.assertNotIn("sk-test-secret", status.message)
-            self.assertIn("OPENAI_API_KEY=", env_file.read_text(encoding="utf-8"))
-
-            clear_credential("openai", env_file)
-            cleared = credential_status("openai", env_file)
-
-            self.assertFalse(cleared.configured)
-            self.assertFalse(cleared.safe_to_run)
-
-    def test_openai_compatible_provider_uses_dedicated_env_name(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            env_file = Path(tmp) / ".env"
-
-            set_credential("openai-compatible", "sk-compatible-secret", env_file)
-            status = credential_status("openai-compatible", env_file)
-
-            self.assertTrue(status.configured)
-            self.assertTrue(status.safe_to_run)
-            self.assertIn("OPENAI_COMPATIBLE_API_KEY=", env_file.read_text(encoding="utf-8"))
-            self.assertNotIn("sk-compatible-secret", status.message)
-
-    def test_env_file_updates_preserve_unrelated_content(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            env_file = Path(tmp) / ".env"
-            env_file.write_text("# local settings\nOTHER=value\n\n", encoding="utf-8")
-
-            set_credential("openai", "sk-test-secret-123456", env_file)
-            clear_credential("openai", env_file)
-            text = env_file.read_text(encoding="utf-8")
-
-            self.assertIn("# local settings", text)
-            self.assertIn("OTHER=value", text)
-            self.assertNotIn("OPENAI_API_KEY", text)
+    def test_unknown_provider_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "unsupported provider"):
+            credential_status("localtest", store=MemoryStore(), environ={})
 
 
 if __name__ == "__main__":

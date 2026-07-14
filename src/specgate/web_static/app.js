@@ -1382,6 +1382,19 @@ function renderApprovalsDetail(content) {
   content.append(wrapper);
 }
 
+function credentialStateLabel(settings) {
+  if (settings.api_key_requires_reentry) {
+    return "API Key：需要重新录入";
+  }
+  if (!settings.credential_store_available) {
+    return "API Key：安全存储不可用";
+  }
+  if (settings.api_key_configured && settings.api_key_storage === "encrypted") {
+    return "API Key：已加密存储";
+  }
+  return "API Key：未配置";
+}
+
 function renderSettingsDetail(content) {
   const card = el("section", { className: "detail-card stack" });
   card.append(el("h2", {}, ["设置"]));
@@ -1394,7 +1407,7 @@ function renderSettingsDetail(content) {
       ["治理策略", settings.governance_profile],
       ["上下文策略", settings.context_strategy],
       ["LLM 模式", settings.llm_mode],
-      ["API Key", settings.api_key_configured ? "已配置" : "未配置"],
+      ["API Key", credentialStateLabel(settings)],
       ["存储方式", settings.api_key_storage],
     ]) {
       dl.append(el("dt", {}, [label]), el("dd", {}, [value]));
@@ -1484,10 +1497,7 @@ async function loadSettings() {
   if (contextStrategy) {
     contextStrategy.value = state.settings.context_strategy;
   }
-  setText(
-    "settings-api-state",
-    state.settings.api_key_configured ? "API Key：已配置" : "API Key：未配置",
-  );
+  setText("settings-api-state", credentialStateLabel(state.settings));
 }
 
 async function updateSettings(event) {
