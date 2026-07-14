@@ -16,7 +16,7 @@ from specgate.approvals import (
 from specgate.benchmark import summarize_benchmark
 from specgate.config import WorkspaceConfig, load_workspace_config
 from specgate.context import VALID_CONTEXT_STRATEGIES
-from specgate.credentials import clear_credential, credential_status_from_env, read_credential, set_credential
+from specgate.credentials import clear_credential, credential_status, read_credential, set_credential
 from specgate.eval_runner import run_eval_suite
 from specgate.gate import run_html_gate
 from specgate.llm import LLMProviderError, MockLLM, OpenAICompatibleLLM
@@ -578,22 +578,21 @@ def run_real_llm(
     provider: str,
     model: str,
     base_url: str,
-    env_file: Path,
     max_steps: int,
     user_agent: str,
     timeout: float,
     governance_profile: str | None = None,
 ) -> int:
-    status = credential_status_from_env(provider, env_file)
+    status = credential_status(provider)
     if not status.safe_to_run:
         print(status.message)
         return 1
     if provider != "openai-compatible":
         print(f"{provider} is configured, but SpecGate run currently supports openai-compatible only")
         return 1
-    api_key = read_credential(provider, env_file)
+    api_key = read_credential(provider)
     if not api_key:
-        print(status.message)
+        print(f"{provider} credential is not configured")
         return 1
 
     llm = OpenAICompatibleLLM(
@@ -636,7 +635,6 @@ def run_real_eval(
     provider: str,
     model: str | None,
     base_url: str | None,
-    env_file: Path,
     max_steps: int,
     user_agent: str,
     timeout: float,
@@ -650,16 +648,16 @@ def run_real_eval(
     if not base_url:
         print("--base-url is required when --provider is used")
         return 1
-    status = credential_status_from_env(provider, env_file)
+    status = credential_status(provider)
     if not status.safe_to_run:
         print(status.message)
         return 1
     if provider != "openai-compatible":
         print(f"{provider} is configured, but SpecGate eval currently supports openai-compatible only")
         return 1
-    api_key = read_credential(provider, env_file)
+    api_key = read_credential(provider)
     if not api_key:
-        print(status.message)
+        print(f"{provider} credential is not configured")
         return 1
 
     def llm_factory(_case):
@@ -745,7 +743,6 @@ def main(argv: list[str] | None = None) -> int:
     real_run.add_argument("--provider", default="openai-compatible")
     real_run.add_argument("--model", required=True)
     real_run.add_argument("--base-url", required=True)
-    real_run.add_argument("--env-file", default=".env")
     real_run.add_argument("--max-steps", type=int, default=5)
     real_run.add_argument("--user-agent", default="SpecGate/0.1 OpenAI-Compatible")
     real_run.add_argument("--timeout", type=float, default=60)
@@ -764,7 +761,6 @@ def main(argv: list[str] | None = None) -> int:
     eval_parser.add_argument("--provider")
     eval_parser.add_argument("--model")
     eval_parser.add_argument("--base-url")
-    eval_parser.add_argument("--env-file", default=".env")
     eval_parser.add_argument("--max-steps", type=int, default=5)
     eval_parser.add_argument("--user-agent", default="SpecGate/0.1 OpenAI-Compatible")
     eval_parser.add_argument("--timeout", type=float, default=60)
@@ -786,11 +782,12 @@ def main(argv: list[str] | None = None) -> int:
     for command in ("status", "clear"):
         item = credentials_sub.add_parser(command)
         item.add_argument("provider")
-        item.add_argument("--env-file", default=".env")
     set_parser = credentials_sub.add_parser("set")
     set_parser.add_argument("provider")
-    set_parser.add_argument("--env-file", default=".env")
-    set_parser.add_argument("--value")
+    set_parser.add_argument(
+        "--value",
+        help="自动化输入；凭据可能留在命令行历史中，日常使用请省略此参数",
+    )
     approvals = sub.add_parser("approvals")
     approvals_sub = approvals.add_subparsers(dest="approvals_command", required=True)
     approvals_list = approvals_sub.add_parser("list")
@@ -811,7 +808,6 @@ def main(argv: list[str] | None = None) -> int:
             provider=args.provider,
             model=args.model,
             base_url=args.base_url,
-            env_file=Path(args.env_file),
             max_steps=args.max_steps,
             user_agent=args.user_agent,
             timeout=args.timeout,
@@ -831,7 +827,6 @@ def main(argv: list[str] | None = None) -> int:
                 provider=args.provider,
                 model=args.model,
                 base_url=args.base_url,
-                env_file=Path(args.env_file),
                 max_steps=args.max_steps,
                 user_agent=args.user_agent,
                 timeout=args.timeout,
@@ -865,19 +860,25 @@ def main(argv: list[str] | None = None) -> int:
             suite=args.suite,
         )
     if args.command == "credentials":
-        env_file = Path(args.env_file)
         if args.credentials_command == "status":
-            status = credential_status_from_env(args.provider, env_file)
+            status = credential_status(args.provider)
             print(status.message)
             return 0 if status.safe_to_run else 1
         if args.credentials_command == "set":
             secret = args.value if args.value is not None else getpass.getpass("API key: ")
-            set_credential(args.provider, secret, env_file)
-            print(f"{args.provider} credential saved to {env_file}; secret value hidden")
+            set_credential(args.provider, secret)
+            print(
+                f"{args.provider} credential saved to system keyring; "
+                "secret value hidden"
+            )
             return 0
         if args.credentials_command == "clear":
-            clear_credential(args.provider, env_file)
-            print(f"{args.provider} credential cleared from {env_file}")
+            clear_credential(args.provider)
+            status = credential_status(args.provider)
+            print(
+                f"{args.provider} keyring credential cleared; "
+                f"effective source={status.source}"
+            )
             return 0
     if args.command == "approvals":
         if args.approvals_command == "list":

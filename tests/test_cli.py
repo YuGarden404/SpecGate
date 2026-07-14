@@ -19,6 +19,20 @@ from specgate.runner import AgentRunner
 from specgate.workspace_fs import WorkspacePathError
 
 
+class MemoryCredentialStore:
+    def __init__(self):
+        self.values = {}
+
+    def get(self, provider):
+        return self.values.get(provider)
+
+    def set(self, provider, secret):
+        self.values[provider] = secret
+
+    def clear(self, provider):
+        self.values.pop(provider, None)
+
+
 class CliTests(unittest.TestCase):
     def _write_eval_case(self, root: Path, case_id: str = "real-case") -> Path:
         case = root / case_id
@@ -680,17 +694,80 @@ review_actions = ["replace_file"]
             self.assertNotIn("Traceback", text)
 
     def test_credentials_cli_status_set_and_clear(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            env_file = Path(tmp) / ".env"
+        store = MemoryCredentialStore()
 
-            with redirect_stdout(io.StringIO()):
-                self.assertEqual(
-                    main(["credentials", "set", "openai", "--value", "sk-test-secret-123456", "--env-file", str(env_file)]),
-                    0,
-                )
-                self.assertEqual(main(["credentials", "status", "openai", "--env-file", str(env_file)]), 0)
-                self.assertEqual(main(["credentials", "clear", "openai", "--env-file", str(env_file)]), 0)
-            self.assertFalse(env_file.exists() and "OPENAI_API_KEY" in env_file.read_text(encoding="utf-8"))
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch(
+                "specgate.credentials.KeyringCredentialStore",
+                return_value=store,
+            ),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(
+                main(
+                    [
+                        "credentials",
+                        "set",
+                        "openai",
+                        "--value",
+                        "sk-test-secret-123456",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["credentials", "status", "openai"]), 0)
+            self.assertEqual(main(["credentials", "clear", "openai"]), 0)
+
+        self.assertEqual(store.values, {})
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            main(
+                [
+                    "credentials",
+                    "status",
+                    "openai",
+                    "--env-file",
+                    ".env",
+                ]
+            )
+
+    def test_credentials_cli_never_echoes_invalid_secret(self):
+        secret = "SECRET_SENTINEL_cli\ninvalid"
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch(
+                "specgate.credentials.KeyringCredentialStore",
+                return_value=MemoryCredentialStore(),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+            self.assertRaises(ValueError) as raised,
+        ):
+            main(
+                [
+                    "credentials",
+                    "set",
+                    "openai",
+                    "--value",
+                    secret,
+                ]
+            )
+
+        self.assertNotIn(secret, stdout.getvalue())
+        self.assertNotIn(secret, stderr.getvalue())
+        self.assertNotIn(secret, repr(raised.exception))
+
+    def test_credentials_set_help_warns_about_command_history(self):
+        stdout = io.StringIO()
+
+        with redirect_stdout(stdout), self.assertRaises(SystemExit) as raised:
+            main(["credentials", "set", "--help"])
+
+        self.assertEqual(raised.exception.code, 0)
+        self.assertIn("命令行历史", stdout.getvalue())
 
     def test_eval_cli_runs_mock_suite_and_writes_results(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1041,11 +1118,17 @@ review_actions = ["replace_file"]
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            env_file = root / ".env"
             self._write_eval_case(root)
-            env_file.write_text("OPENAI_COMPATIBLE_API_KEY=sk-test-secret\n", encoding="utf-8")
 
-            with patch("specgate.cli.OpenAICompatibleLLM", FakeRealLLM), redirect_stdout(io.StringIO()) as output:
+            with (
+                patch.dict(
+                    os.environ,
+                    {"OPENAI_COMPATIBLE_API_KEY": "sk-test-secret"},
+                    clear=True,
+                ),
+                patch("specgate.cli.OpenAICompatibleLLM", FakeRealLLM),
+                redirect_stdout(io.StringIO()) as output,
+            ):
                 code = main(
                     [
                         "eval",
@@ -1058,8 +1141,6 @@ review_actions = ["replace_file"]
                         "test-model",
                         "--base-url",
                         "https://api.example.test/v1",
-                        "--env-file",
-                        str(env_file),
                         "--timeout",
                         "12",
                         "--max-steps",
@@ -1088,7 +1169,14 @@ review_actions = ["replace_file"]
             root = Path(tmp)
             self._write_eval_case(root)
 
-            with patch.dict(os.environ, {}, clear=True), redirect_stdout(io.StringIO()) as output:
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch(
+                    "specgate.credentials.KeyringCredentialStore",
+                    return_value=MemoryCredentialStore(),
+                ),
+                redirect_stdout(io.StringIO()) as output,
+            ):
                 code = main(
                     [
                         "eval",
@@ -1099,8 +1187,6 @@ review_actions = ["replace_file"]
                         "test-model",
                         "--base-url",
                         "https://api.example.test/v1",
-                        "--env-file",
-                        str(root / ".env"),
                     ]
                 )
 
@@ -1118,11 +1204,17 @@ review_actions = ["replace_file"]
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            env_file = root / ".env"
             self._write_eval_case(root)
-            env_file.write_text("OPENAI_COMPATIBLE_API_KEY=sk-test-secret\n", encoding="utf-8")
 
-            with patch("specgate.cli.OpenAICompatibleLLM", FailingRealLLM), redirect_stdout(io.StringIO()) as output:
+            with (
+                patch.dict(
+                    os.environ,
+                    {"OPENAI_COMPATIBLE_API_KEY": "sk-test-secret"},
+                    clear=True,
+                ),
+                patch("specgate.cli.OpenAICompatibleLLM", FailingRealLLM),
+                redirect_stdout(io.StringIO()) as output,
+            ):
                 code = main(
                     [
                         "eval",
@@ -1133,8 +1225,6 @@ review_actions = ["replace_file"]
                         "test-model",
                         "--base-url",
                         "https://api.example.test/v1",
-                        "--env-file",
-                        str(env_file),
                     ]
                 )
 
@@ -1162,7 +1252,14 @@ review_actions = ["replace_file"]
                 encoding="utf-8",
             )
 
-            with patch.dict(os.environ, {}, clear=True), redirect_stdout(io.StringIO()) as output:
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch(
+                    "specgate.credentials.KeyringCredentialStore",
+                    return_value=MemoryCredentialStore(),
+                ),
+                redirect_stdout(io.StringIO()) as output,
+            ):
                 exit_code = main(
                     [
                         "run",
@@ -1173,8 +1270,6 @@ review_actions = ["replace_file"]
                         "test-model",
                         "--base-url",
                         "https://api.example.test/v1",
-                        "--env-file",
-                        str(root / ".env"),
                     ]
                 )
 
@@ -1210,7 +1305,6 @@ review_actions = ["replace_file"]
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            env_file = root / ".env"
             (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
             (root / "CHECKLIST.md").write_text("- 必须包含 Spec\n- 必须包含 Gate\n", encoding="utf-8")
             (root / "specgate.toml").write_text(
@@ -1224,15 +1318,20 @@ review_actions = ["replace_file"]
                 ),
                 encoding="utf-8",
             )
-            env_file.write_text("OPENAI_COMPATIBLE_API_KEY=sk-test-secret\n", encoding="utf-8")
-
-            with patch("specgate.cli.OpenAICompatibleLLM", FakeRealLLM), redirect_stdout(io.StringIO()):
+            with (
+                patch.dict(
+                    os.environ,
+                    {"OPENAI_COMPATIBLE_API_KEY": "sk-test-secret"},
+                    clear=True,
+                ),
+                patch("specgate.cli.OpenAICompatibleLLM", FakeRealLLM),
+                redirect_stdout(io.StringIO()),
+            ):
                 exit_code = run_real_llm(
                     root=root,
                     provider="openai-compatible",
                     model="test-model",
                     base_url="https://api.example.test/v1",
-                    env_file=env_file,
                     max_steps=3,
                     user_agent="SpecGate/0.1 OpenAI-Compatible",
                     timeout=60,
@@ -1254,7 +1353,6 @@ review_actions = ["replace_file"]
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            env_file = root / ".env"
             (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
             (root / "CHECKLIST.md").write_text("", encoding="utf-8")
             (root / "specgate.toml").write_text(
@@ -1268,15 +1366,20 @@ review_actions = ["replace_file"]
                 ),
                 encoding="utf-8",
             )
-            env_file.write_text("OPENAI_COMPATIBLE_API_KEY=sk-test-secret\n", encoding="utf-8")
-
-            with patch("specgate.cli.OpenAICompatibleLLM", FailingRealLLM), redirect_stdout(io.StringIO()) as output:
+            with (
+                patch.dict(
+                    os.environ,
+                    {"OPENAI_COMPATIBLE_API_KEY": "sk-test-secret"},
+                    clear=True,
+                ),
+                patch("specgate.cli.OpenAICompatibleLLM", FailingRealLLM),
+                redirect_stdout(io.StringIO()) as output,
+            ):
                 exit_code = run_real_llm(
                     root=root,
                     provider="openai-compatible",
                     model="test-model",
                     base_url="https://api.example.test/v1",
-                    env_file=env_file,
                     max_steps=3,
                     user_agent="SpecGate/0.1 OpenAI-Compatible",
                     timeout=60,

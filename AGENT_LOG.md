@@ -747,3 +747,25 @@
 - 最终本地全量回归：`python -m unittest discover -s tests`，结果为 `Ran 731 tests in 117.018s`、`OK (skipped=20)`；跳过项为既有 Windows 符号链接或平台权限场景。
 - 最终语法与差异检查：`python -m compileall -q src tests` 与 `git diff --check` 均通过；Git 仅提示工作区文件未来可能进行 LF/CRLF 转换，没有空白错误。
 - 未执行 `git add`、`git commit`、`git push` 或 PR 操作；GitHub Ubuntu CI 等待用户提交并 push 后运行。
+
+## 2026-07-14 安全凭据存储
+
+- 分支：`feat-secure-credentials`。
+- 已确认架构：
+  - CLI 只读进程环境变量，且其优先级最高；日常持久化使用系统 keyring，不再读写 `.env`。
+  - Web 仅保存 `openai-compatible` 凭据，使用独立 `SPECGATE_WEB_CREDENTIAL_KEY`、AES-256-GCM、12 字节随机 nonce，以及绑定 user/provider/version/key id 的 AAD。
+  - 旧 HMAC 状态迁移为 `requires_reentry`；不实现在线密钥轮换。Web 和课程验收仍只运行 MockLLM。
+- Superpowers 流程：使用 `executing-plans`、`using-git-worktrees`、`test-driven-development`、`systematic-debugging`，逐任务执行 RED→GREEN；当前功能分支由用户创建，因此在现有工作区继续。
+- TDD 证据：
+  - CLI RED：旧接口不接受 `store/environ` 注入，且仍要求 `--env-file`；GREEN：`tests.test_credential_store tests.test_credentials tests.test_cli` 共 49 个测试通过。
+  - AES-GCM RED：`specgate.web_credentials` 不存在；GREEN：4 个 cipher 测试通过。
+  - 数据库 RED：schema 仍为 v1 且没有 `user_credentials`；GREEN：10 个迁移测试通过，包括幂等、回滚和新版本拒绝。
+  - Repository/Settings/Runner GREEN：62 个聚焦测试通过。
+  - Web API/静态前端 GREEN：77 个测试通过，1 个既有 Windows 权限场景跳过。
+- 数据库迁移结果：新库使用 schema v2；v1 的 HMAC 配置清除旧字段并写入 `requires_reentry`，失败事务保持 v1 状态且不留下半成品表。
+- 脱敏边界：新增 CLI stdout/stderr/异常 sentinel 回归；Web 响应、普通数据库表和运行 Trace 均验证不含 secret。
+- 最终审查修正：README 删除旧 `SPECGATE_WEB_SECRET` 启动示例，统一使用独立主密钥；CLI `credentials set --value` 帮助文本增加命令行历史泄漏风险提示，并完成 RED→GREEN 回归。
+- 最终本地全量测试：`python -m unittest discover -s tests`，结果为 `Ran 753 tests in 254.444s`、`OK (skipped=20)`；跳过项为既有 Windows 符号链接或平台权限场景。
+- 最终语法、差异和旧接口扫描均通过；旧 `--env-file` 仅保留在“应被 argparse 拒绝”的回归测试中，`hmac_sha256$legacy` 仅保留在数据库迁移测试中。
+- GitHub Ubuntu CI：等待用户提交并 push 后回填。
+- Agent 未执行任何 Git 写操作；commit、push、PR 和远端 CI 均由用户负责。

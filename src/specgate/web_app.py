@@ -24,6 +24,7 @@ from specgate.web_auth import (
     get_user_by_session,
 )
 from specgate.web_db import connect_db, init_db
+from specgate.web_credentials import WebCredentialError, WebCredentialService
 from specgate.web_debug import build_run_debug
 from specgate.web_projects import (
     ArchiveLimitError,
@@ -97,6 +98,7 @@ def create_app(
     data_root: Path | None = None,
     db_path: Path | None = None,
     secure_cookies: bool | None = None,
+    credential_key: str | None = None,
 ) -> FastAPI:
     resolved_data_root = Path(
         data_root
@@ -148,8 +150,14 @@ def create_app(
         )
     app.state.data_root = resolved_data_root
     app.state.db_path = resolved_db_path
-    app.state.api_key_encryption_secret = os.environ.get("SPECGATE_WEB_SECRET") or os.environ.get(
-        "SPECGATE_WEB_API_KEY_SECRET"
+    raw_credential_key = (
+        credential_key
+        if credential_key is not None
+        else os.environ.get("SPECGATE_WEB_CREDENTIAL_KEY")
+    )
+    app.state.web_credentials = WebCredentialService.from_key_value(
+        resolved_db_path,
+        raw_credential_key,
     )
     app.state.run_threads = []
     app.state.run_threads_lock = threading.Lock()
@@ -455,7 +463,13 @@ def create_app(
 
     @app.get("/api/settings")
     def read_settings(user=Depends(current_user)) -> dict[str, Any]:
-        return {"settings": get_settings(app.state.db_path, int(user["id"]))}
+        return {
+            "settings": get_settings(
+                app.state.db_path,
+                int(user["id"]),
+                app.state.web_credentials,
+            )
+        }
 
     @app.put("/api/settings")
     def put_settings(payload: SettingsRequest, user=Depends(current_user)) -> dict[str, Any]:
@@ -465,6 +479,7 @@ def create_app(
                 int(user["id"]),
                 payload.governance_profile,
                 payload.context_strategy,
+                app.state.web_credentials,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -477,15 +492,23 @@ def create_app(
                 app.state.db_path,
                 int(user["id"]),
                 payload.api_key,
-                app.state.api_key_encryption_secret,
+                app.state.web_credentials,
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except WebCredentialError as exc:
+            raise _http_error_for_credential_error(exc) from exc
         return {"settings": settings}
 
     @app.delete("/api/settings/api-key")
     def delete_api_key(user=Depends(current_user)) -> dict[str, Any]:
-        return {"settings": clear_api_key(app.state.db_path, int(user["id"]))}
+        try:
+            settings = clear_api_key(
+                app.state.db_path,
+                int(user["id"]),
+                app.state.web_credentials,
+            )
+        except WebCredentialError as exc:
+            raise _http_error_for_credential_error(exc) from exc
+        return {"settings": settings}
 
     static_dir = Path(__file__).with_name("web_static")
     if static_dir.is_dir():
@@ -577,6 +600,29 @@ def _http_error_for_value_error(exc: ValueError) -> HTTPException:
     message = str(exc)
     status_code = 404 if "not found" in message else 400
     return HTTPException(status_code=status_code, detail=message)
+
+
+def _http_error_for_credential_error(
+    exc: WebCredentialError,
+) -> HTTPException:
+    status_by_code = {
+        "invalid_credential": 400,
+        "credential_requires_reentry": 409,
+        "credential_store_unavailable": 503,
+        "invalid_credential_key": 503,
+        "credential_decryption_failed": 500,
+    }
+    code = exc.code
+    return HTTPException(
+        status_code=status_by_code.get(code, 500),
+        detail={
+            "code": code,
+            "message": (
+                "安全凭据操作失败 / "
+                "Secure credential operation failed"
+            ),
+        },
+    )
 
 
 def _row_dict(row) -> dict[str, Any]:

@@ -21,7 +21,6 @@ from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
 from specgate.web_projects import create_manual_project, project_paths, web_run_paths
 from specgate.web_runs import ActiveRunConflict, create_run, execute_run_once, get_run
-from specgate.web_settings import update_settings
 from specgate.workspace_fs import WorkspacePathError
 
 
@@ -971,15 +970,28 @@ class WebRunsTests(unittest.TestCase):
 
     def test_execute_run_once_uses_user_governance_and_context_settings(self):
         db_path, data_root, user, project = self.make_context()
-        update_settings(
-            db_path,
-            user["id"],
-            governance_profile="strict",
-            context_strategy="rag-select",
-        )
         run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
 
-        execute_run_once(db_path, data_root, run["id"])
+        runtime_settings = {
+            "governance_profile": "strict",
+            "context_strategy": "rag-select",
+        }
+        with patch(
+            "specgate.web_runs.get_runtime_settings",
+            return_value=runtime_settings,
+        ) as get_runtime:
+            execute_run_once(db_path, data_root, run["id"])
+
+        get_runtime.assert_called_once_with(db_path, int(user["id"]))
+        self.assertFalse(
+            {
+                "api_key",
+                "api_key_configured",
+                "api_key_ciphertext",
+                "credentials",
+            }
+            & runtime_settings.keys()
+        )
 
         paths = project_paths(data_root, user["id"], project["id"])
         run_paths = web_run_paths(paths, run["id"])

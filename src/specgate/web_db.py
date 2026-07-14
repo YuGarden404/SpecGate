@@ -2,7 +2,25 @@ import sqlite3
 from pathlib import Path
 
 
-SCHEMA = """
+LATEST_SCHEMA_VERSION = 2
+
+USER_CREDENTIALS_SCHEMA = """
+create table if not exists user_credentials (
+    user_id integer not null references users(id) on delete cascade,
+    provider text not null,
+    status text not null
+        check (status in ('configured', 'requires_reentry')),
+    ciphertext blob,
+    nonce blob,
+    key_version integer,
+    key_id text,
+    updated_at text not null default current_timestamp,
+    primary key (user_id, provider)
+);
+"""
+
+
+SCHEMA = f"""
 create table if not exists users (
     id integer primary key autoincrement,
     username text not null unique,
@@ -25,6 +43,8 @@ create table if not exists user_settings (
     api_key_configured integer not null default 0,
     api_key_ciphertext text
 );
+
+{USER_CREDENTIALS_SCHEMA}
 
 create table if not exists projects (
     id integer primary key autoincrement,
@@ -71,7 +91,7 @@ create table if not exists approvals (
     action_name text not null,
     target_path text,
     reason text,
-    preview_json text not null default '{}',
+    preview_json text not null default '{{}}',
     created_at text not null default current_timestamp,
     decided_at text
 );
@@ -84,7 +104,7 @@ create table if not exists artifacts (
     created_at text not null default current_timestamp
 );
 
-pragma user_version = 1;
+pragma user_version = 2;
 """
 
 
@@ -95,10 +115,63 @@ def connect_db(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _database_version(conn: sqlite3.Connection) -> int:
+    return int(conn.execute("pragma user_version").fetchone()[0])
+
+
+def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+    conn.execute("begin immediate")
+    try:
+        conn.execute(USER_CREDENTIALS_SCHEMA)
+        conn.execute(
+            """
+            insert or ignore into user_credentials (
+                user_id,
+                provider,
+                status
+            )
+            select
+                user_id,
+                'openai-compatible',
+                'requires_reentry'
+            from user_settings
+            where api_key_configured = 1
+               or api_key_ciphertext is not null
+            """
+        )
+        conn.execute(
+            """
+            update user_settings
+            set api_key_configured = 0,
+                api_key_ciphertext = null
+            where api_key_configured != 0
+               or api_key_ciphertext is not null
+            """
+        )
+        conn.execute("pragma user_version = 2")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = connect_db(db_path)
     try:
-        conn.executescript(SCHEMA)
+        version = _database_version(conn)
+        if version == 0:
+            conn.executescript(SCHEMA)
+            return
+        if version == 1:
+            _migrate_v1_to_v2(conn)
+            return
+        if version == LATEST_SCHEMA_VERSION:
+            conn.execute(USER_CREDENTIALS_SCHEMA)
+            conn.commit()
+            return
+        if version > LATEST_SCHEMA_VERSION:
+            raise RuntimeError("database uses a newer schema version")
+        raise RuntimeError("unsupported database schema version")
     finally:
         conn.close()

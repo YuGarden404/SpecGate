@@ -2100,3 +2100,30 @@ SPEC 覆盖：
 - [ ] Git 提交哈希：等待用户按课程要求自行分批提交后回填。
 
 本轮 Agent 不执行 `git add`、`git commit`、`git push` 或 PR 操作。所有新增行为均使用 mock/stub LLM 或纯确定性组件测试，不依赖真实 LLM 与网络。
+
+# 2026-07-14 安全凭据存储
+
+详细设计、路线与实施计划：
+
+- `docs/superpowers/specs/2026-07-14-secure-credentials-design.md`
+- `docs/superpowers/specs/2026-07-14-post-hardening-roadmap-design.md`
+- `docs/superpowers/plans/2026-07-14-secure-credentials.md`
+
+完成状态：
+
+- [x] Task 1：系统 keyring 存储边界与稳定错误包装。
+- [x] Task 2：CLI 环境变量优先、keyring 持久化并移除 `.env` 接口。
+- [x] Task 3：Web 32 字节主密钥与 AES-256-GCM 核心。
+- [x] Task 4：数据库 schema v2 与旧 HMAC `requires_reentry` 迁移。
+- [x] Task 5：Web 加密凭据 repository、Settings 状态与 Runner 隔离。
+- [x] Task 6：Web API 安全错误映射与前端凭据状态。
+- [x] Task 7：secret sentinel 回归和中文使用/部署文档。
+- [x] Task 8：全量验证与最终交付审查；本地 753 个测试通过，20 个既有平台权限场景跳过。
+
+待用户提交后回填：
+
+- Git commit：待填写。
+- PR URL：待填写。
+- GitHub Ubuntu CI：待填写。
+
+本轮仍以 MockLLM 和确定性单元测试作为验收主链路。Agent 不执行 `git add`、`git commit`、`git push` 或 PR 操作。

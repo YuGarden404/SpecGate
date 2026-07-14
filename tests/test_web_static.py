@@ -186,6 +186,15 @@ class WebStaticTests(unittest.TestCase):
             with self.subTest(function_name=function_name):
                 self.assertIn(f"async function {function_name}", app_js)
 
+    def test_settings_renders_secure_credential_states(self) -> None:
+        app_js = read_static("app.js")
+
+        self.assertIn("api_key_requires_reentry", app_js)
+        self.assertIn("credential_store_available", app_js)
+        self.assertIn("需要重新录入", app_js)
+        self.assertIn("安全存储不可用", app_js)
+        self.assertIn("已加密存储", app_js)
+
     def test_approval_requests_carry_revision_and_refresh_after_conflict(self) -> None:
         app_js = read_static("app.js")
 

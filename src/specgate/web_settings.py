@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 from pathlib import Path
 
 from specgate.approvals import VALID_GOVERNANCE_PROFILES
 from specgate.config import VALID_CONTEXT_STRATEGIES
+from specgate.web_credentials import WebCredentialService
 from specgate.web_db import connect_db
 
 
@@ -17,36 +15,62 @@ def _ensure_settings(conn, user_id: int) -> None:
     )
 
 
-def _settings_dict(row) -> dict:
-    api_key_configured = bool(row["api_key_configured"])
-    api_key_ciphertext = row["api_key_ciphertext"]
-    return {
-        "governance_profile": row["governance_profile"],
-        "context_strategy": row["context_strategy"],
-        "api_key_configured": api_key_configured,
-        "api_key_storage": "protected" if api_key_ciphertext else "not_stored",
-        "llm_mode": "mock",
-    }
-
-
-def _fetch_settings(conn, user_id: int) -> dict:
-    row = conn.execute(
-        "select * from user_settings where user_id = ?",
-        (user_id,),
-    ).fetchone()
-    if row is None:
-        raise ValueError("settings not found")
-    return _settings_dict(row)
-
-
-def get_settings(db_path: Path, user_id: int) -> dict:
+def get_runtime_settings(db_path: Path, user_id: int) -> dict:
     conn = connect_db(db_path)
     try:
         _ensure_settings(conn, user_id)
         conn.commit()
-        return _fetch_settings(conn, user_id)
+        row = conn.execute(
+            """
+            select governance_profile, context_strategy
+            from user_settings where user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("settings not found")
+        return {
+            "governance_profile": row["governance_profile"],
+            "context_strategy": row["context_strategy"],
+        }
     finally:
         conn.close()
+
+
+def get_settings(
+    db_path: Path,
+    user_id: int,
+    credentials: WebCredentialService,
+) -> dict:
+    runtime = get_runtime_settings(db_path, user_id)
+    status = credentials.status(user_id)
+    return {
+        **runtime,
+        "api_key_configured": status.configured,
+        "api_key_storage": status.storage,
+        "api_key_requires_reentry": status.requires_reentry,
+        "credential_store_available": status.store_available,
+        "llm_mode": "mock",
+    }
+
+
+def upsert_api_key(
+    db_path: Path,
+    user_id: int,
+    api_key: str,
+    credentials: WebCredentialService,
+) -> dict:
+    credentials.put(user_id, api_key)
+    return get_settings(db_path, user_id, credentials)
+
+
+def clear_api_key(
+    db_path: Path,
+    user_id: int,
+    credentials: WebCredentialService,
+) -> dict:
+    credentials.clear(user_id)
+    return get_settings(db_path, user_id, credentials)
 
 
 def update_settings(
@@ -54,12 +78,12 @@ def update_settings(
     user_id: int,
     governance_profile: str,
     context_strategy: str,
+    credentials: WebCredentialService,
 ) -> dict:
     if governance_profile not in VALID_GOVERNANCE_PROFILES:
         raise ValueError("invalid governance profile")
     if context_strategy not in VALID_CONTEXT_STRATEGIES:
         raise ValueError("invalid context strategy")
-
     conn = connect_db(db_path)
     try:
         _ensure_settings(conn, user_id)
@@ -72,60 +96,6 @@ def update_settings(
             (governance_profile, context_strategy, user_id),
         )
         conn.commit()
-        return _fetch_settings(conn, user_id)
     finally:
         conn.close()
-
-
-def upsert_api_key(
-    db_path: Path,
-    user_id: int,
-    api_key: str,
-    encryption_secret: str | None,
-) -> dict:
-    normalized_key = api_key.strip()
-    if not normalized_key:
-        raise ValueError("api key is required")
-
-    protected_value = None
-    if encryption_secret:
-        digest = hmac.new(
-            encryption_secret.encode("utf-8"),
-            normalized_key.encode("utf-8"),
-            hashlib.sha256,
-        ).digest()
-        protected_value = "hmac_sha256$" + base64.urlsafe_b64encode(digest).decode("ascii")
-
-    conn = connect_db(db_path)
-    try:
-        _ensure_settings(conn, user_id)
-        conn.execute(
-            """
-            update user_settings
-            set api_key_configured = 1, api_key_ciphertext = ?
-            where user_id = ?
-            """,
-            (protected_value, user_id),
-        )
-        conn.commit()
-        return _fetch_settings(conn, user_id)
-    finally:
-        conn.close()
-
-
-def clear_api_key(db_path: Path, user_id: int) -> dict:
-    conn = connect_db(db_path)
-    try:
-        _ensure_settings(conn, user_id)
-        conn.execute(
-            """
-            update user_settings
-            set api_key_configured = 0, api_key_ciphertext = null
-            where user_id = ?
-            """,
-            (user_id,),
-        )
-        conn.commit()
-        return _fetch_settings(conn, user_id)
-    finally:
-        conn.close()
+    return get_settings(db_path, user_id, credentials)
