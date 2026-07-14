@@ -1,152 +1,193 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SpecGate</title>
-  <link rel="stylesheet" href="/styles.css?v=20260712-6">
+  <link rel="stylesheet" href="/styles.css?v=20260712-12">
 </head>
 <body>
   <main id="auth-view" class="auth-view" hidden>
     <section class="auth-card" aria-labelledby="auth-title">
       <p class="eyebrow">SpecGate</p>
-      <h1 id="auth-title">Sign in to your workspace</h1>
+      <h1 id="auth-title">登录工作区</h1>
       <form id="auth-form" class="stack">
         <label>
-          Username
+          用户名
           <input id="auth-username" name="username" autocomplete="username" required>
         </label>
         <label>
-          Password
+          密码
           <input id="auth-password" name="password" type="password" autocomplete="current-password" minlength="8" required>
         </label>
         <div class="button-row">
-          <button type="submit">Log in</button>
-          <button id="register-button" type="button" class="secondary">Register</button>
+          <button type="submit">登录</button>
+          <button id="register-button" type="button" class="secondary">注册</button>
         </div>
       </form>
       <p id="auth-message" class="message-line" role="status"></p>
     </section>
   </main>
 
-  <main id="workspace-view" class="workspace-view" hidden>
-    <aside class="sidebar" aria-label="Projects and settings">
-      <header class="sidebar-header">
-        <div>
-          <p class="eyebrow">SpecGate</p>
-          <strong id="current-user">Workspace</strong>
-        </div>
-        <button id="logout-button" type="button" class="icon-button" title="Log out">Exit</button>
-      </header>
-
-      <div class="sidebar-actions">
-        <button id="new-project-button" type="button">New project</button>
-        <button id="refresh-button" type="button" class="secondary">Refresh</button>
+  <main id="workspace-view" class="workspace-view" lang="zh-CN" hidden>
+    <header id="app-menu-bar" class="app-menu-bar">
+      <div class="window-controls" aria-label="窗口控制">
+        <button id="sidebar-toggle-button" type="button" class="icon-button sidebar-toggle-button" title="切换侧栏" aria-label="切换侧栏">
+          <span class="sidebar-toggle-icon" aria-hidden="true"></span>
+        </button>
+        <button id="back-button" type="button" class="icon-button history-button" title="后退" aria-label="后退">←</button>
+        <button id="forward-button" type="button" class="icon-button history-button" title="前进" aria-label="前进">→</button>
       </div>
-
-      <nav id="project-list" class="project-list" aria-label="Project list"></nav>
-
-      <section id="settings-detail" class="settings-detail" aria-labelledby="settings-title">
-        <div class="section-title">
-          <h2 id="settings-title">Settings</h2>
-          <span id="settings-api-state" class="pill">API key: unknown</span>
+      <nav class="menu-bar" aria-label="应用菜单">
+        <div class="menu-group">
+          <button id="file-menu-button" type="button" class="menu-button" aria-haspopup="menu" aria-controls="file-menu" aria-expanded="false">文件</button>
+          <div id="file-menu" class="menu-popover" role="menu" hidden>
+            <button type="button" role="menuitem" data-command="new-window">
+              <span>新窗口</span>
+            </button>
+            <button type="button" role="menuitem" data-command="new-project">
+              <span>新项目</span>
+            </button>
+            <button type="button" role="menuitem" data-command="close-project">
+              <span>关闭</span>
+            </button>
+            <button type="button" role="menuitem" data-command="settings">
+              <span>设置</span>
+            </button>
+            <button id="logout-button" type="button" role="menuitem" data-command="logout">
+              <span>登出</span>
+            </button>
+            <button type="button" role="menuitem" data-command="exit">
+              <span>退出</span>
+            </button>
+          </div>
         </div>
-        <form id="settings-form" class="stack">
-          <label>
-            Governance
-            <select id="governance-profile" name="governance_profile">
-              <option value="strict">strict</option>
-              <option value="demo">demo</option>
-              <option value="review">review</option>
-            </select>
-          </label>
-          <label>
-            Context
-            <select id="context-strategy" name="context_strategy">
-              <option value="baseline">baseline</option>
-              <option value="compressed">compressed</option>
-              <option value="injection-safe">injection-safe</option>
-              <option value="rag-select">rag-select</option>
-              <option value="compressed-rag">compressed-rag</option>
-              <option value="isolated-harness">isolated-harness</option>
-            </select>
-          </label>
-          <button type="submit" class="secondary">Save settings</button>
-        </form>
-        <form id="api-key-form" class="stack compact-stack">
-          <label>
-            API key
-            <input id="api-key-input" name="api_key" type="password" autocomplete="off" placeholder="Paste key">
-          </label>
-          <div class="button-row">
-            <button type="submit" class="secondary">Store</button>
-            <button id="clear-api-key-button" type="button" class="ghost">Clear</button>
+        <div class="menu-group">
+          <button id="edit-menu-button" type="button" class="menu-button" aria-haspopup="menu" aria-controls="edit-menu" aria-expanded="false">编辑</button>
+          <div id="edit-menu" class="menu-popover" role="menu" hidden>
+            <button type="button" role="menuitem" data-command="search">
+              <span>搜索</span>
+            </button>
+          </div>
+        </div>
+        <div class="menu-group">
+          <button id="help-menu-button" type="button" class="menu-button" aria-haspopup="menu" aria-controls="help-menu" aria-expanded="false">帮助</button>
+          <div id="help-menu" class="menu-popover" role="menu" hidden>
+            <button type="button" role="menuitem" data-command="about">
+              <span>关于 SpecGate</span>
+            </button>
+          </div>
+        </div>
+      </nav>
+      <strong id="current-user" class="current-user">Workspace</strong>
+    </header>
+
+    <div class="app-shell">
+      <div id="sidebar-edge-hotzone" class="sidebar-edge-hotzone" aria-hidden="true"></div>
+      <aside id="project-sidebar" class="project-sidebar" aria-label="项目">
+        <button id="new-project-button" type="button">新项目</button>
+        <button id="search-project-button" type="button" class="secondary">搜索</button>
+        <nav id="project-list" class="project-list" aria-label="项目列表"></nav>
+        <div id="sidebar-settings-row" class="sidebar-settings-row">
+          <button id="sidebar-settings-button" type="button" class="sidebar-settings-button">
+            <span class="settings-gear" aria-hidden="true">⚙</span>
+            <span>设置</span>
+          </button>
+          <button id="sidebar-help-button" type="button" class="sidebar-help-button" aria-haspopup="menu" aria-controls="sidebar-help-menu" aria-expanded="false" aria-label="帮助">?</button>
+          <div id="sidebar-help-menu" class="menu-popover sidebar-help-menu" role="menu" hidden>
+            <button type="button" role="menuitem" data-command="sidebar-help">帮助</button>
+          </div>
+        </div>
+      </aside>
+
+      <section id="workspace-main" class="workspace-main" aria-label="工作区">
+        <header id="workspace-titlebar" class="workspace-titlebar">
+          <h1 id="project-title">选择项目</h1>
+          <div class="project-title-actions">
+            <span id="run-status-pill" class="pill">空闲</span>
+            <button id="project-menu-button" type="button" aria-haspopup="menu" aria-controls="project-menu" aria-expanded="false">详情</button>
+          </div>
+          <div id="project-menu" class="menu-popover project-menu" role="menu" hidden>
+            <button type="button" role="menuitem" data-detail-view="detail-status">状态</button>
+            <button type="button" role="menuitem" data-detail-view="detail-preview">预览</button>
+            <button type="button" role="menuitem" data-detail-view="detail-report">报告</button>
+            <button type="button" role="menuitem" data-detail-view="detail-audit">审计</button>
+            <button type="button" role="menuitem" data-detail-view="detail-approvals">审批</button>
+          </div>
+        </header>
+
+        <div class="workspace-content">
+          <div class="messages-frame">
+            <ol id="message-list" class="message-list" aria-live="polite"></ol>
+          </div>
+          <div id="detail-content" class="detail-content shell-detail" aria-live="polite" hidden></div>
+        </div>
+
+        <form id="run-form" class="composer">
+          <div class="composer-frame">
+            <label class="sr-only" for="run-prompt">运行指令</label>
+            <textarea id="run-prompt" name="prompt" rows="3" placeholder="描述希望 SpecGate 生成或修改的 HTML..." required></textarea>
+            <button type="submit">发送</button>
           </div>
         </form>
+        <p id="app-message" class="message-line" role="status"></p>
       </section>
-    </aside>
-
-    <section class="conversation" aria-label="Conversation">
-      <header class="conversation-header">
-        <div>
-          <p class="eyebrow">Project</p>
-          <h1 id="project-title">Select a project</h1>
-        </div>
-        <span id="run-status-pill" class="pill">Idle</span>
-      </header>
-
-      <ol id="message-list" class="message-list" aria-live="polite"></ol>
-
-      <form id="run-form" class="composer">
-        <label class="sr-only" for="run-prompt">Run prompt</label>
-        <textarea id="run-prompt" name="prompt" rows="3" placeholder="Describe the change SpecGate should make..." required></textarea>
-        <button type="submit">Start run</button>
-      </form>
-      <p id="app-message" class="message-line" role="status"></p>
-    </section>
-
-    <aside id="detail-panel" class="detail-panel" aria-label="Run details">
-      <div class="detail-tabs" role="tablist" aria-label="Detail tabs">
-        <button type="button" class="tab-button active" data-tab="status">Status</button>
-        <button type="button" class="tab-button" data-tab="preview">Preview</button>
-        <button type="button" class="tab-button" data-tab="report">Report</button>
-        <button type="button" class="tab-button" data-tab="audit">Audit</button>
-        <button type="button" class="tab-button" data-tab="approvals">Approvals</button>
-        <button type="button" class="tab-button" data-tab="settings">Settings</button>
-      </div>
-      <section id="detail-content" class="detail-content" aria-live="polite"></section>
-    </aside>
+    </div>
   </main>
 
   <dialog id="project-dialog">
     <form id="project-form" method="dialog" class="project-form">
       <header class="dialog-header">
-        <h2>Create manual project</h2>
-        <button id="close-project-dialog" type="button" class="icon-button" title="Close">Close</button>
+        <h2>导入项目文件</h2>
+        <button id="close-project-dialog" type="button" class="icon-button" title="关闭">关闭</button>
       </header>
       <label>
-        Name
+        项目名称
         <input id="project-name" name="name" required>
       </label>
       <label>
-        Task spec
-        <textarea id="project-spec" name="spec_text" rows="8" required></textarea>
+        任务规格 spec.md
+        <input id="project-spec-file" name="spec_file" type="file" accept=".md,text/markdown,text/plain" required>
       </label>
       <label>
-        Checklist
-        <textarea id="project-checklist" name="checklist_text" rows="6" required></textarea>
+        检查清单 checklist.md
+        <input id="project-checklist-file" name="checklist_file" type="file" accept=".md,text/markdown,text/plain" required>
       </label>
       <label>
-        Starting index.html
-        <textarea id="project-index" name="index_html" rows="6" placeholder="Optional"></textarea>
+        起始页面 index.html（可选）
+        <input id="project-index-file" name="index_file" type="file" accept=".html,text/html">
       </label>
       <div class="button-row align-end">
-        <button type="button" id="cancel-project-button" class="secondary">Cancel</button>
-        <button type="submit">Create project</button>
+        <button type="button" id="cancel-project-button" class="secondary">取消</button>
+        <button type="submit">创建项目</button>
       </div>
     </form>
   </dialog>
 
-  <script src="/app.js?v=20260712-6" defer></script>
+  <dialog id="search-dialog" class="search-dialog">
+    <div class="search-form">
+      <header class="dialog-header">
+        <h2>搜索项目</h2>
+        <button id="close-search-dialog" type="button" class="icon-button" title="关闭">关闭</button>
+      </header>
+      <label>
+        搜索
+        <input id="project-search-input" name="query" autocomplete="off" placeholder="输入项目名称">
+      </label>
+      <div id="search-results" class="search-results" aria-live="polite"></div>
+    </div>
+  </dialog>
+
+  <dialog id="about-dialog" class="about-dialog">
+    <form method="dialog" class="about-content">
+      <header class="dialog-header">
+        <h2>关于 SpecGate</h2>
+        <button id="close-about-dialog" type="button" class="icon-button" title="关闭">关闭</button>
+      </header>
+      <p>SpecGate 是面向规格驱动项目的工作台，用于导入 spec.md、checklist.md 和可选的 index.html，并跟踪运行状态、预览、报告、审计与审批。</p>
+    </form>
+  </dialog>
+
+  <script src="/app.js?v=20260712-12" defer></script>
 </body>
 </html>

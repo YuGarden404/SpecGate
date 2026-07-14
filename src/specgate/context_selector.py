@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import specgate.workspace_fs as workspace_fs
 
 TEXT_SUFFIXES = {".md", ".html", ".css", ".js", ".txt", ".toml", ".json", ".jsonl"}
 EXCLUDED_DIRS = {".git", "__pycache__", "runs", "reports", "eval-runs"}
@@ -28,13 +29,11 @@ class ContextSelection:
     used_chars: int
 
 
-def _relative(path: Path, root: Path) -> str:
-    return str(path.relative_to(root)).replace("\\", "/")
-
-
-def _is_under_excluded_dir(path: Path, root: Path) -> bool:
-    relative = path.relative_to(root)
-    return any(part in EXCLUDED_DIRS or part.startswith(".") for part in relative.parts[:-1])
+def _is_under_excluded_dir(relative_path: str) -> bool:
+    return any(
+        part in EXCLUDED_DIRS or part.startswith(".")
+        for part in relative_path.split("/")[:-1]
+    )
 
 
 def _priority(relative_path: str) -> int:
@@ -55,10 +54,6 @@ def _priority(relative_path: str) -> int:
     return 40
 
 
-def _scan_files(root: Path) -> list[Path]:
-    return sorted((path for path in root.rglob("*") if path.is_file()), key=lambda item: _relative(item, root))
-
-
 def select_context_files(
     root: Path,
     budget_chars: int = DEFAULT_BUDGET_CHARS,
@@ -67,33 +62,65 @@ def select_context_files(
     if budget_chars <= 0:
         raise ValueError("budget_chars must be positive")
 
-    candidates: list[tuple[int, str, Path]] = []
+    candidates: list[tuple[int, str]] = []
     skipped: list[ContextFile] = []
 
-    for path in _scan_files(root):
-        rel = _relative(path, root)
+    if allowed_read_paths is None:
+        scan_result = workspace_fs.scan_workspace_files(
+            root,
+            excluded_dirs=EXCLUDED_DIRS,
+        )
+        scanned_files = scan_result.files
+        scan_rejections = scan_result.rejections
+    else:
+        scanned_files = sorted(allowed_read_paths)
+        scan_rejections = []
+
+    for rejection in scan_rejections:
+        skipped.append(
+            ContextFile(
+                rejection.path,
+                "skipped",
+                f"{rejection.rule_family}: {rejection.message}",
+                0,
+                _priority(rejection.path),
+            )
+        )
+
+    for rel in scanned_files:
         priority = _priority(rel)
         if allowed_read_paths is not None and rel not in allowed_read_paths:
             continue
         if rel in EXCLUDED_FILES:
             skipped.append(ContextFile(rel, "skipped", "managed memory file", 0, priority))
             continue
-        if _is_under_excluded_dir(path, root):
+        if _is_under_excluded_dir(rel):
             skipped.append(ContextFile(rel, "skipped", "excluded runtime or hidden directory", 0, priority))
             continue
-        if path.suffix.lower() not in TEXT_SUFFIXES:
+        if Path(rel).suffix.lower() not in TEXT_SUFFIXES:
             skipped.append(ContextFile(rel, "skipped", "unsupported file suffix", 0, priority))
             continue
-        candidates.append((priority, rel, path))
+        candidates.append((priority, rel))
 
     selected: list[ContextFile] = []
     used_chars = 0
 
-    for priority, rel, path in sorted(candidates):
+    for priority, rel in sorted(candidates):
         try:
-            content = path.read_text(encoding="utf-8")
+            content = workspace_fs.read_workspace_text(root, rel, encoding="utf-8")
         except UnicodeDecodeError:
             selected.append(ContextFile(rel, "skipped", "file is not utf-8 text", 0, priority))
+            continue
+        except workspace_fs.WorkspacePathError as exc:
+            selected.append(
+                ContextFile(
+                    rel,
+                    "skipped",
+                    f"{exc.rule_family}: {exc.message}",
+                    0,
+                    priority,
+                )
+            )
             continue
         except OSError as exc:
             selected.append(ContextFile(rel, "skipped", f"read failed: {exc}", 0, priority))

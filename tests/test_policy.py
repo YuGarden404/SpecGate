@@ -41,6 +41,22 @@ class PolicyTests(unittest.TestCase):
 
             self.assertFalse(decision.allowed)
             self.assertIn("path escapes workspace", decision.reason)
+            self.assertEqual(getattr(decision, "rule_family", None), "path_escape")
+
+    def test_rejects_ambiguous_backslash_path_with_stable_rule_family(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = WorkspacePolicy(
+                Path(tmp),
+                {"read_file"},
+                {"docs/index.html"},
+                set(),
+            )
+            action = Action("1", "read_file", {"path": r"docs\index.html"})
+
+            decision = check_action(action, policy)
+
+            self.assertFalse(decision.allowed)
+            self.assertEqual(getattr(decision, "rule_family", None), "invalid_path")
 
     def test_blocks_write_outside_allowlist(self):
         with tempfile.TemporaryDirectory() as tmp:

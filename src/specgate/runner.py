@@ -14,6 +14,7 @@ from specgate.approvals import (
     capture_target_state,
     classify_action_risk,
     preview_args,
+    read_existing_approval_queue,
     target_state_matches,
 )
 from specgate.context import build_context_pack_with_metadata, build_role_context_pack_with_metadata
@@ -31,6 +32,10 @@ from specgate.trace import TraceStore, redact
 
 def _utc_now_for_runner() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _permission_rule_family(rule_family: str | None, message: str) -> str:
+    return rule_family or classify_rule_family(message)
 
 
 def _unique_approval_id(queue: ApprovalQueue, step: int) -> str:
@@ -67,6 +72,9 @@ class AgentRunner:
         context_strategy: str = "baseline",
         governance_profile: str | None = None,
         governance_config: GovernanceConfig | None = None,
+        audit_dir: Path | None = None,
+        approval_queue_file: Path | None = None,
+        reset_audit: bool = True,
     ):
         self.root = root
         self.llm = llm
@@ -77,9 +85,11 @@ class AgentRunner:
         self.governance_profile = governance_profile if governance_profile is not None else self.governance_config.profile
         snapshot = FileSnapshot.capture(root, policy.allowed_write_paths)
         self.dispatcher = ToolDispatcher(policy, snapshot)
-        self.run_dir = root / "runs" / "latest"
-        self.trace = TraceStore(self.run_dir / "trace.jsonl", reset=True)
-        self._reset_run_artifacts()
+        self.run_dir = audit_dir or root / "runs" / "latest"
+        self.approval_queue_file = approval_queue_file or approval_queue_path(root)
+        self.trace = TraceStore(self.run_dir / "trace.jsonl", reset=reset_audit)
+        if reset_audit:
+            self._reset_run_artifacts()
 
     def run(self) -> RunResult:
         if self.context_strategy == "multi-agent-isolated":
@@ -93,9 +103,7 @@ class AgentRunner:
                 path.unlink()
 
     def _reset_approval_queue(self) -> None:
-        queue_path = approval_queue_path(self.root)
-        if queue_path.exists():
-            queue_path.unlink()
+        ApprovalQueue().write(self.approval_queue_file)
 
     def _run_gate_with_feedback(
         self,
@@ -231,6 +239,7 @@ class AgentRunner:
         ok: bool,
         blocked: bool,
         message: str,
+        rule_family: str | None = None,
     ) -> None:
         decision = PermissionDecision(
             step=step,
@@ -240,7 +249,7 @@ class AgentRunner:
             blocked=blocked,
             reason=message,
             profile=self.governance_profile,
-            rule_family=classify_rule_family(message),
+            rule_family=_permission_rule_family(rule_family, message),
         )
         permission_decisions.append(decision)
         self.trace.append("permission_decision", decision.to_dict())
@@ -348,9 +357,9 @@ class AgentRunner:
         action_path_value = action.args.get("path")
         action_path = action_path_value if isinstance(action_path_value, str) else None
         risk = classify_action_risk(action, self.policy, self.governance_config)
-        queue_path = approval_queue_path(self.root)
+        queue_path = self.approval_queue_file
         if risk.level == "review" and self.governance_profile == "review":
-            queue = ApprovalQueue.read(queue_path)
+            queue = read_existing_approval_queue(queue_path)
             approval = PendingApproval(
                 id=_unique_approval_id(queue, step),
                 step=step,
@@ -376,6 +385,7 @@ class AgentRunner:
                 ok=False,
                 blocked=False,
                 message=risk.reason,
+                rule_family=risk.rule_family,
             )
             metrics = replace(
                 metrics,
@@ -401,6 +411,7 @@ class AgentRunner:
                 ok=False,
                 blocked=True,
                 message=risk.reason,
+                rule_family=risk.rule_family,
             )
             self._record_tool_feedback(
                 runtime_feedback,
@@ -429,6 +440,7 @@ class AgentRunner:
             ok=tool_result.ok,
             blocked=tool_result.blocked,
             message=tool_result.message,
+            rule_family=getattr(tool_result, "rule_family", None),
         )
         runtime_feedback.append(
             redact(
@@ -635,7 +647,7 @@ class AgentRunner:
         initial_permission_decisions: list[PermissionDecision] | None = None,
         latest_gate: GateResult | None = None,
     ) -> RunResult:
-        queue_path = approval_queue_path(self.root)
+        queue_path = self.approval_queue_file
         if reset_queue:
             self._reset_approval_queue()
 
@@ -679,7 +691,7 @@ class AgentRunner:
             action_path = action_path_value if isinstance(action_path_value, str) else None
             risk = classify_action_risk(action, self.policy, self.governance_config)
             if risk.level == "review" and self.governance_profile == "review":
-                queue = ApprovalQueue.read(queue_path)
+                queue = read_existing_approval_queue(queue_path)
                 approval = PendingApproval(
                     id=_unique_approval_id(queue, step),
                     step=step,
@@ -705,6 +717,7 @@ class AgentRunner:
                     ok=False,
                     blocked=False,
                     message=risk.reason,
+                    rule_family=risk.rule_family,
                 )
                 metrics = replace(
                     metrics,
@@ -730,6 +743,7 @@ class AgentRunner:
                     ok=False,
                     blocked=True,
                     message=risk.reason,
+                    rule_family=risk.rule_family,
                 )
                 self._record_tool_feedback(
                     runtime_feedback,
@@ -760,6 +774,7 @@ class AgentRunner:
                 ok=tool_result.ok,
                 blocked=tool_result.blocked,
                 message=tool_result.message,
+                rule_family=getattr(tool_result, "rule_family", None),
             )
             runtime_feedback.append(
                 redact(
@@ -790,8 +805,8 @@ class AgentRunner:
         return self._finish_result(self.max_steps, latest_gate, metrics, permission_decisions)
 
     def resume_from_approval(self) -> RunResult:
-        queue_path = approval_queue_path(self.root)
-        queue = ApprovalQueue.read(queue_path)
+        queue_path = self.approval_queue_file
+        queue = read_existing_approval_queue(queue_path)
         approval = queue.next_resume_candidate()
         if approval is None:
             raise ValueError("no approved or denied approval to resume")
@@ -820,7 +835,7 @@ class AgentRunner:
             redacted_event = redact(event)
             runtime_feedback.append(redacted_event)
             self.trace.append("approval_denied", redacted_event)
-            ApprovalQueue.read(queue_path).resolve(
+            read_existing_approval_queue(queue_path).resolve(
                 approval.id,
                 "rejected",
                 resolved_at=_utc_now_for_runner(),
@@ -867,7 +882,7 @@ class AgentRunner:
             redacted_event = redact(event)
             runtime_feedback.append(redacted_event)
             self.trace.append("approval_failed", redacted_event)
-            ApprovalQueue.read(queue_path).resolve(
+            read_existing_approval_queue(queue_path).resolve(
                 approval.id,
                 "failed",
                 resolved_at=_utc_now_for_runner(),
@@ -903,7 +918,7 @@ class AgentRunner:
                 blocked=True,
                 reason=risk.reason,
                 profile=self.governance_profile,
-                rule_family=classify_rule_family(risk.reason),
+                rule_family=_permission_rule_family(risk.rule_family, risk.reason),
             )
             permission_decisions.append(decision)
             self.trace.append("permission_decision", decision.to_dict())
@@ -917,7 +932,7 @@ class AgentRunner:
             redacted_event = redact(event)
             runtime_feedback.append(redacted_event)
             self.trace.append("approval_failed", redacted_event)
-            ApprovalQueue.read(queue_path).resolve(
+            read_existing_approval_queue(queue_path).resolve(
                 approval.id,
                 "failed",
                 resolved_at=_utc_now_for_runner(),
@@ -954,7 +969,10 @@ class AgentRunner:
             blocked=tool_result.blocked,
             reason=tool_result.message,
             profile=self.governance_profile,
-            rule_family=classify_rule_family(tool_result.message),
+            rule_family=_permission_rule_family(
+                getattr(tool_result, "rule_family", None),
+                tool_result.message,
+            ),
         )
         permission_decisions.append(decision)
         self.trace.append("permission_decision", decision.to_dict())
@@ -972,7 +990,7 @@ class AgentRunner:
         redacted_event = redact(event)
         runtime_feedback.append(redacted_event)
         self.trace.append(event_type, redacted_event)
-        ApprovalQueue.read(queue_path).resolve(
+        read_existing_approval_queue(queue_path).resolve(
             approval.id,
             status,
             resolved_at=_utc_now_for_runner(),

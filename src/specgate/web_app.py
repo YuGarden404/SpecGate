@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import os
-from contextlib import closing
+import sqlite3
+import threading
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from specgate.web_approvals import approve_web_approval, deny_web_approval, list_web_approvals
 from specgate.web_auth import (
@@ -20,13 +24,34 @@ from specgate.web_auth import (
 )
 from specgate.web_db import connect_db, init_db
 from specgate.web_debug import build_run_debug
-from specgate.web_projects import create_manual_project, create_project_from_zip, project_paths
-from specgate.web_runs import create_run, get_run, resume_run_once, start_run_background
+from specgate.web_projects import (
+    ArchiveLimitError,
+    ArchiveValidationError,
+    create_manual_project,
+    create_project_from_zip,
+    project_paths,
+    web_run_paths,
+)
+from specgate.web_runs import (
+    ActiveRunConflict,
+    create_run,
+    get_run,
+    recover_interrupted_run_initializations,
+    recover_interrupted_run_publications,
+    resume_run_once,
+    start_run_background,
+)
 from specgate.web_settings import clear_api_key, get_settings, update_settings, upsert_api_key
+from specgate.workspace_fs import WorkspacePathError, read_workspace_bytes, read_workspace_text
 
 
 SESSION_COOKIE_NAME = "specgate_session"
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+RUN_THREAD_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+PREVIEW_UNAVAILABLE_MESSAGE = "Project preview is temporarily unavailable"
+UPLOAD_PATH_RACE_MESSAGE = "project archive storage changed during upload"
+UPLOAD_INTERNAL_ERROR_MESSAGE = "project archive could not be stored safely"
+RUN_CREATION_UNAVAILABLE_MESSAGE = "运行创建暂时不可用 / Run creation is temporarily unavailable"
 
 
 class AuthRequest(BaseModel):
@@ -81,18 +106,35 @@ def create_app(
     )
     resolved_data_root.mkdir(parents=True, exist_ok=True)
     init_db(resolved_db_path)
+    recover_interrupted_run_initializations(resolved_db_path, resolved_data_root)
+    recover_interrupted_run_publications(resolved_db_path, resolved_data_root)
     resolved_secure_cookies = (
         os.environ.get("SPECGATE_WEB_SECURE_COOKIES") == "1"
         if secure_cookies is None
         else secure_cookies
     )
 
-    app = FastAPI(title="SpecGate Web")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+        deadline = monotonic() + RUN_THREAD_SHUTDOWN_TIMEOUT_SECONDS
+        with app.state.run_threads_lock:
+            threads = list(app.state.run_threads)
+            app.state.run_threads.clear()
+        for thread in threads:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                break
+            thread.join(timeout=remaining)
+
+    app = FastAPI(title="SpecGate Web", lifespan=lifespan)
     app.state.data_root = resolved_data_root
     app.state.db_path = resolved_db_path
     app.state.api_key_encryption_secret = os.environ.get("SPECGATE_WEB_SECRET") or os.environ.get(
         "SPECGATE_WEB_API_KEY_SECRET"
     )
+    app.state.run_threads = []
+    app.state.run_threads_lock = threading.Lock()
 
     @app.post("/api/auth/register")
     def register(payload: AuthRequest, response: Response) -> dict[str, Any]:
@@ -173,13 +215,22 @@ def create_app(
         if len(content) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail="upload exceeds 5 MiB limit")
         try:
-            project = create_project_from_zip(
+            project = await run_in_threadpool(
+                create_project_from_zip,
                 app.state.db_path,
                 app.state.data_root,
                 int(user["id"]),
                 name,
                 content,
             )
+        except ArchiveLimitError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except ArchiveValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except WorkspacePathError as exc:
+            if exc.rule_family == "path_race":
+                raise HTTPException(status_code=409, detail=UPLOAD_PATH_RACE_MESSAGE) from exc
+            raise HTTPException(status_code=500, detail=UPLOAD_INTERNAL_ERROR_MESSAGE) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"project": _project_dict(project)}
@@ -191,10 +242,33 @@ def create_app(
     @app.get("/api/projects/{project_id}/preview")
     def preview_project(project_id: int, user=Depends(current_user)):
         project = _load_project_or_404(app.state.db_path, int(user["id"]), project_id)
-        preview = project_paths(app.state.data_root, int(user["id"]), int(project["id"])).workspace / "index.html"
-        if not preview.is_file():
-            raise HTTPException(status_code=404, detail="preview not found")
-        return PlainTextResponse(preview.read_text(encoding="utf-8"))
+        paths = project_paths(app.state.data_root, int(user["id"]), int(project["id"]))
+        with closing(connect_db(app.state.db_path)) as conn:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                publishing = conn.execute(
+                    """
+                    select 1 from runs
+                    where project_id = ? and user_id = ? and status = 'publishing'
+                    limit 1
+                    """,
+                    (project_id, user["id"]),
+                ).fetchone()
+                if publishing is not None:
+                    raise HTTPException(status_code=409, detail="project publication in progress")
+                content = read_workspace_text(paths.workspace, "index.html")
+                conn.commit()
+            except sqlite3.OperationalError as exc:
+                conn.rollback()
+                if _is_sqlite_lock_error(exc):
+                    raise HTTPException(
+                        status_code=503,
+                        detail=PREVIEW_UNAVAILABLE_MESSAGE,
+                    ) from exc
+                raise
+            except (OSError, UnicodeError, WorkspacePathError) as exc:
+                raise HTTPException(status_code=404, detail="preview not found") from exc
+        return PlainTextResponse(content)
 
     @app.get("/api/projects/{project_id}/messages")
     def list_messages(project_id: int, user=Depends(current_user)) -> dict[str, Any]:
@@ -241,10 +315,24 @@ def create_app(
         user=Depends(current_user),
     ) -> dict[str, Any]:
         try:
-            run = create_run(app.state.db_path, project_id, int(user["id"]), payload.prompt)
+            run = create_run(
+                app.state.db_path,
+                project_id,
+                int(user["id"]),
+                payload.prompt,
+                data_root=app.state.data_root,
+            )
+        except ActiveRunConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except sqlite3.OperationalError as exc:
+            if _is_sqlite_lock_error(exc):
+                raise HTTPException(status_code=503, detail=RUN_CREATION_UNAVAILABLE_MESSAGE) from exc
+            raise
         except ValueError as exc:
             raise _http_error_for_value_error(exc) from exc
-        start_run_background(app.state.db_path, app.state.data_root, int(run["id"]))
+        thread = start_run_background(app.state.db_path, app.state.data_root, int(run["id"]))
+        with app.state.run_threads_lock:
+            app.state.run_threads.append(thread)
         return {"run": _run_dict(run)}
 
     @app.get("/api/runs/{run_id}")
@@ -266,8 +354,14 @@ def create_app(
     @app.get("/api/runs/{run_id}/artifacts/index")
     def get_index_artifact(run_id: int, user=Depends(current_user)):
         run = _load_run_for_artifact(app.state.db_path, int(user["id"]), run_id)
+        paths = web_run_paths(
+            project_paths(app.state.data_root, int(user["id"]), int(run["project_id"])),
+            run_id,
+        )
         return _artifact_response(
             run["index_artifact_path"],
+            paths.index_artifact,
+            app.state.data_root,
             "text/html",
             headers={
                 "Content-Disposition": 'attachment; filename="index.html"',
@@ -278,7 +372,16 @@ def create_app(
     @app.get("/api/runs/{run_id}/artifacts/zip")
     def get_zip_artifact(run_id: int, user=Depends(current_user)):
         run = _load_run_for_artifact(app.state.db_path, int(user["id"]), run_id)
-        return _artifact_response(run["zip_artifact_path"], "application/zip")
+        paths = web_run_paths(
+            project_paths(app.state.data_root, int(user["id"]), int(run["project_id"])),
+            run_id,
+        )
+        return _artifact_response(
+            run["zip_artifact_path"],
+            paths.zip_artifact,
+            app.state.data_root,
+            "application/zip",
+        )
 
     @app.get("/api/approvals")
     def list_approvals(user=Depends(current_user)) -> dict[str, Any]:
@@ -412,13 +515,28 @@ def _load_run_for_artifact(db_path: Path, user_id: int, run_id: int):
         raise _http_error_for_value_error(exc) from exc
 
 
-def _artifact_response(path_value: str | None, media_type: str, headers: dict[str, str] | None = None):
-    if not path_value:
+def _artifact_response(
+    path_value: str | None,
+    expected_path: Path,
+    data_root: Path,
+    media_type: str,
+    headers: dict[str, str] | None = None,
+):
+    if not path_value or Path(path_value) != expected_path:
         raise HTTPException(status_code=404, detail="artifact not found")
-    path = Path(path_value)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="artifact not found")
-    return FileResponse(path, media_type=media_type, headers=headers)
+    try:
+        relative = expected_path.relative_to(data_root).as_posix()
+        content = read_workspace_bytes(data_root, relative)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="artifact not found") from exc
+    return Response(content=content, media_type=media_type, headers=headers)
+
+
+def _is_sqlite_lock_error(exc: sqlite3.OperationalError) -> bool:
+    error_code = getattr(exc, "sqlite_errorcode", None)
+    return error_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED} or any(
+        marker in str(exc).lower() for marker in ("locked", "busy")
+    )
 
 
 def _http_error_for_value_error(exc: ValueError) -> HTTPException:

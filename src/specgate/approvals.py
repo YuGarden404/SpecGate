@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase
-import hashlib
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any
 
+import specgate.workspace_fs as workspace_fs
 from specgate.actions import Action
 from specgate.policy import WorkspacePolicy, check_action
 from specgate.security import SECRET_PATTERNS
@@ -43,11 +44,13 @@ class GovernanceConfig:
 class ActionRisk:
     level: str
     reason: str
+    rule_family: str = "none"
 
     def to_dict(self) -> dict[str, str]:
         return {
             "level": self.level,
             "reason": self.reason,
+            "rule_family": self.rule_family,
         }
 
 
@@ -101,30 +104,22 @@ class ApprovalQueue:
         return {"approvals": [approval.to_dict() for approval in self.approvals]}
 
     def write(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        root, relative_path = _approval_queue_location(path)
+        workspace_fs.write_workspace_text(
+            root,
+            relative_path,
             json.dumps(self.to_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
     @classmethod
     def read(cls, path: Path) -> "ApprovalQueue":
-        if not path.exists():
-            return cls()
-
-        payload = json.loads(path.read_text(encoding="utf-8-sig"))
-        if not isinstance(payload, dict):
-            raise ValueError("pending approvals payload must be an object")
-
-        raw_approvals = payload.get("approvals", [])
-        if not isinstance(raw_approvals, list):
-            raise ValueError("pending approvals must be a list")
-
-        if not all(isinstance(approval, dict) for approval in raw_approvals):
-            raise ValueError("pending approval entries must be objects")
-
-        approvals = [_parse_pending_approval(approval) for approval in raw_approvals]
-        return cls(approvals)
+        try:
+            return read_existing_approval_queue(path)
+        except workspace_fs.WorkspacePathError as exc:
+            if _is_missing_queue_file(exc, path):
+                return cls()
+            raise
 
     def append(self, approval: PendingApproval) -> "ApprovalQueue":
         return ApprovalQueue([*self.approvals, approval])
@@ -214,6 +209,75 @@ def approval_queue_path(root: Path) -> Path:
     return root / "runs" / "latest" / "pending_approvals.json"
 
 
+def _approval_queue_location(path: Path) -> tuple[Path, str]:
+    absolute_path = Path(os.path.abspath(path))
+    root = Path(absolute_path.anchor)
+    relative_path = absolute_path.relative_to(root).as_posix()
+    return root, workspace_fs.normalize_workspace_relative(relative_path)
+
+
+def _is_missing_queue_file(
+    error: workspace_fs.WorkspacePathError,
+    path: Path,
+) -> bool:
+    if error.rule_family != "path_race":
+        return False
+    _, expected_relative = _approval_queue_location(path)
+    return error.missing_path == expected_relative
+
+
+def read_existing_approval_queue(path: Path) -> ApprovalQueue:
+    root, relative_path = _approval_queue_location(path)
+    content = workspace_fs.read_workspace_text(
+        root,
+        relative_path,
+        encoding="utf-8-sig",
+    )
+    return _parse_approval_queue_content(content)
+
+
+def read_approval_queue_if_present(
+    workspace_root: Path,
+    path: Path,
+) -> ApprovalQueue | None:
+    root = Path(os.path.abspath(workspace_root))
+    absolute_path = Path(os.path.abspath(path))
+    try:
+        relative_path = workspace_fs.normalize_workspace_relative(
+            absolute_path.relative_to(root).as_posix()
+        )
+    except ValueError as exc:
+        raise workspace_fs.WorkspacePathError(
+            "approval queue is outside the workspace",
+            "invalid_path",
+        ) from exc
+
+    content = workspace_fs.read_optional_workspace_text(
+        root,
+        relative_path,
+        encoding="utf-8-sig",
+    )
+    if content is None:
+        return None
+    return _parse_approval_queue_content(content)
+
+
+def _parse_approval_queue_content(content: str) -> ApprovalQueue:
+    payload = json.loads(content)
+    if not isinstance(payload, dict):
+        raise ValueError("pending approvals payload must be an object")
+
+    raw_approvals = payload.get("approvals", [])
+    if not isinstance(raw_approvals, list):
+        raise ValueError("pending approvals must be a list")
+
+    if not all(isinstance(approval, dict) for approval in raw_approvals):
+        raise ValueError("pending approval entries must be objects")
+
+    approvals = [_parse_pending_approval(approval) for approval in raw_approvals]
+    return ApprovalQueue(approvals)
+
+
 def _parse_pending_approval(approval: dict[str, Any]) -> PendingApproval:
     required = {
         "id",
@@ -281,14 +345,12 @@ def capture_target_state(root: Path, relative_path: str | None) -> dict[str, Any
     if relative_path is None:
         return None
 
-    normalized_path = relative_path.replace("\\", "/")
-    path = root / normalized_path
-    if not path.exists():
-        return {"path": normalized_path, "exists": False, "sha256": None}
+    normalized_path = workspace_fs.normalize_workspace_relative(relative_path)
+    state = workspace_fs.workspace_file_state(root, normalized_path)
     return {
         "path": normalized_path,
-        "exists": True,
-        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "exists": state.exists,
+        "sha256": state.sha256,
     }
 
 
@@ -298,7 +360,7 @@ def target_state_matches(root: Path, target_state: dict[str, Any] | None) -> boo
     _validate_target_state(target_state)
     try:
         current = capture_target_state(root, target_state["path"])
-    except OSError:
+    except (OSError, workspace_fs.WorkspacePathError):
         return False
     return current == target_state
 
@@ -328,11 +390,11 @@ def classify_action_risk(
 ) -> ActionRisk:
     decision = check_action(action, policy)
     if not decision.allowed:
-        return ActionRisk("blocked", decision.reason)
+        return ActionRisk("blocked", decision.reason, decision.rule_family)
 
     path = _action_path(action)
     if path is not None and _matches_any(path, config.blocked_paths | HARD_BLOCKED_PATHS):
-        return ActionRisk("blocked", f"blocked path: {path}")
+        return ActionRisk("blocked", f"blocked path: {path}", "allowlist")
 
     if action.action in config.review_actions:
         return ActionRisk("review", f"{action.action} requires human review")

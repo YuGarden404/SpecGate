@@ -1,17 +1,27 @@
 import json
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
+import specgate.workspace_fs as workspace_fs
 from specgate.context import (
     build_context_pack,
     build_context_pack_with_metadata,
     build_role_context_pack_with_metadata,
 )
 from specgate.gate import GateResult
+from specgate.workspace_fs import WorkspacePathError
 
 
 class ContextStrategyTests(unittest.TestCase):
+    def _symlink_or_skip(self, link: Path, target: Path) -> None:
+        try:
+            link.symlink_to(target)
+        except OSError as exc:
+            self.skipTest(f"symlink creation unavailable: {exc}")
+
     def _workspace(self) -> tempfile.TemporaryDirectory:
         tmp = tempfile.TemporaryDirectory()
         root = Path(tmp.name)
@@ -34,6 +44,93 @@ class ContextStrategyTests(unittest.TestCase):
         self.assertIn("## Selected Files", context)
         self.assertIn("## Runtime Feedback", context)
         self.assertNotIn("<untrusted_data", context)
+
+    def test_baseline_context_records_link_rejection_without_external_content(self):
+        with self._workspace() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            sentinel = "EXTERNAL_CONTEXT_SENTINEL"
+            external = Path(outside) / "notes.md"
+            external.write_text(sentinel, encoding="utf-8")
+            self._symlink_or_skip(root / "linked-notes.md", external)
+            (root / "safe-notes.md").write_text("SAFE_CONTEXT_CONTENT", encoding="utf-8")
+
+            context = build_context_pack(root, None, [], strategy="baseline")
+
+        self.assertIn("linked_path", context)
+        self.assertIn("SAFE_CONTEXT_CONTENT", context)
+        self.assertNotIn(sentinel, context)
+
+    def test_baseline_context_records_scan_path_race(self):
+        with self._workspace() as tmp:
+            original_read = workspace_fs.read_workspace_text
+
+            def read_with_race(root, relative_path, **kwargs):
+                if relative_path == "index.html":
+                    raise WorkspacePathError("ancestor replaced", "path_race")
+                return original_read(root, relative_path, **kwargs)
+
+            with mock.patch(
+                "specgate.workspace_fs.read_workspace_text",
+                side_effect=read_with_race,
+            ):
+                context = build_context_pack(Path(tmp), None, [], strategy="baseline")
+
+        self.assertIn("path_race", context)
+        self.assertIn("TASK_SPEC.md", context)
+
+    def test_baseline_context_skips_linked_candidate_and_keeps_safe_file(self):
+        with self._workspace() as tmp:
+            root = Path(tmp)
+            (root / "safe-notes.md").write_text("SAFE_CONTEXT_CONTENT", encoding="utf-8")
+            (root / "linked-notes.md").write_text("EXTERNAL_CONTEXT_SENTINEL", encoding="utf-8")
+            with mock.patch(
+                "specgate.workspace_fs.scan_workspace_files",
+                create=True,
+                return_value=types.SimpleNamespace(
+                    files=["safe-notes.md"],
+                    rejections=[
+                        types.SimpleNamespace(
+                            path="linked-notes.md",
+                            rule_family="linked_path",
+                            message="link-like entry rejected",
+                        )
+                    ],
+                ),
+            ):
+                context = build_context_pack(root, None, [], strategy="baseline")
+
+        self.assertIn("linked_path", context)
+        self.assertIn("SAFE_CONTEXT_CONTENT", context)
+        self.assertNotIn("EXTERNAL_CONTEXT_SENTINEL", context)
+
+    def test_excluded_directory_link_rejection_does_not_empty_context(self):
+        with self._workspace() as tmp:
+            root = Path(tmp)
+            (root / "safe-notes.md").write_text("SAFE_CONTEXT_CONTENT", encoding="utf-8")
+            (root / "eval-runs").mkdir()
+            (root / "eval-runs" / "linked.md").write_text(
+                "EXTERNAL_EXCLUDED_SENTINEL",
+                encoding="utf-8",
+            )
+            with mock.patch(
+                "specgate.workspace_fs.scan_workspace_files",
+                create=True,
+                return_value=types.SimpleNamespace(
+                    files=["safe-notes.md"],
+                    rejections=[
+                        types.SimpleNamespace(
+                            path="eval-runs",
+                            rule_family="linked_path",
+                            message="link-like entry rejected",
+                        )
+                    ],
+                ),
+            ):
+                context = build_context_pack(root, None, [], strategy="baseline")
+
+        self.assertIn("linked_path", context)
+        self.assertIn("SAFE_CONTEXT_CONTENT", context)
+        self.assertNotIn("EXTERNAL_EXCLUDED_SENTINEL", context)
 
     def test_compressed_strategy_keeps_gate_feedback_but_truncates_large_tool_data(self):
         large_html = "<html>" + ("x" * 5000) + "</html>"

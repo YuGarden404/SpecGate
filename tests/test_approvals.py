@@ -2,19 +2,129 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from specgate import approvals as approvals_module
 from specgate.actions import Action
 from specgate.approvals import (
     ApprovalQueue,
     GovernanceConfig,
     PendingApproval,
+    capture_target_state,
     classify_action_risk,
     preview_args,
+    target_state_matches,
 )
 from specgate.policy import WorkspacePolicy
+from specgate.workspace_fs import WorkspacePathError
 
 
 class ApprovalTests(unittest.TestCase):
+    def _symlink_or_skip(self, link: Path, target: Path, *, directory: bool = False) -> None:
+        try:
+            link.symlink_to(target, target_is_directory=directory)
+        except OSError as exc:
+            self.skipTest(f"symlink creation unavailable: {exc}")
+
+    def test_read_existing_queue_fails_when_final_file_is_missing(self):
+        self.assertTrue(hasattr(approvals_module, "read_existing_approval_queue"))
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+
+            with self.assertRaises(WorkspacePathError):
+                approvals_module.read_existing_approval_queue(queue_path)
+
+    def test_read_queue_if_present_handles_explicitly_missing_queue(self):
+        self.assertTrue(hasattr(approvals_module, "read_approval_queue_if_present"))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (
+                mock.patch(
+                    "specgate.workspace_fs.read_optional_workspace_text",
+                    return_value=None,
+                    create=True,
+                ) as read,
+                mock.patch("specgate.workspace_fs.scan_workspace_files") as scan,
+            ):
+                queue = approvals_module.read_approval_queue_if_present(
+                    root,
+                    root / "runs" / "latest" / "pending_approvals.json",
+                )
+
+            self.assertIsNone(queue)
+            read.assert_called_once_with(
+                root,
+                "runs/latest/pending_approvals.json",
+                encoding="utf-8-sig",
+            )
+            scan.assert_not_called()
+
+    def test_read_queue_if_present_parses_optional_read_content_without_scanning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (
+                mock.patch(
+                    "specgate.workspace_fs.read_optional_workspace_text",
+                    return_value='{"approvals": []}',
+                    create=True,
+                ) as read,
+                mock.patch("specgate.workspace_fs.scan_workspace_files") as scan,
+            ):
+                queue = approvals_module.read_approval_queue_if_present(
+                    root,
+                    root / "runs" / "latest" / "pending_approvals.json",
+                )
+
+            self.assertEqual(queue, ApprovalQueue())
+            read.assert_called_once_with(
+                root,
+                "runs/latest/pending_approvals.json",
+                encoding="utf-8-sig",
+            )
+            scan.assert_not_called()
+
+    def test_read_queue_if_present_propagates_target_path_race(self):
+        relative_path = "runs/latest/pending_approvals.json"
+        errors = (
+            WorkspacePathError("ancestor missing", "path_race"),
+            WorkspacePathError("target changed", "path_race", missing_path=relative_path),
+        )
+        for error in errors:
+            with self.subTest(missing_path=error.missing_path), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                with mock.patch(
+                    "specgate.workspace_fs.read_optional_workspace_text",
+                    side_effect=error,
+                    create=True,
+                ) as read:
+                    with self.assertRaises(WorkspacePathError) as raised:
+                        approvals_module.read_approval_queue_if_present(
+                            root,
+                            root / relative_path,
+                        )
+
+                self.assertIs(raised.exception, error)
+                read.assert_called_once()
+
+    def test_read_queue_if_present_propagates_target_link_rejections(self):
+        relative_path = "runs/latest/pending_approvals.json"
+        for family in ("linked_path", "reparse_point"):
+            with self.subTest(family=family), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                error = WorkspacePathError("unsafe queue path", family)
+                with mock.patch(
+                    "specgate.workspace_fs.read_optional_workspace_text",
+                    side_effect=error,
+                    create=True,
+                ):
+                    with self.assertRaises(WorkspacePathError) as raised:
+                        approvals_module.read_approval_queue_if_present(
+                            root,
+                            root / relative_path,
+                        )
+
+                self.assertIs(raised.exception, error)
+
     def test_allowed_write_to_normal_artifact_is_safe(self):
         policy = WorkspacePolicy(Path("."), {"write_file"}, set(), {"index.html"})
         config = GovernanceConfig(profile="review")
@@ -68,6 +178,73 @@ class ApprovalTests(unittest.TestCase):
 
         self.assertEqual(risk.level, "blocked")
         self.assertIn("path escapes workspace", risk.reason)
+        self.assertEqual(getattr(risk, "rule_family", None), "path_escape")
+        self.assertEqual(risk.to_dict().get("rule_family"), "path_escape")
+
+    def test_invalid_path_rule_family_survives_risk_classification(self):
+        policy = WorkspacePolicy(
+            Path("."),
+            {"read_file"},
+            {"docs/index.html"},
+            set(),
+        )
+        action = Action("1", "read_file", {"path": r"docs\index.html"})
+
+        risk = classify_action_risk(action, policy, GovernanceConfig(profile="review"))
+
+        self.assertEqual(risk.level, "blocked")
+        self.assertEqual(getattr(risk, "rule_family", None), "invalid_path")
+
+    def test_target_state_capture_rejects_external_link(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            external = Path(outside) / "outside.txt"
+            external.write_text("EXTERNAL_APPROVAL_SENTINEL", encoding="utf-8")
+            self._symlink_or_skip(root / "README.md", external)
+
+            with self.assertRaises(WorkspacePathError) as raised:
+                capture_target_state(root, "README.md")
+
+            self.assertEqual(raised.exception.rule_family, "linked_path")
+
+    def test_target_state_capture_propagates_safe_state_link_rejection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch(
+                "specgate.workspace_fs.workspace_file_state",
+                side_effect=WorkspacePathError("linked target", "linked_path"),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    capture_target_state(Path(tmp), "README.md")
+
+            self.assertEqual(raised.exception.rule_family, "linked_path")
+
+    def test_target_state_path_race_is_a_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("safe", encoding="utf-8")
+            target_state = capture_target_state(root, "README.md")
+
+            with mock.patch(
+                "specgate.workspace_fs.workspace_file_state",
+                side_effect=WorkspacePathError("ancestor replaced", "path_race"),
+            ):
+                matches = target_state_matches(root, target_state)
+
+            self.assertFalse(matches)
+
+    def test_target_state_mismatch_on_ancestor_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            nested = root / "nested"
+            nested.mkdir()
+            (nested / "README.md").write_text("same bytes", encoding="utf-8")
+            target_state = capture_target_state(root, "nested/README.md")
+            external = Path(outside)
+            (external / "README.md").write_text("same bytes", encoding="utf-8")
+            nested.rename(root / "original-nested")
+            self._symlink_or_skip(root / "nested", external, directory=True)
+
+            self.assertFalse(target_state_matches(root, target_state))
 
     def test_queue_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -90,6 +267,169 @@ class ApprovalTests(unittest.TestCase):
             self.assertEqual(len(loaded.approvals), 1)
             self.assertEqual(loaded.approvals[0].id, "approval-step-2")
             self.assertEqual(loaded.approvals[0].status, "pending")
+
+    def test_queue_write_propagates_reparse_rejection_without_overwriting_sentinel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+            sentinel = "EXTERNAL_QUEUE_WRITE_SENTINEL"
+            queue_path.write_text(sentinel, encoding="utf-8")
+
+            with mock.patch(
+                "specgate.workspace_fs.write_workspace_text",
+                side_effect=WorkspacePathError("reparse queue", "reparse_point"),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    ApprovalQueue().write(queue_path)
+
+            self.assertEqual(raised.exception.rule_family, "reparse_point")
+            self.assertEqual(queue_path.read_text(encoding="utf-8"), sentinel)
+
+    def test_queue_read_propagates_link_rejection_without_reading_sentinel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+            sentinel = "EXTERNAL_QUEUE_READ_SENTINEL"
+            queue_path.write_text(
+                json.dumps({"approvals": [], "sentinel": sentinel}),
+                encoding="utf-8",
+            )
+
+            with mock.patch(
+                "specgate.workspace_fs.read_workspace_text",
+                side_effect=WorkspacePathError("linked queue", "linked_path"),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    ApprovalQueue.read(queue_path)
+
+            self.assertEqual(raised.exception.rule_family, "linked_path")
+
+    def test_queue_write_propagates_ancestor_path_race(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "runs" / "latest" / "pending_approvals.json"
+
+            with mock.patch(
+                "specgate.workspace_fs.write_workspace_text",
+                side_effect=WorkspacePathError("ancestor replaced", "path_race"),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    ApprovalQueue().write(queue_path)
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+
+    def test_queue_read_propagates_ancestor_path_race(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+            queue_path.write_text('{"approvals": []}', encoding="utf-8")
+
+            with mock.patch(
+                "specgate.workspace_fs.read_workspace_text",
+                side_effect=WorkspacePathError("ancestor replaced", "path_race"),
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    ApprovalQueue.read(queue_path)
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+
+    def test_queue_read_does_not_treat_chained_missing_path_race_as_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+            try:
+                raise FileNotFoundError("ancestor disappeared")
+            except FileNotFoundError as missing:
+                error = WorkspacePathError("ancestor replaced", "path_race")
+                error.__cause__ = missing
+
+            with mock.patch(
+                "specgate.workspace_fs.read_workspace_text",
+                side_effect=error,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    ApprovalQueue.read(queue_path)
+
+            self.assertIs(raised.exception, error)
+
+    def test_queue_read_returns_empty_only_when_final_file_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "pending_approvals.json"
+
+            queue = ApprovalQueue.read(queue_path)
+
+            self.assertEqual(queue, ApprovalQueue())
+
+    def test_queue_read_returns_empty_when_trusted_parent_matches_queue_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp) / "pending_approvals.json"
+            parent.mkdir()
+            queue_path = parent / "pending_approvals.json"
+
+            queue = ApprovalQueue.read(queue_path)
+
+            self.assertEqual(queue, ApprovalQueue())
+
+    def test_queue_read_fails_closed_when_parent_is_missing_before_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "missing" / "pending_approvals.json"
+
+            with self.assertRaises(WorkspacePathError) as raised:
+                ApprovalQueue.read(queue_path)
+
+            self.assertEqual(raised.exception.rule_family, "path_race")
+            self.assertFalse(queue_path.parent.exists())
+
+    def test_queue_read_fails_closed_when_parent_disappears_after_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = Path(tmp) / "missing" / "pending_approvals.json"
+            missing = FileNotFoundError(
+                2,
+                "parent disappeared",
+                str(queue_path.parent),
+            )
+            error = WorkspacePathError("ancestor replaced", "path_race")
+            error.__cause__ = missing
+
+            with mock.patch(
+                "specgate.workspace_fs.read_workspace_text",
+                side_effect=error,
+            ):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    ApprovalQueue.read(queue_path)
+
+            self.assertIs(raised.exception, error)
+
+    def test_queue_file_link_does_not_overwrite_external_sentinel(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            external = Path(outside) / "pending_approvals.json"
+            sentinel = "EXTERNAL_QUEUE_FILE_SENTINEL"
+            external.write_text(sentinel, encoding="utf-8")
+            self._symlink_or_skip(root / "pending_approvals.json", external)
+
+            with self.assertRaises(WorkspacePathError):
+                ApprovalQueue().write(root / "pending_approvals.json")
+
+            self.assertEqual(external.read_text(encoding="utf-8"), sentinel)
+
+    def test_queue_ancestor_link_does_not_create_external_queue(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            external = Path(outside)
+            self._symlink_or_skip(root / "runs", external, directory=True)
+            queue_path = root / "runs" / "latest" / "pending_approvals.json"
+
+            with self.assertRaises(WorkspacePathError):
+                ApprovalQueue().write(queue_path)
+
+            self.assertFalse((external / "latest" / "pending_approvals.json").exists())
+
+    def test_queue_file_link_does_not_read_external_sentinel(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            external = Path(outside) / "pending_approvals.json"
+            sentinel = "EXTERNAL_QUEUE_READ_SENTINEL"
+            external.write_text(sentinel, encoding="utf-8")
+            self._symlink_or_skip(root / "pending_approvals.json", external)
+
+            with self.assertRaises(WorkspacePathError):
+                ApprovalQueue.read(root / "pending_approvals.json")
 
     def test_queue_round_trip_preserves_action_payload_and_decision_fields(self):
         with tempfile.TemporaryDirectory() as tmp:

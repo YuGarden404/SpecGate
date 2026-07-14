@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import re
 
+import specgate.workspace_fs as workspace_fs
 
 DEFAULT_SUFFIXES = frozenset({".md", ".txt", ".toml", ".json", ".jsonl", ".py", ".html", ".css", ".js"})
 EXCLUDED_DIRS = frozenset({".git", "__pycache__", "runs", "reports", "eval-runs"})
@@ -151,21 +152,39 @@ def retrieve_chunks(
 
     candidates: list[RetrievedChunk] = []
     dropped_reasons: list[str] = []
-    for path in _scan_files(root):
-        rel = _relative(path, root)
+    if allowed_read_paths is None:
+        scan_result = workspace_fs.scan_workspace_files(
+            root,
+            excluded_dirs=resolved_config.exclude_dirs,
+        )
+        scanned_files = scan_result.files
+        scan_rejections = scan_result.rejections
+    else:
+        scanned_files = sorted(allowed_read_paths)
+        scan_rejections = []
+
+    for rejection in scan_rejections:
+        dropped_reasons.append(
+            f"{rejection.path}: {rejection.rule_family}: {rejection.message}"
+        )
+
+    for rel in scanned_files:
         if allowed_read_paths is not None and rel not in allowed_read_paths:
             dropped_reasons.append("read path omitted by workspace policy")
             continue
-        if _is_under_excluded_dir(path, root, resolved_config.exclude_dirs):
+        if _is_under_excluded_dir(rel, resolved_config.exclude_dirs):
             dropped_reasons.append(f"{rel}: excluded directory")
             continue
-        if path.suffix.lower() not in resolved_config.include_suffixes:
+        if Path(rel).suffix.lower() not in resolved_config.include_suffixes:
             dropped_reasons.append(f"{rel}: unsupported suffix")
             continue
         try:
-            text = path.read_text(encoding="utf-8")
+            text = workspace_fs.read_workspace_text(root, rel, encoding="utf-8")
         except UnicodeDecodeError:
             dropped_reasons.append(f"{rel}: file is not utf-8 text")
+            continue
+        except workspace_fs.WorkspacePathError as exc:
+            dropped_reasons.append(f"{rel}: {exc.rule_family}")
             continue
         except OSError as exc:
             dropped_reasons.append(f"{rel}: read failed: {exc}")
@@ -215,14 +234,8 @@ def _estimate_tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4) if text else 0
 
 
-def _relative(path: Path, root: Path) -> str:
-    return str(path.relative_to(root)).replace("\\", "/")
-
-
-def _is_under_excluded_dir(path: Path, root: Path, exclude_dirs: frozenset[str]) -> bool:
-    relative = path.relative_to(root)
-    return any(part in exclude_dirs or part.startswith(".") for part in relative.parts[:-1])
-
-
-def _scan_files(root: Path) -> list[Path]:
-    return sorted((path for path in root.rglob("*") if path.is_file()), key=lambda item: _relative(item, root))
+def _is_under_excluded_dir(relative_path: str, exclude_dirs: frozenset[str]) -> bool:
+    return any(
+        part in exclude_dirs or part.startswith(".")
+        for part in relative_path.split("/")[:-1]
+    )

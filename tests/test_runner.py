@@ -2,11 +2,15 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from specgate.llm import MockLLM
+from specgate.metrics import RunMetrics
 from specgate.policy import WorkspacePolicy
 from specgate.runner import AgentRunner
-from specgate.approvals import ApprovalQueue, GovernanceConfig, PendingApproval, approval_queue_path
+from specgate.approvals import ActionRisk, ApprovalQueue, GovernanceConfig, PendingApproval, approval_queue_path
+from specgate.tools import ToolResult
+from specgate.workspace_fs import WorkspacePathError
 
 
 BROKEN_HTML = "<html><head><title>x</title></head><body></body></html>"
@@ -87,6 +91,162 @@ class ApprovalFeedbackLLM:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_new_run_writes_empty_queue_at_custom_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            queue_file = Path(tmp) / "custom" / "approvals" / "queue.json"
+            root.mkdir()
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            policy = WorkspacePolicy(root, {"finish"}, {"TASK_SPEC.md", "CHECKLIST.md"}, set())
+
+            AgentRunner(
+                root,
+                MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}]),
+                policy,
+                max_steps=1,
+                approval_queue_file=queue_file,
+            ).run()
+
+            self.assertTrue(queue_file.is_file())
+            self.assertEqual(ApprovalQueue.read(queue_file), ApprovalQueue())
+
+    def test_new_run_replaces_stale_queue_with_explicit_empty_queue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            queue_path = approval_queue_path(root)
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="stale-approval",
+                        step=1,
+                        action="finish",
+                        path=None,
+                        risk_level="review",
+                        reason="stale",
+                        profile="review",
+                    )
+                ]
+            ).write(queue_path)
+            policy = WorkspacePolicy(root, {"finish"}, {"TASK_SPEC.md", "CHECKLIST.md"}, set())
+
+            AgentRunner(
+                root,
+                MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}]),
+                policy,
+                max_steps=1,
+            ).run()
+
+            self.assertTrue(queue_path.is_file())
+            self.assertEqual(ApprovalQueue.read(queue_path), ApprovalQueue())
+
+    def test_runner_uses_explicit_audit_and_approval_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            audit_dir = Path(tmp) / "audit"
+            queue_file = Path(tmp) / "approvals" / "queue.json"
+            root.mkdir()
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("original", encoding="utf-8")
+            policy = WorkspacePolicy(root, {"replace_file"}, {"TASK_SPEC.md"}, {"README.md"})
+            governance = GovernanceConfig(
+                profile="review",
+                review_actions={"replace_file"},
+                review_paths={"README.md"},
+            )
+
+            runner = AgentRunner(
+                root,
+                MockLLM(
+                    [
+                        {
+                            "schema_version": "1",
+                            "action": "replace_file",
+                            "args": {"path": "README.md", "content": "changed"},
+                        }
+                    ]
+                ),
+                policy,
+                max_steps=1,
+                governance_config=governance,
+                audit_dir=audit_dir,
+                approval_queue_file=queue_file,
+            )
+            runner.run()
+            runner._record_retrieval(RunMetrics(), {"retrieval": {}})
+            runner._record_compression(RunMetrics(), {"compression": {}})
+            runner._record_isolation(RunMetrics(), {"isolation": {}})
+
+            self.assertTrue((audit_dir / "trace.jsonl").is_file())
+            self.assertTrue((audit_dir / "retrieval.json").is_file())
+            self.assertTrue((audit_dir / "compression.json").is_file())
+            self.assertTrue((audit_dir / "isolation.json").is_file())
+            self.assertTrue(queue_file.is_file())
+            self.assertFalse((root / "runs" / "latest").exists())
+            self.assertFalse(approval_queue_path(root).exists())
+
+    def test_runner_reset_audit_false_preserves_existing_trace_and_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            audit_dir = Path(tmp) / "audit"
+            root.mkdir()
+            audit_dir.mkdir()
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            for name in ("retrieval.json", "compression.json", "isolation.json"):
+                (audit_dir / name).write_bytes(f"existing-{name}".encode())
+            trace_bytes = b'{"event_type":"approval_requested"}\n'
+            (audit_dir / "trace.jsonl").write_bytes(trace_bytes)
+            policy = WorkspacePolicy(root, {"finish"}, {"TASK_SPEC.md"}, set())
+
+            AgentRunner(
+                root,
+                MockLLM([]),
+                policy,
+                audit_dir=audit_dir,
+                reset_audit=False,
+            )
+
+            self.assertEqual((audit_dir / "trace.jsonl").read_bytes(), trace_bytes)
+            for name in ("retrieval.json", "compression.json", "isolation.json"):
+                self.assertEqual((audit_dir / name).read_bytes(), f"existing-{name}".encode())
+
+    def test_resume_fails_closed_when_queue_file_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            queue_path = approval_queue_path(root)
+            queue_path.parent.mkdir(parents=True)
+            policy = WorkspacePolicy(root, {"finish"}, {"TASK_SPEC.md"}, set())
+            runner = AgentRunner(root, MockLLM([]), policy, reset_audit=False)
+
+            with self.assertRaises(WorkspacePathError):
+                runner.resume_from_approval()
+
+    def test_resume_fails_closed_when_queue_disappears_during_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            queue_path = approval_queue_path(root)
+            queue_path.parent.mkdir(parents=True)
+            policy = WorkspacePolicy(root, {"finish"}, {"TASK_SPEC.md"}, set())
+            runner = AgentRunner(root, MockLLM([]), policy, reset_audit=False)
+            absolute_queue_path = queue_path.absolute()
+            relative_path = absolute_queue_path.relative_to(absolute_queue_path.anchor).as_posix()
+            error = WorkspacePathError(
+                "queue disappeared",
+                "path_race",
+                missing_path=relative_path,
+            )
+
+            with mock.patch("specgate.workspace_fs.read_workspace_text", side_effect=error):
+                with self.assertRaises(WorkspacePathError) as raised:
+                    runner.resume_from_approval()
+
+            self.assertIs(raised.exception, error)
+
     def test_multi_agent_isolated_runs_planner_implementer_reviewer_in_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1092,6 +1252,247 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result.metrics.tool_calls, 1)
             self.assertEqual(result.metrics.successful_tool_calls, 0)
 
+    def test_permission_decision_uses_action_risk_rule_family(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(FIXED_HTML, encoding="utf-8")
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": FIXED_HTML},
+                    }
+                ]
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"write_file"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            with mock.patch(
+                "specgate.runner.classify_action_risk",
+                return_value=ActionRisk("blocked", "opaque risk rejection", "invalid_path"),
+            ):
+                result = AgentRunner(root, llm, policy, max_steps=1).run()
+
+            self.assertEqual(result.permission_decisions[0].rule_family, "invalid_path")
+            trace = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"rule_family": "invalid_path"', trace)
+
+    def test_permission_decision_uses_tool_result_rule_family(self):
+        for family in ("linked_path", "path_race"):
+            with self.subTest(family=family), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+                (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+                (root / "index.html").write_text(FIXED_HTML, encoding="utf-8")
+                llm = MockLLM(
+                    [
+                        {
+                            "schema_version": "1",
+                            "action": "read_file",
+                            "args": {"path": "TASK_SPEC.md"},
+                        }
+                    ]
+                )
+                policy = WorkspacePolicy(
+                    root,
+                    {"read_file"},
+                    {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                    set(),
+                )
+                runner = AgentRunner(root, llm, policy, max_steps=1)
+                runner.dispatcher.dispatch = mock.Mock(
+                    return_value=ToolResult(
+                        False,
+                        "read_file",
+                        "opaque tool rejection",
+                        blocked=True,
+                        rule_family=family,
+                    )
+                )
+
+                result = runner.run()
+
+                self.assertEqual(result.permission_decisions[0].rule_family, family)
+                trace = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
+                self.assertIn(f'"rule_family": "{family}"', trace)
+
+    def test_multi_agent_empty_action_risk_rule_family_falls_back_to_message(self):
+        for empty_family in ("", None):
+            with self.subTest(empty_family=empty_family), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "TASK_SPEC.md").write_text("Read the task.", encoding="utf-8")
+                (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+                (root / "index.html").write_text(FIXED_HTML, encoding="utf-8")
+                llm = MockLLM(
+                    [
+                        {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
+                        {"schema_version": "1", "action": "read_file", "args": {"path": "TASK_SPEC.md"}},
+                        {"schema_version": "1", "action": "finish", "args": {"summary": "review complete"}},
+                    ]
+                )
+                policy = WorkspacePolicy(
+                    root,
+                    {"read_file", "finish"},
+                    {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                    set(),
+                )
+
+                with mock.patch(
+                    "specgate.runner.classify_action_risk",
+                    return_value=ActionRisk(
+                        "blocked",
+                        "read path not allowed: TASK_SPEC.md",
+                        empty_family,
+                    ),
+                ):
+                    result = AgentRunner(
+                        root,
+                        llm,
+                        policy,
+                        max_steps=5,
+                        context_strategy="multi-agent-isolated",
+                    ).run()
+
+                self.assertEqual(result.permission_decisions[0].rule_family, "allowlist")
+                permission_events = [
+                    json.loads(line)["payload"]
+                    for line in (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+                    if json.loads(line)["event_type"] == "permission_decision"
+                ]
+                self.assertTrue(all(event["rule_family"] is not None for event in permission_events))
+
+    def test_resume_empty_action_risk_rule_family_falls_back_to_message(self):
+        for empty_family in ("", None):
+            with self.subTest(empty_family=empty_family), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+                (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+                (root / "README.md").write_text("original", encoding="utf-8")
+                (root / "index.html").write_text(FIXED_HTML, encoding="utf-8")
+                policy = WorkspacePolicy(
+                    root,
+                    {"write_file", "finish"},
+                    {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                    {"README.md"},
+                )
+                runner = AgentRunner(
+                    root,
+                    MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}]),
+                    policy,
+                    max_steps=1,
+                )
+                ApprovalQueue(
+                    [
+                        PendingApproval(
+                            id="approval-step-1",
+                            step=1,
+                            action="write_file",
+                            path="README.md",
+                            risk_level="review",
+                            reason="review requested",
+                            profile="review",
+                            status="approved",
+                            action_payload={
+                                "schema_version": "1",
+                                "action": "write_file",
+                                "args": {"path": "README.md", "content": "changed"},
+                            },
+                        )
+                    ]
+                ).write(approval_queue_path(root))
+
+                def classify_resume_action(action, *_args):
+                    if action.action == "write_file":
+                        return ActionRisk(
+                            "blocked",
+                            "write path not allowed: README.md",
+                            empty_family,
+                        )
+                    return ActionRisk("safe", "safe action")
+
+                with mock.patch(
+                    "specgate.runner.classify_action_risk",
+                    side_effect=classify_resume_action,
+                ):
+                    result = runner.resume_from_approval()
+
+                self.assertEqual(result.permission_decisions[0].rule_family, "allowlist")
+                permission_events = [
+                    json.loads(line)["payload"]
+                    for line in (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+                    if json.loads(line)["event_type"] == "permission_decision"
+                ]
+                self.assertTrue(all(event["rule_family"] is not None for event in permission_events))
+
+    def test_resume_empty_tool_result_rule_family_falls_back_to_message(self):
+        for empty_family in ("", None):
+            with self.subTest(empty_family=empty_family), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+                (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+                (root / "index.html").write_text(FIXED_HTML, encoding="utf-8")
+                policy = WorkspacePolicy(
+                    root,
+                    {"read_file", "finish"},
+                    {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                    set(),
+                )
+                runner = AgentRunner(
+                    root,
+                    MockLLM([{"schema_version": "1", "action": "finish", "args": {"summary": "done"}}]),
+                    policy,
+                    max_steps=1,
+                )
+                ApprovalQueue(
+                    [
+                        PendingApproval(
+                            id="approval-step-1",
+                            step=1,
+                            action="read_file",
+                            path="TASK_SPEC.md",
+                            risk_level="review",
+                            reason="review requested",
+                            profile="review",
+                            status="approved",
+                            action_payload={
+                                "schema_version": "1",
+                                "action": "read_file",
+                                "args": {"path": "TASK_SPEC.md"},
+                            },
+                        )
+                    ]
+                ).write(approval_queue_path(root))
+
+                def dispatch_resume_action(action):
+                    if action.action == "read_file":
+                        return ToolResult(
+                            False,
+                            "read_file",
+                            "unknown tool: legacy reader",
+                            blocked=True,
+                            rule_family=empty_family,
+                        )
+                    return ToolResult(True, "finish", "finish requested")
+
+                runner.dispatcher.dispatch = mock.Mock(side_effect=dispatch_resume_action)
+
+                result = runner.resume_from_approval()
+
+                self.assertEqual(result.permission_decisions[0].rule_family, "tool")
+                permission_events = [
+                    json.loads(line)["payload"]
+                    for line in (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+                    if json.loads(line)["event_type"] == "permission_decision"
+                ]
+                self.assertTrue(all(event["rule_family"] is not None for event in permission_events))
+
     def test_max_step_exhaustion_marks_metrics_and_failed_trust(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1626,7 +2027,7 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("blocked path: .env", trace_text)
             self.assertNotIn("sk-test-secret", trace_text)
 
-    def test_strict_profile_blocks_review_action_without_creating_approval(self):
+    def test_strict_profile_blocks_review_action_without_pending_approval(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
@@ -1650,7 +2051,9 @@ class RunnerTests(unittest.TestCase):
             ).run()
 
             self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "original")
-            self.assertFalse(approval_queue_path(root).exists())
+            queue_path = approval_queue_path(root)
+            self.assertTrue(queue_path.is_file())
+            self.assertEqual(ApprovalQueue.read(queue_path), ApprovalQueue())
             self.assertEqual(result.metrics.blocked_actions, 1)
             self.assertEqual(len(llm.contexts), 2)
             self.assertIn("Runtime Feedback", llm.contexts[1])

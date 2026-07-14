@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 import re
 
+from specgate import workspace_fs
 from specgate.security import contains_secret_like_text
 
 
@@ -66,15 +67,20 @@ def _check(code: str, passed: bool, message: str) -> GateCheck:
     return GateCheck(code, passed, message)
 
 
-def _read_checklist(checklist_path: Path | None) -> str:
-    if checklist_path is None or not checklist_path.exists():
-        return ""
-    return checklist_path.read_text(encoding="utf-8-sig")
+def _read_gate_file(path: Path) -> str | None:
+    root = path.parent
+    relative = path.name
+    try:
+        return workspace_fs.read_workspace_text(root, relative, encoding="utf-8-sig")
+    except workspace_fs.WorkspacePathError as exc:
+        if exc.rule_family == "path_race" and exc.missing_path == relative:
+            return None
+        raise
 
 
-def _checklist_terms(checklist_path: Path | None) -> list[str]:
+def _checklist_terms(checklist_text: str) -> list[str]:
     terms: list[str] = []
-    for line in _read_checklist(checklist_path).splitlines():
+    for line in checklist_text.splitlines():
         line = line.strip()
         if line.startswith("- 必须包含 "):
             terms.append(line.removeprefix("- 必须包含 ").strip())
@@ -94,16 +100,37 @@ def _required_node_count(checklist_text: str) -> int:
     return 10
 
 
+def _unsafe_input_result(kind: str, error: workspace_fs.WorkspacePathError) -> GateResult:
+    if kind == "artifact":
+        code = "unsafe_artifact"
+        message = "index.html could not be read safely"
+        repair_hint = "Replace index.html with a regular workspace file"
+    else:
+        code = "unsafe_checklist"
+        message = "checklist could not be read safely"
+        repair_hint = "Replace the checklist with a regular workspace file"
+    issue = _issue(code, message, error.rule_family, repair_hint)
+    return GateResult(False, [_check(code, False, message)], [issue], f"Gate failed: {repair_hint}")
+
+
 def run_html_gate(html_path: Path, checklist_path: Path | None) -> GateResult:
     checks: list[GateCheck] = []
     issues: list[GateIssue] = []
 
-    if not html_path.exists():
+    try:
+        content = _read_gate_file(html_path)
+    except workspace_fs.WorkspacePathError as exc:
+        return _unsafe_input_result("artifact", exc)
+    if content is None:
         issue = _issue("missing_artifact", "index.html 不存在", str(html_path), "写入 index.html")
         return GateResult(False, [_check("exists", False, "index.html missing")], [issue], "index.html 不存在")
 
-    content = html_path.read_text(encoding="utf-8-sig")
-    checklist_text = _read_checklist(checklist_path)
+    checklist_text = ""
+    if checklist_path is not None:
+        try:
+            checklist_text = _read_gate_file(checklist_path) or ""
+        except workspace_fs.WorkspacePathError as exc:
+            return _unsafe_input_result("checklist", exc)
     parser = _HtmlFeatureParser()
     parser.feed(content)
     lower = content.lower()
@@ -150,7 +177,7 @@ def run_html_gate(html_path: Path, checklist_path: Path | None) -> GateResult:
                 )
             )
 
-    for term in _checklist_terms(checklist_path):
+    for term in _checklist_terms(checklist_text):
         passed = term in text
         checks.append(_check(f"checklist_contains_{term}", passed, f"必须包含 {term}"))
         if not passed:

@@ -2,11 +2,13 @@ import tempfile
 import unittest
 import json
 from pathlib import Path
+from unittest import mock
 
 from specgate.approvals import ApprovalQueue, PendingApproval, approval_queue_path
 from specgate.gate import GateCheck, GateResult
 from specgate.metrics import PermissionDecision, RunMetrics, TrustSummary
 from specgate.report import generate_report
+from specgate.workspace_fs import WorkspacePathError
 
 
 class ReportTests(unittest.TestCase):
@@ -463,7 +465,7 @@ class ReportTests(unittest.TestCase):
             self.assertIn("<td>baseline</td><td>1</td><td>1</td><td>1</td><td>500</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>1</td><td>0</td><td>0</td><td>0</td>", html)
             self.assertNotIn("rag<script>", html)
 
-    def test_generate_report_handles_missing_pending_approvals_queue(self):
+    def test_generate_report_reports_missing_approval_parent_as_security_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
@@ -472,7 +474,31 @@ class ReportTests(unittest.TestCase):
 
             html = output.read_text(encoding="utf-8")
             self.assertIn("Approval History", html)
-            self.assertIn("No approvals recorded", html)
+            self.assertIn("could not read approval history safely", html)
+            self.assertIn("path_race", html)
+            self.assertNotIn("No approvals recorded", html)
+
+    def test_generate_report_fails_closed_without_leaking_unsafe_queue_error(self):
+        sentinel = "EXTERNAL_APPROVAL_SENTINEL"
+        for family in ("linked_path", "reparse_point", "path_race"):
+            with self.subTest(family=family), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+                ApprovalQueue().write(approval_queue_path(root))
+                error = WorkspacePathError(f"unsafe queue: {sentinel}", family)
+
+                with mock.patch(
+                    "specgate.workspace_fs.read_optional_workspace_text",
+                    side_effect=error,
+                ):
+                    output = generate_report(root, gate, 1)
+
+                html = output.read_text(encoding="utf-8")
+                self.assertIn("Approval History", html)
+                self.assertIn("could not read approval history safely", html)
+                self.assertIn(family, html)
+                self.assertNotIn("No approvals recorded", html)
+                self.assertNotIn(sentinel, html)
 
     def test_generate_report_handles_empty_pending_approvals_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
