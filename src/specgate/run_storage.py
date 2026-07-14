@@ -250,14 +250,18 @@ def promote_run_workspace(project: ProjectPaths, run_id: int) -> None:
     if parent_binding is None:
         raise RunStorageOwnershipError("quarantine parent is missing")
     with quarantine_parent_lock(parent_binding):
-        _require_quarantine_capacity(project.root, binding=parent_binding)
-        _promote_run_workspace_locked(project, run_id)
+        _promote_run_workspace_locked(project, run_id, parent_binding)
 
 
-def _promote_run_workspace_locked(project: ProjectPaths, run_id: int) -> None:
+def _promote_run_workspace_locked(
+    project: ProjectPaths,
+    run_id: int,
+    parent_binding: WorkspaceTreeBinding,
+) -> None:
     run = web_run_paths(project, run_id)
     token = _load_promotion_transaction(project.workspace, run_id)
     if token is None:
+        _require_quarantine_capacity(project.root, binding=parent_binding)
         token = secrets.token_hex(32)
         next_workspace, backup_workspace = _promotion_paths(project.workspace, run_id, token)
         next_state = _load_promotion_phase(next_workspace, run_id, "next")

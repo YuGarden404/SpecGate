@@ -1551,6 +1551,44 @@ class WebRunsTests(unittest.TestCase):
         self.assertIsNone(recovered["error_message"])
         self.assertIn("SpecGate Result", (paths.workspace / "index.html").read_text(encoding="utf-8"))
 
+    def test_recover_completed_promotion_at_quarantine_limit_finalizes_without_new_slot(self):
+        db_path, data_root, user, project = self.make_context()
+        paths = project_paths(data_root, user["id"], project["id"])
+        (paths.workspace / "index.html").write_text("old workspace", encoding="utf-8")
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        for index in range(workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT - 1):
+            (paths.root / workspace_fs.make_quarantine_name(f"old-{index}")).mkdir()
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                """
+                create trigger reject_completed_run_at_limit before update of status on runs
+                when new.status = 'completed'
+                begin
+                    select raise(abort, 'finalize failed at limit');
+                end
+                """
+            )
+            conn.commit()
+
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "finalize failed at limit"):
+            execute_run_once(db_path, data_root, run["id"])
+        binding = workspace_fs.bind_workspace_tree(paths.root)
+        self.assertIsNotNone(binding)
+        self.assertEqual(
+            workspace_fs.count_quarantine_entries(binding),
+            workspace_fs.MAX_QUARANTINE_ENTRIES_PER_PARENT,
+        )
+        with closing(connect_db(db_path)) as conn:
+            conn.execute("drop trigger reject_completed_run_at_limit")
+            conn.commit()
+
+        web_runs.recover_interrupted_run_publications(db_path, data_root)
+
+        recovered = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(recovered["status"], "completed")
+        self.assertIsNone(recovered["error_message"])
+        self.assertIn("SpecGate Result", (paths.workspace / "index.html").read_text(encoding="utf-8"))
+
     def test_recover_publication_error_stays_active_with_safe_diagnostic(self):
         db_path, data_root, user, project = self.make_context()
         paths = project_paths(data_root, user["id"], project["id"])
