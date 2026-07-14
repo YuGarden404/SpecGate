@@ -833,6 +833,64 @@ class WebRunsTests(unittest.TestCase):
             [("index", str(latest_index)), ("zip", str(result_zip))],
         )
 
+    def test_execute_run_once_rejects_stale_gate_result_before_publication(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        original_run_mock_agent = web_runs._run_mock_agent
+
+        def mutate_after_final_gate(paths, settings):
+            result = original_run_mock_agent(paths, settings)
+            (paths.workspace / "index.html").write_text("third-party change", encoding="utf-8")
+            return result
+
+        with (
+            patch("specgate.web_runs._run_mock_agent", side_effect=mutate_after_final_gate),
+            patch("specgate.web_runs.promote_run_workspace") as promote,
+        ):
+            execute_run_once(db_path, data_root, run["id"])
+
+        updated = get_run(db_path, user["id"], run["id"])
+        paths = project_paths(data_root, user["id"], project["id"])
+        run_paths = web_run_paths(paths, run["id"])
+        self.assertEqual(updated["status"], "failed")
+        self.assertEqual(updated["error_message"], "stale_gate_result")
+        self.assertIsNone(updated["index_artifact_path"])
+        self.assertFalse(run_paths.index_artifact.exists())
+        self.assertFalse(run_paths.zip_artifact.exists())
+        promote.assert_not_called()
+
+    def test_execute_run_once_binds_published_bytes_to_gate_digest(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        original_gate_check = web_runs._gate_artifact_is_current
+        first_check = True
+
+        def mutate_after_first_gate_check(result, paths):
+            nonlocal first_check
+            current = original_gate_check(result, paths)
+            if first_check:
+                first_check = False
+                (paths.workspace / "index.html").write_text("third-party change", encoding="utf-8")
+            return current
+
+        with (
+            patch(
+                "specgate.web_runs._gate_artifact_is_current",
+                side_effect=mutate_after_first_gate_check,
+            ),
+            patch("specgate.web_runs.promote_run_workspace") as promote,
+        ):
+            execute_run_once(db_path, data_root, run["id"])
+
+        updated = get_run(db_path, user["id"], run["id"])
+        paths = project_paths(data_root, user["id"], project["id"])
+        run_paths = web_run_paths(paths, run["id"])
+        self.assertEqual(updated["status"], "failed")
+        self.assertEqual(updated["error_message"], "stale_gate_result")
+        self.assertFalse(run_paths.index_artifact.exists())
+        self.assertFalse(run_paths.zip_artifact.exists())
+        promote.assert_not_called()
+
     def test_publish_artifacts_rejects_mocked_reparse_artifact_root(self):
         _db_path, data_root, user, project = self.make_context()
         project_storage = project_paths(data_root, user["id"], project["id"])
@@ -850,7 +908,10 @@ class WebRunsTests(unittest.TestCase):
             side_effect=mark_artifacts_reparse,
         ):
             with self.assertRaises(WorkspacePathError) as raised:
-                web_runs._publish_artifacts(paths)
+                web_runs._publish_artifacts(
+                    paths,
+                    hashlib.sha256(b"trusted").hexdigest(),
+                )
 
         self.assertEqual(raised.exception.rule_family, "reparse_point")
         self.assertFalse(paths.index_artifact.exists())
@@ -1075,7 +1136,12 @@ class WebRunsTests(unittest.TestCase):
         run2_paths = web_run_paths(paths, run2["id"])
         self.assertEqual((run2_paths.workspace / "index.html").read_bytes(), run1_index)
 
-        execute_run_once(db_path, data_root, run2["id"])
+        execute_run_once(
+            db_path,
+            data_root,
+            run2["id"],
+            review_existing_writes=False,
+        )
 
         run2_row = get_run(db_path, user["id"], run2["id"])
         self.assertEqual(run1_paths.index_artifact.read_bytes(), run1_index)
@@ -1092,7 +1158,12 @@ class WebRunsTests(unittest.TestCase):
         run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
 
         with patch("specgate.web_runs.promote_run_workspace", side_effect=RuntimeError("promotion failed")):
-            execute_run_once(db_path, data_root, run["id"])
+            execute_run_once(
+                db_path,
+                data_root,
+                run["id"],
+                review_existing_writes=False,
+            )
 
         updated = get_run(db_path, user["id"], run["id"])
         self.assertEqual(updated["status"], "failed")
@@ -1132,7 +1203,12 @@ class WebRunsTests(unittest.TestCase):
             side_effect=replace_source_at_publish,
         ):
             with self.assertRaises(workspace_fs.WorkspaceTreeRenameError):
-                execute_run_once(db_path, data_root, run["id"])
+                execute_run_once(
+                    db_path,
+                    data_root,
+                    run["id"],
+                    review_existing_writes=False,
+                )
 
         updated = get_run(db_path, user["id"], run["id"])
         self.assertEqual(updated["status"], "publishing")
@@ -1178,7 +1254,12 @@ class WebRunsTests(unittest.TestCase):
             side_effect=replace_source_and_fail_quarantine,
         ):
             with self.assertRaises(run_storage.RunStoragePostRenameError) as raised:
-                execute_run_once(db_path, data_root, run["id"])
+                execute_run_once(
+                    db_path,
+                    data_root,
+                    run["id"],
+                    review_existing_writes=False,
+                )
 
         self.assertIn("promotion state is uncertain", str(raised.exception))
         updated = get_run(db_path, user["id"], run["id"])
@@ -1215,7 +1296,12 @@ class WebRunsTests(unittest.TestCase):
             side_effect=occupy_last_slot_after_switch,
         ):
             with self.assertRaises(run_storage.RunStoragePostRenameError):
-                execute_run_once(db_path, data_root, run["id"])
+                execute_run_once(
+                    db_path,
+                    data_root,
+                    run["id"],
+                    review_existing_writes=False,
+                )
 
         updated = get_run(db_path, user["id"], run["id"])
         self.assertEqual(updated["status"], "publishing")
@@ -1352,7 +1438,8 @@ class WebRunsTests(unittest.TestCase):
         with (
             patch("specgate.web_runs.ApprovalQueue.read", return_value=queue),
             patch("specgate.web_runs._index_signature", side_effect=[None, "changed"]),
-            patch("specgate.web_runs._run_resume_agent", return_value=object()),
+            patch("specgate.web_runs._run_resume_agent", return_value=Mock(outcome="completed")),
+            patch("specgate.web_runs._gate_artifact_is_current", return_value=True),
             patch("specgate.web_runs._publish_artifacts", return_value=(paths.index_artifact, paths.zip_artifact)),
             patch("specgate.web_runs._status_for_result", return_value="completed"),
             patch("specgate.web_runs._trust_level", return_value="trusted"),
@@ -1364,7 +1451,13 @@ class WebRunsTests(unittest.TestCase):
             ),
         ):
             with self.assertRaises(run_storage.RunStoragePostRenameError):
-                web_runs.resume_run_once(db_path, data_root, user["id"], run["id"])
+                web_runs.resume_run_once(
+                    db_path,
+                    data_root,
+                    user["id"],
+                    run["id"],
+                    review_existing_writes=False,
+                )
 
         updated = get_run(db_path, user["id"], run["id"])
         self.assertEqual(updated["status"], "publishing")
@@ -1389,7 +1482,12 @@ class WebRunsTests(unittest.TestCase):
             conn.commit()
 
         with self.assertRaisesRegex(sqlite3.IntegrityError, "finalize failed"):
-            execute_run_once(db_path, data_root, run["id"])
+            execute_run_once(
+                db_path,
+                data_root,
+                run["id"],
+                review_existing_writes=False,
+            )
 
         updated = get_run(db_path, user["id"], run["id"])
         self.assertEqual(updated["status"], "publishing")
@@ -1419,7 +1517,12 @@ class WebRunsTests(unittest.TestCase):
 
         with patch("specgate.web_runs.promote_run_workspace", side_effect=KeyboardInterrupt("interrupted")):
             with self.assertRaisesRegex(KeyboardInterrupt, "interrupted"):
-                execute_run_once(db_path, data_root, run["id"])
+                execute_run_once(
+                    db_path,
+                    data_root,
+                    run["id"],
+                    review_existing_writes=False,
+                )
 
         self.assertEqual(get_run(db_path, user["id"], run["id"])["status"], "publishing")
         self.assertEqual((paths.workspace / "index.html").read_text(encoding="utf-8"), "old workspace")
@@ -1440,7 +1543,12 @@ class WebRunsTests(unittest.TestCase):
 
         with patch("specgate.web_runs.promote_run_workspace", side_effect=KeyboardInterrupt("interrupted")):
             with self.assertRaises(KeyboardInterrupt):
-                execute_run_once(db_path, data_root, run["id"])
+                execute_run_once(
+                    db_path,
+                    data_root,
+                    run["id"],
+                    review_existing_writes=False,
+                )
 
         manifest_path = run_paths.audit / "publication-manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1490,7 +1598,12 @@ class WebRunsTests(unittest.TestCase):
         run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
         with patch("specgate.web_runs.promote_run_workspace", side_effect=KeyboardInterrupt("interrupted")):
             with self.assertRaises(KeyboardInterrupt):
-                execute_run_once(db_path, data_root, run["id"])
+                execute_run_once(
+                    db_path,
+                    data_root,
+                    run["id"],
+                    review_existing_writes=False,
+                )
         acquisition_started = threading.Event()
         allow_acquisition = threading.Event()
         original_try_acquire = run_storage.RunPublicationLock.try_acquire
@@ -1539,7 +1652,12 @@ class WebRunsTests(unittest.TestCase):
             conn.commit()
 
         with self.assertRaisesRegex(sqlite3.IntegrityError, "finalize failed"):
-            execute_run_once(db_path, data_root, run["id"])
+            execute_run_once(
+                db_path,
+                data_root,
+                run["id"],
+                review_existing_writes=False,
+            )
         with closing(connect_db(db_path)) as conn:
             conn.execute("drop trigger reject_completed_run")
             conn.commit()
@@ -1571,7 +1689,12 @@ class WebRunsTests(unittest.TestCase):
             conn.commit()
 
         with self.assertRaisesRegex(sqlite3.IntegrityError, "finalize failed at limit"):
-            execute_run_once(db_path, data_root, run["id"])
+            execute_run_once(
+                db_path,
+                data_root,
+                run["id"],
+                review_existing_writes=False,
+            )
         binding = workspace_fs.bind_workspace_tree(paths.root)
         self.assertIsNotNone(binding)
         self.assertEqual(
@@ -1627,7 +1750,12 @@ class WebRunsTests(unittest.TestCase):
                     side_effect=KeyboardInterrupt("interrupted"),
                 ):
                     with self.assertRaises(KeyboardInterrupt):
-                        execute_run_once(db_path, data_root, run["id"])
+                        execute_run_once(
+                            db_path,
+                            data_root,
+                            run["id"],
+                            review_existing_writes=False,
+                        )
 
                 if tamper_case == "workspace":
                     (run_paths.workspace / "index.html").write_text("tampered", encoding="utf-8")

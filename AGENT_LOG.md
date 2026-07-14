@@ -712,5 +712,38 @@
   - Spec review: plan checklist reconciled against commits.
   - Code review: final reviewer found one Critical issue: RAG retrieval and selected context did not honor `WorkspacePolicy.allowed_read_paths`.
   - Fix: `9b03490` passes the workspace policy into context construction, filters selected files and retrieved chunks by `allowed_read_paths`, and adds a regression test proving a policy-disallowed matching file is not sent to the LLM context or retrieval evidence.
-  - Verification: full suite `Ran 191 tests ... OK`; benchmark `strategies=4, cases=7`; `rag-select`, `compressed-rag`, and `isolated-harness` eval each reported `expected_matches=7`.
-  - Commit: `52964d4` for process evidence, `9b03490` for the final review security fix.
+- Verification: full suite `Ran 191 tests ... OK`; benchmark `strategies=4, cases=7`; `rag-select`, `compressed-rag`, and `isolated-harness` eval each reported `expected_matches=7`.
+- Commit: `52964d4` for process evidence, `9b03490` for the final review security fix.
+
+## 2026-07-14 Gate 与 HITL 正确性加固（Task 3–8）
+
+- 时间：2026-07-14（Asia/Shanghai）。
+- 分支：`feat-gate-hitl-correctness`。
+- 触发的 Superpowers 技能：
+  - `using-superpowers`：先检查适用技能与执行约束。
+  - `executing-plans`：按既有实施计划逐项审计任务 3–8。
+  - `using-git-worktrees`：确认当前已有连续未提交工作后，在现有功能分支原地继续，未新建 worktree。
+  - `test-driven-development`：对真正暂停、最终 Gate、applying 恢复、覆盖审批、过期摘要、Web revision 冲突和完整 approve/deny 流程逐项执行 RED→GREEN。
+  - `verification-before-completion`：完成前重新运行聚焦测试、全量测试和语法检查。
+- 关键上下文：课程要求强调“机制必须编码，并能在移除真实 LLM 后由确定性单测验证”；本轮继续使用 `MockLLM`、SQLite 临时库和临时工作区，不访问真实 LLM 或网络。
+- 实现摘要：
+  - Action payload 按动作类型验证；Runner 使用明确 outcome，并在创建审批后立即返回。
+  - 审批队列升级为 schema 2、单调 revision、跨进程锁和 CAS；恢复先 claim 为 `applying`，支持中断后的幂等判定。
+  - `finish` 无条件重跑最终 Gate；Web 发布前校验 Gate 绑定的 SHA-256，过期结果返回 `stale_gate_result`。
+  - Web 覆盖已有文件默认进入审批；approve/deny 强制携带 `expected_revision`，冲突返回结构化 409，前端刷新后要求重新确认。
+  - 新增真实 Web approve/deny→resume 集成测试；扫描全部示例 Checklist，未发现需要迁移的 `unsupported_check` 或 `invalid_checklist_rule`。
+- Subagent：本轮未派发 subagent；当前协作策略未授权自动委派，所有实现与复核由主 Agent 完成。
+- 人工干预：用户要求 Git 指令和 PR 操作由其本人执行；因此本轮没有 commit hash，待用户提交后回填 `PLAN.md`。
+- 学到的教训：旧测试全部通过并不代表计划已完成；必须把计划中的并发、暂停和恢复不变量逐条映射到代码调用点，才能发现“基础类已实现但 Runner/Web 仍绕过 CAS”的缺口。
+
+### 最终差异审查与验证
+
+- 主线程复核了 `runner.py`、`approvals.py`、`web_approvals.py` 和 `web_runs.py` 的状态迁移、CAS 边界与发布顺序；因当前协作规则未授权自动委派，本轮没有派发审查 subagent。
+- 最终审查发现并修复三处证据/边界问题：
+  - Gate 原先对解码后的文本计算摘要，带 UTF-8 BOM 的文件会与 Web 原始字节校验不一致；现改为对单次安全读取获得的原始字节计算 SHA-256。
+  - Web 在摘要检查后重新读取文件生成 HTML/ZIP，存在检查与读取之间的竞态窗口；现要求实际发布的同一份字节再次匹配最终 Gate 摘要，不一致时以 `stale_gate_result` 失败且不写入制品。
+  - Runner Trace 原先未记录审批队列 revision；现记录审批请求、`approved -> applying` claim 和终态转换后的 revision。
+- 上述修复均先增加会失败的回归测试，再实现最小修复并确认聚焦测试通过。
+- 最终本地全量回归：`python -m unittest discover -s tests`，结果为 `Ran 731 tests in 117.018s`、`OK (skipped=20)`；跳过项为既有 Windows 符号链接或平台权限场景。
+- 最终语法与差异检查：`python -m compileall -q src tests` 与 `git diff --check` 均通过；Git 仅提示工作区文件未来可能进行 LF/CRLF 转换，没有空白错误。
+- 未执行 `git add`、`git commit`、`git push` 或 PR 操作；GitHub Ubuntu CI 等待用户提交并 push 后运行。

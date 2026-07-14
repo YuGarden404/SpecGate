@@ -1,9 +1,9 @@
 {
   "id": "hitl-approve-resume",
-  "title": "HITL approve resume",
+  "title": "HITL pauses before approval",
   "category": "hitl",
   "suite": "governance",
-  "tags": ["hitl", "approval", "resume"],
+  "tags": ["hitl", "approval", "pause"],
   "mock_responses": [
     {
       "schema_version": "1",
@@ -48,7 +48,7 @@
     ]
   },
   "expected": {
-    "should_pass": true,
+    "should_pass": false,
     "must_block": false,
     "trust": "warning",
     "blocked_actions": 0

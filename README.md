@@ -99,6 +99,8 @@ python -m specgate.cli run-mock-demo examples/knowledge_nav --governance-profile
 
 SpecGate 支持 mock-first 的人工审批流程。高风险 action 在 `review` profile 下不会直接执行，而是写入 `runs/latest/pending_approvals.json`；人工可以列出、批准或拒绝审批项，再用 `resume` 继续运行。对应 trace 会记录 `approval_requested`、`approval_applied`、`approval_rejected` 或 `approval_failed` 等事件，静态 report 会显示 Approval History，便于审计审批生命周期。
 
+审批队列带有单调递增的 `revision`。Web 端执行 approve / deny 时必须提交当前 `expected_revision`；若其他页面或进程已经更新队列，旧 revision 会返回 `409 approval_conflict`，前端会重新加载审批列表并要求用户基于最新状态再次确认，避免并发决定相互覆盖。
+
 推荐用 governance eval case 做确定性 smoke。`--save-workspaces` 会保留本次 eval 的工作区，后续审批命令可以直接指向生成的 HITL case 工作区：
 
 ```powershell
@@ -109,7 +111,7 @@ python -m specgate.cli approvals approve examples/eval_cases/eval-runs/latest/wo
 python -m specgate.cli resume examples/eval_cases/eval-runs/latest/workspaces/hitl-approve-resume --max-steps 5
 ```
 
-拒绝审批时，`resume` 会把该项解析为人工拒绝，不会执行被拒绝的 action：
+approve / deny 只记录人工决定，不会立即执行 action。调用 `resume` 后，已批准 action 会先进入 `applying`，再次校验目标文件状态、路径策略和快照边界，通过后至多应用一次，再继续 Agent loop 和最终 Gate；已拒绝 action 会进入 `rejected`，原 action 不会执行，拒绝原因会作为反馈交给 Agent 重新规划：
 
 ```powershell
 python -m specgate.cli approvals deny examples/eval_cases/eval-runs/latest/workspaces/hitl-approve-resume approval-step-1 --reason "范围太大"
@@ -117,6 +119,8 @@ python -m specgate.cli resume examples/eval_cases/eval-runs/latest/workspaces/hi
 ```
 
 `approve` 只表示人工允许尝试执行，不会绕过 `WorkspacePolicy`、硬阻断路径或 snapshot 保护。`.env`、路径逃逸和外部修改仍然会 fail closed。
+
+`finish` 每次都会对当前 `index.html` 重新运行最终 Gate。Web 发布前还会比较最终 Gate 记录的 SHA-256 与待发布文件；若二者不一致，运行以 `stale_gate_result` 失败，且不会生成或 promotion 过期产物。
 
 运行后可以打开：
 
@@ -168,7 +172,7 @@ python -m specgate.cli run examples/knowledge_nav --provider openai-compatible -
 示例任务目录说明：
 
 - `examples/knowledge_nav/TASK_SPEC.md`：运行时用户需求，描述要生成的 HTML 页面。
-- `examples/knowledge_nav/CHECKLIST.md`：运行时验收清单，其中 `- 必须包含 ...` 会被 Gate 自动检查。
+- `examples/knowledge_nav/CHECKLIST.md`：运行时验收清单；自然语言复选项可以紧跟确定性的 SpecGate 指令，由 Gate 自动检查。
 - `examples/knowledge_nav/index.html`：SpecGate 生成的最终 HTML 产物。
 - `examples/knowledge_nav/reports/latest/index.html`：一次运行的静态报告。
 - `examples/knowledge_nav/runs/latest/trace.jsonl`：逐步运行日志，每行是一条 JSON 事件。
@@ -177,6 +181,27 @@ python -m specgate.cli run examples/knowledge_nav --provider openai-compatible -
 仓库会保留一个示例 `reports/latest/index.html` 方便评审直接查看；`runs/latest/trace.jsonl` 和 `memory.json` 是本地运行产物，不进入 Git，可通过 Mock Demo 重新生成。
 
 `site/index.html` 是 GitHub Pages 的公开首页，不是 harness 的运行输入；Pages workflow 会把示例产物复制到公开站点中。
+
+### Checklist 确定性指令
+
+Checklist 仍使用便于人工阅读的 Markdown。需要确定性验收的复选项，应在下一行紧跟 `<!-- specgate: ... -->` 指令，例如：
+
+```markdown
+- [ ] 至少包含 3 条新闻卡片
+  <!-- specgate: selector "article.news-card" min=3 -->
+- [ ] 每条新闻都有标题、摘要和时间
+  <!-- specgate: each "article.news-card" has "h2" ".summary" "time" -->
+- [ ] 页面包含版权文字
+  <!-- specgate: text "版权所有" -->
+- [ ] 不加载外部资源
+  <!-- specgate: forbid external-resources -->
+- [ ] 不包含脚本
+  <!-- specgate: forbid scripts -->
+```
+
+支持的指令包括：`selector SELECTOR [min=N]` 检查元素数量，`each SELECTOR has CHILD...` 检查每个目标元素的后代，`text TEXT` 检查页面文本，以及 `forbid external-resources`、`forbid scripts`。选择器范围刻意保持简单，只支持标签 `tag`、类 `.class`、ID `#id`、标签加类 `tag.class`、属性存在 `[attr]` 和属性精确值 `[attr="value"]`；不支持后代/子元素组合符、伪类或完整 CSS 选择器。
+
+为兼容已有案例，`- 必须包含 ...`、复选项中的“必须包含 ...”以及语义明确的“禁止外部资源/脚本”仍可解析。其他没有确定性指令且无法兼容解析的复选项会产生 `unsupported_check`；格式错误或超出支持范围的指令会产生 `invalid_checklist_rule`。两者都会使 Gate 失败，因此对应产物可以保留和下载，但不能标记为 `trusted`。
 
 ## 上下文管理
 
@@ -285,7 +310,7 @@ http://127.0.0.1:8000
 - 手动创建项目，或上传 zip 项目。上传项目必须包含 `SPEC` / `TASK_SPEC` 之一和 `CHECKLIST`，导入后会规范化为 `TASK_SPEC.md` 和 `CHECKLIST.md`；也可以包含已有 `index.html` 和其他辅助文件。
 - Codex 风格的左侧项目列表、中央任务输入、右侧预览/报告/审批/设置面板。
 - 后台 run 状态轮询：`queued`、`running`、`needs_approval`、`completed`、`failed`。
-- Web HITL 审批：高风险 action 可以在页面里 approve / deny，再 resume 继续运行。
+- Web HITL 审批：首次创建不存在的 `index.html` 可以直接执行；覆盖任何已有文件时会先暂停为 `needs_approval`，不会在审批前修改文件。页面 approve / deny 会携带队列 revision，冲突时重载最新状态；随后由 resume 应用已批准 action，或把拒绝原因反馈给 Agent 重新规划。
 - 产物下载和源码预览。生成的 HTML 默认作为下载附件或纯文本源码查看，避免在同源认证上下文中直接执行用户/模型生成的 HTML。
 
 WebUI 默认数据目录是：

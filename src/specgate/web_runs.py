@@ -467,7 +467,13 @@ def start_run_background(db_path: Path, data_root: Path, run_id: int) -> threadi
     return thread
 
 
-def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
+def execute_run_once(
+    db_path: Path,
+    data_root: Path,
+    run_id: int,
+    *,
+    review_existing_writes: bool = True,
+) -> None:
     run: sqlite3.Row | None = None
     publication_prepared = False
     workspace_promoted = False
@@ -482,23 +488,41 @@ def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
 
         index_before = _index_signature(paths.workspace / "index.html")
         settings = get_settings(db_path, int(run["user_id"]))
+        settings = {**settings, "review_existing_writes": review_existing_writes}
         result = _run_mock_agent(paths, settings)
         queue = ApprovalQueue.read(paths.approval_queue)
         index_path: Path | None = None
         zip_path: Path | None = None
         index_after = _index_signature(paths.workspace / "index.html")
         produced_index = index_after is not None and index_after != index_before
-        if produced_index:
-            index_path, zip_path = _publish_artifacts(paths)
+        stale_gate_result = (
+            result.outcome == "completed"
+            and produced_index
+            and not _gate_artifact_is_current(result, paths)
+        )
+        if produced_index and not stale_gate_result:
+            index_path, zip_path = _publish_artifacts(
+                paths,
+                _gate_artifact_sha256(result),
+            )
 
-        status = _status_for_result(result, queue, produced_index=produced_index)
-        error_message = None if status in {"completed", "needs_approval"} else "Gate did not pass"
-        if status == "failed" and not produced_index:
+        status = (
+            "failed"
+            if stale_gate_result
+            else _status_for_result(result, queue, produced_index=produced_index)
+        )
+        error_message = (
+            "stale_gate_result"
+            if stale_gate_result
+            else None if status in {"completed", "needs_approval"} else "Gate did not pass"
+        )
+        if status == "failed" and not produced_index and not stale_gate_result:
             error_message = "Run did not produce index.html"
         trust_level = _trust_level(result, status)
         if status == "completed":
             publication_lock = RunPublicationLock(project_storage, run_id)
             publication_lock.acquire()
+            _require_current_gate_artifact(result, paths)
             _write_and_validate_publication_manifest(project_storage, paths, run_id)
             _prepare_run_publication(
                 db_path,
@@ -542,7 +566,14 @@ def execute_run_once(db_path: Path, data_root: Path, run_id: int) -> None:
             publication_lock.release()
 
 
-def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -> sqlite3.Row | None:
+def resume_run_once(
+    db_path: Path,
+    data_root: Path,
+    user_id: int,
+    run_id: int,
+    *,
+    review_existing_writes: bool = True,
+) -> sqlite3.Row | None:
     run = get_run(db_path, user_id, run_id)
     if run["status"] != "needs_approval":
         return None
@@ -565,23 +596,45 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
 
         index_before = _index_signature(paths.workspace / "index.html")
         settings = get_settings(db_path, user_id)
+        settings = {**settings, "review_existing_writes": review_existing_writes}
         result = _run_resume_agent(paths, settings)
         queue = ApprovalQueue.read(paths.approval_queue)
         index_path: Path | None = None
         zip_path: Path | None = None
         index_after = _index_signature(paths.workspace / "index.html")
-        produced_index = index_after is not None and index_after != index_before
-        if produced_index:
-            index_path, zip_path = _publish_artifacts(paths)
+        gate_artifact_is_current = _gate_artifact_is_current(result, paths)
+        produced_index = index_after is not None and (
+            index_after != index_before
+            or (result.outcome == "completed" and gate_artifact_is_current)
+        )
+        stale_gate_result = (
+            result.outcome == "completed"
+            and produced_index
+            and not gate_artifact_is_current
+        )
+        if produced_index and not stale_gate_result:
+            index_path, zip_path = _publish_artifacts(
+                paths,
+                _gate_artifact_sha256(result),
+            )
 
-        status = _status_for_result(result, queue, produced_index=produced_index)
-        error_message = None if status in {"completed", "needs_approval"} else "Gate did not pass"
-        if status == "failed" and not produced_index:
+        status = (
+            "failed"
+            if stale_gate_result
+            else _status_for_result(result, queue, produced_index=produced_index)
+        )
+        error_message = (
+            "stale_gate_result"
+            if stale_gate_result
+            else None if status in {"completed", "needs_approval"} else "Gate did not pass"
+        )
+        if status == "failed" and not produced_index and not stale_gate_result:
             error_message = "Run did not produce index.html"
         trust_level = _trust_level(result, status)
         if status == "completed":
             publication_lock = RunPublicationLock(project_storage, run_id)
             publication_lock.acquire()
+            _require_current_gate_artifact(result, paths)
             _write_and_validate_publication_manifest(project_storage, paths, run_id)
             _prepare_run_publication(
                 db_path,
@@ -626,8 +679,31 @@ def resume_run_once(db_path: Path, data_root: Path, user_id: int, run_id: int) -
             publication_lock.release()
 
 
+def _gate_artifact_is_current(result: RunResult, paths: RunPaths) -> bool:
+    final_gate = result.final_gate
+    if final_gate is None or final_gate.artifact_sha256 is None:
+        return False
+    state = workspace_file_state(paths.workspace, "index.html")
+    return state.exists and state.sha256 == final_gate.artifact_sha256
+
+
+def _gate_artifact_sha256(result: RunResult) -> str:
+    final_gate = result.final_gate
+    if final_gate is None or final_gate.artifact_sha256 is None:
+        raise ValueError("stale_gate_result")
+    return final_gate.artifact_sha256
+
+
+def _require_current_gate_artifact(result: RunResult, paths: RunPaths) -> None:
+    if not _gate_artifact_is_current(result, paths):
+        raise ValueError("stale_gate_result")
+
+
 def _run_mock_agent(paths: RunPaths, settings: dict) -> RunResult:
-    governance = GovernanceConfig(profile=settings["governance_profile"])
+    governance = GovernanceConfig(
+        profile=settings["governance_profile"],
+        review_existing_writes=settings.get("review_existing_writes", True),
+    )
     policy = WorkspacePolicy(
         root=paths.workspace,
         allowed_actions={"read_file", "list_files", "write_file", "replace_file", "finish"},
@@ -670,7 +746,10 @@ def _run_mock_agent(paths: RunPaths, settings: dict) -> RunResult:
 
 
 def _run_resume_agent(paths: RunPaths, settings: dict) -> RunResult:
-    governance = GovernanceConfig(profile=settings["governance_profile"])
+    governance = GovernanceConfig(
+        profile=settings["governance_profile"],
+        review_existing_writes=settings.get("review_existing_writes", True),
+    )
     policy = WorkspacePolicy(
         root=paths.workspace,
         allowed_actions={"read_file", "list_files", "write_file", "replace_file", "finish"},
@@ -1063,11 +1142,13 @@ def _mark_failed(db_path: Path, run_id: int, error_message: str) -> None:
         conn.close()
 
 
-def _publish_artifacts(paths: RunPaths) -> tuple[Path, Path]:
+def _publish_artifacts(paths: RunPaths, expected_sha256: str) -> tuple[Path, Path]:
     try:
         index_content = read_workspace_bytes(paths.workspace, "index.html")
     except ValueError as exc:
         raise ValueError("index.html was not produced")
+    if hashlib.sha256(index_content).hexdigest() != expected_sha256:
+        raise ValueError("stale_gate_result")
     index_path = paths.index_artifact
     publish_workspace_bytes(paths.artifacts, index_path.name, index_content)
     archive_buffer = io.BytesIO()

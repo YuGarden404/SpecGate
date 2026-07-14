@@ -66,6 +66,22 @@ class ToolDispatcherTests(unittest.TestCase):
                     self.assertTrue(result.blocked)
                     self.assertIn("missing required path", result.message)
 
+    def test_write_action_without_content_does_not_default_to_empty_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            policy = WorkspacePolicy(
+                root,
+                {"write_file"},
+                set(),
+                {"index.html"},
+            )
+            dispatcher = ToolDispatcher(policy)
+
+            with self.assertRaises(KeyError):
+                dispatcher.dispatch(Action("1", "write_file", {"path": "index.html"}))
+
+            self.assertFalse((root / "index.html").exists())
+
     def test_custom_registry_blocks_tools_not_registered(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -105,7 +105,14 @@ async function apiJson(path, options = {}) {
     : await response.text();
   if (!response.ok) {
     const detail = typeof payload === "object" && payload ? payload.detail : payload;
-    throw new Error(detail || `Request failed with ${response.status}`);
+    const message =
+      detail && typeof detail === "object"
+        ? detail.message || detail.code
+        : detail;
+    const error = new Error(message || `Request failed with ${response.status}`);
+    error.status = response.status;
+    error.detail = detail;
+    throw error;
   }
   return payload;
 }
@@ -1362,10 +1369,10 @@ function renderApprovalsDetail(content) {
     const actions = el("div", { className: "approval-actions" });
     const approve = el("button", { type: "button" }, ["通过"]);
     approve.disabled = approval.status !== "pending";
-    approve.addEventListener("click", () => approveApproval(approval.id));
+    approve.addEventListener("click", () => approveApproval(approval));
     const deny = el("button", { type: "button", className: "secondary" }, ["拒绝"]);
     deny.disabled = approval.status !== "pending";
-    deny.addEventListener("click", () => denyApproval(approval.id));
+    deny.addEventListener("click", () => denyApproval(approval));
     const resume = el("button", { type: "button", className: "secondary" }, ["恢复运行"]);
     resume.addEventListener("click", () => resumeRun(approval.run_id));
     actions.append(approve, deny, resume);
@@ -1402,31 +1409,50 @@ async function loadApprovals() {
   state.approvals = payload.approvals || [];
 }
 
-async function approveApproval(approvalId) {
+async function refreshApprovalAfterConflict(error) {
+  if (error.status === 409) {
+    await loadApprovals();
+    renderDetail();
+    setMessage("审批状态已变化，请重新确认。", true);
+    return true;
+  }
+  return false;
+}
+
+async function approveApproval(approval) {
   try {
-    await apiJson(`/api/approvals/${approvalId}/approve`, { method: "POST" });
+    await apiJson(`/api/approvals/${approval.id}/approve`, {
+      method: "POST",
+      body: { expected_revision: approval.queue_revision },
+    });
     await loadApprovals();
     renderDetail();
     setMessage("审批已通过。");
   } catch (error) {
+    if (await refreshApprovalAfterConflict(error)) {
+      return;
+    }
     setMessage(error.message, true);
   }
 }
 
-async function denyApproval(approvalId) {
+async function denyApproval(approval) {
   const reason = window.prompt("请输入拒绝原因");
   if (!reason || !reason.trim()) {
     return;
   }
   try {
-    await apiJson(`/api/approvals/${approvalId}/deny`, {
+    await apiJson(`/api/approvals/${approval.id}/deny`, {
       method: "POST",
-      body: { reason },
+      body: { reason, expected_revision: approval.queue_revision },
     });
     await loadApprovals();
     renderDetail();
     setMessage("审批已拒绝。");
   } catch (error) {
+    if (await refreshApprovalAfterConflict(error)) {
+      return;
+    }
     setMessage(error.message, true);
   }
 }

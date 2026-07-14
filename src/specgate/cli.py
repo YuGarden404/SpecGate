@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from specgate.approvals import (
+    ApprovalStore,
     GovernanceConfig,
     approval_queue_path,
     read_approval_queue_if_present,
@@ -472,13 +473,21 @@ def _utc_now() -> str:
 def update_approval(root: Path, approval_id: str, decision: str, reason: str | None = None) -> int:
     try:
         queue_path = approval_queue_path(root)
-        queue = read_existing_approval_queue(queue_path)
+        store = ApprovalStore(queue_path)
+        queue = store.read_existing()
         if decision == "approve":
-            updated = queue.approve(approval_id, decided_at=_utc_now())
+            store.decide(
+                approval_id,
+                "approved",
+                expected_revision=queue.revision,
+                decided_at=_utc_now(),
+            )
             message = f"approved {approval_id}"
         elif decision == "deny":
-            updated = queue.deny(
+            store.decide(
                 approval_id,
+                "denied",
+                expected_revision=queue.revision,
                 reason=reason or "human denied",
                 decided_at=_utc_now(),
             )
@@ -486,7 +495,6 @@ def update_approval(root: Path, approval_id: str, decision: str, reason: str | N
         else:
             print("could not update approval: invalid decision")
             return 1
-        updated.write(queue_path)
         print(message)
         return 0
     except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
