@@ -2127,3 +2127,10 @@ SPEC 覆盖：
 - GitHub Ubuntu CI：待填写。
 
 本轮仍以 MockLLM 和确定性单元测试作为验收主链路。Agent 不执行 `git add`、`git commit`、`git push` 或 PR 操作。
+
+## GitHub Pages 合并后热修复
+
+- 根因：Pages workflow 在全新 Ubuntu runner 中未安装 `pyproject.toml` 声明的依赖，导入 CLI 时缺少 `keyring`；同一提交的 unit-test 与 docker-build 均已通过。
+- 修复：在生成 mock demo 前执行 `python -m pip install -e .`，与 CI、Docker 安装方式保持一致。
+- 回归：新增 workflow 顺序测试，防止以后再次先运行 CLI、后安装依赖。
+- 远端验证：等待热修复合并到 `main` 后回填 Pages 结果。
