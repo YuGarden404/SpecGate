@@ -2,7 +2,7 @@ import sqlite3
 from pathlib import Path
 
 
-LATEST_SCHEMA_VERSION = 2
+LATEST_SCHEMA_VERSION = 3
 
 USER_CREDENTIALS_SCHEMA = """
 create table if not exists user_credentials (
@@ -79,7 +79,9 @@ create table if not exists runs (
     error_message text,
     created_at text not null default current_timestamp,
     started_at text,
-    finished_at text
+    finished_at text,
+    cancel_requested_at text,
+    deadline_at text
 );
 
 create table if not exists approvals (
@@ -104,7 +106,7 @@ create table if not exists artifacts (
     created_at text not null default current_timestamp
 );
 
-pragma user_version = 2;
+pragma user_version = 3;
 """
 
 
@@ -112,6 +114,9 @@ def connect_db(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("pragma foreign_keys = on")
+    conn.execute("pragma journal_mode = wal")
+    conn.execute("pragma synchronous = normal")
+    conn.execute("pragma busy_timeout = 5000")
     return conn
 
 
@@ -155,6 +160,18 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
         raise
 
 
+def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    conn.execute("begin immediate")
+    try:
+        conn.execute("alter table runs add column cancel_requested_at text")
+        conn.execute("alter table runs add column deadline_at text")
+        conn.execute("pragma user_version = 3")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = connect_db(db_path)
@@ -165,6 +182,9 @@ def init_db(db_path: Path) -> None:
             return
         if version == 1:
             _migrate_v1_to_v2(conn)
+            version = 2
+        if version == 2:
+            _migrate_v2_to_v3(conn)
             return
         if version == LATEST_SCHEMA_VERSION:
             conn.execute(USER_CREDENTIALS_SCHEMA)

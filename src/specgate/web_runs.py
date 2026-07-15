@@ -9,6 +9,7 @@ import threading
 import zipfile
 from contextlib import AbstractContextManager
 from pathlib import Path
+from typing import Callable
 
 from specgate.approvals import ApprovalQueue, GovernanceConfig
 from specgate.config import ContextConfig, WorkspaceConfig
@@ -32,6 +33,7 @@ from specgate.trace import redact
 from specgate.web_auth import utc_now
 from specgate.web_db import connect_db
 from specgate.web_projects import ProjectPaths, RunPaths, project_paths, web_run_paths
+from specgate.web_runtime import RunCancelled, RunTask, RunTimedOut
 from specgate.web_settings import get_runtime_settings
 from specgate.workspace_fs import (
     WorkspaceTreeRenameError,
@@ -50,9 +52,25 @@ INTERRUPTED_RUN_UNOWNED_STORAGE_ERROR = (
 )
 
 
-class ActiveRunConflict(ValueError):
+class RunLimitExceeded(ValueError):
+    code = "run_limit_exceeded"
+
+    def __init__(self, scope: str) -> None:
+        self.scope = scope
+        messages = {
+            "user": "当前用户的活动运行已达上限 / User active run limit reached",
+            "project": ACTIVE_RUN_CONFLICT_MESSAGE,
+        }
+        super().__init__(messages[scope])
+
+
+class ActiveRunConflict(RunLimitExceeded):
     def __init__(self) -> None:
-        super().__init__(ACTIVE_RUN_CONFLICT_MESSAGE)
+        super().__init__("project")
+
+
+class RunCancellationConflict(ValueError):
+    code = "run_cancellation_conflict"
 
 
 def recover_interrupted_run_initializations(db_path: Path, data_root: Path) -> None:
@@ -142,6 +160,8 @@ def create_run(
     prompt: str,
     *,
     data_root: Path,
+    max_active_runs_per_user: int = 4,
+    on_reserved_run: Callable[[int], None] | None = None,
 ) -> sqlite3.Row:
     run_prompt = _require_text(prompt, "prompt")
     run_id, paths, created_at, initialization_lock, quota_guard = _reserve_initializing_run(
@@ -150,9 +170,12 @@ def create_run(
         project_id,
         user_id,
         run_prompt,
+        max_active_runs_per_user,
     )
     storage_initialized = False
     try:
+        if on_reserved_run is not None:
+            on_reserved_run(run_id)
         initialize_run_storage(paths, run_id)
         storage_initialized = True
         return _queue_initialized_run(
@@ -185,6 +208,7 @@ def _reserve_initializing_run(
     project_id: int,
     user_id: int,
     run_prompt: str,
+    max_active_runs_per_user: int,
 ) -> tuple[
     int,
     ProjectPaths,
@@ -204,10 +228,26 @@ def _reserve_initializing_run(
         if project is None:
             raise ValueError("project not found")
 
+        active_count = conn.execute(
+            """
+            select count(*) from runs
+            where user_id = ? and status in (
+                'initializing', 'queued', 'running', 'needs_approval',
+                'cancel_requested', 'publishing'
+            )
+            """,
+            (user_id,),
+        ).fetchone()[0]
+        if active_count >= max_active_runs_per_user:
+            raise RunLimitExceeded("user")
+
         active_run = conn.execute(
             """
             select id from runs
-            where project_id = ? and status in ('initializing', 'queued', 'running', 'needs_approval', 'publishing')
+            where project_id = ? and status in (
+                'initializing', 'queued', 'running', 'needs_approval',
+                'cancel_requested', 'publishing'
+            )
             limit 1
             """,
             (project_id,),
@@ -473,7 +513,10 @@ def execute_run_once(
     run_id: int,
     *,
     review_existing_writes: bool = True,
+    stop_check: Callable[[], None] | None = None,
+    deadline_at: str | None = None,
 ) -> None:
+    checker = stop_check or (lambda: None)
     run: sqlite3.Row | None = None
     publication_prepared = False
     workspace_promoted = False
@@ -483,13 +526,19 @@ def execute_run_once(
         project = _load_project(db_path, run["project_id"], run["user_id"])
         project_storage = project_paths(data_root, run["user_id"], project["id"])
         paths = web_run_paths(project_storage, run_id)
-        if not _mark_running(db_path, run_id):
+        if not _mark_running(db_path, run_id, deadline_at=deadline_at):
             return
 
+        checker()
         index_before = _index_signature(paths.workspace / "index.html")
         settings = get_runtime_settings(db_path, int(run["user_id"]))
-        settings = {**settings, "review_existing_writes": review_existing_writes}
+        settings = {
+            **settings,
+            "review_existing_writes": review_existing_writes,
+            "_stop_check": checker,
+        }
         result = _run_mock_agent(paths, settings)
+        checker()
         queue = ApprovalQueue.read(paths.approval_queue)
         index_path: Path | None = None
         zip_path: Path | None = None
@@ -505,6 +554,7 @@ def execute_run_once(
                 paths,
                 _gate_artifact_sha256(result),
             )
+            checker()
 
         status = (
             "failed"
@@ -547,6 +597,16 @@ def execute_run_once(
                 zip_artifact_path=zip_path,
                 queue=queue,
             )
+    except RunCancelled as exc:
+        if run is not None:
+            _mark_stopped(db_path, run_id, status="cancelled", error_message=str(exc))
+            return
+        raise
+    except RunTimedOut as exc:
+        if run is not None:
+            _mark_stopped(db_path, run_id, status="timed_out", error_message=str(exc))
+            return
+        raise
     except Exception as exc:
         if run is not None:
             if publication_prepared and (
@@ -558,6 +618,8 @@ def execute_run_once(
                 except Exception as diagnostic_error:
                     exc.add_note(f"publication diagnostic update failed: {_safe_error(diagnostic_error)}")
                 raise
+            if _finish_if_stopped(db_path, run_id, checker):
+                return
             _mark_failed(db_path, run_id, _safe_error(exc))
             return
         raise
@@ -573,9 +635,12 @@ def resume_run_once(
     run_id: int,
     *,
     review_existing_writes: bool = True,
+    stop_check: Callable[[], None] | None = None,
+    deadline_at: str | None = None,
 ) -> sqlite3.Row | None:
+    checker = stop_check or (lambda: None)
     run = get_run(db_path, user_id, run_id)
-    if run["status"] != "needs_approval":
+    if run["status"] not in {"queued", "needs_approval"}:
         return None
 
     project = _load_project(db_path, run["project_id"], user_id)
@@ -583,6 +648,8 @@ def resume_run_once(
     paths = web_run_paths(project_storage, run_id)
     queue = ApprovalQueue.read(paths.approval_queue)
     if queue.next_resume_candidate() is None:
+        if run["status"] == "queued":
+            return None
         raise ValueError("no approved or denied approval to resume")
 
     running_run: sqlite3.Row | None = None
@@ -590,14 +657,24 @@ def resume_run_once(
     workspace_promoted = False
     publication_lock: RunPublicationLock | None = None
     try:
-        running_run = _mark_resume_running(db_path, user_id, run_id)
+        running_run = _mark_resume_running(
+            db_path,
+            user_id,
+            run_id,
+            deadline_at=deadline_at,
+        )
         if running_run is None:
             return None
 
         index_before = _index_signature(paths.workspace / "index.html")
         settings = get_runtime_settings(db_path, user_id)
-        settings = {**settings, "review_existing_writes": review_existing_writes}
+        settings = {
+            **settings,
+            "review_existing_writes": review_existing_writes,
+            "_stop_check": checker,
+        }
         result = _run_resume_agent(paths, settings)
+        checker()
         queue = ApprovalQueue.read(paths.approval_queue)
         index_path: Path | None = None
         zip_path: Path | None = None
@@ -617,6 +694,7 @@ def resume_run_once(
                 paths,
                 _gate_artifact_sha256(result),
             )
+            checker()
 
         status = (
             "failed"
@@ -660,6 +738,16 @@ def resume_run_once(
                 queue=queue,
             )
         return get_run(db_path, user_id, run_id)
+    except RunCancelled as exc:
+        if running_run is not None:
+            _mark_stopped(db_path, run_id, status="cancelled", error_message=str(exc))
+            return get_run(db_path, user_id, run_id)
+        raise
+    except RunTimedOut as exc:
+        if running_run is not None:
+            _mark_stopped(db_path, run_id, status="timed_out", error_message=str(exc))
+            return get_run(db_path, user_id, run_id)
+        raise
     except Exception as exc:
         if running_run is not None:
             if publication_prepared and (
@@ -671,12 +759,133 @@ def resume_run_once(
                 except Exception as diagnostic_error:
                     exc.add_note(f"publication diagnostic update failed: {_safe_error(diagnostic_error)}")
                 raise
+            if _finish_if_stopped(db_path, run_id, checker):
+                return get_run(db_path, user_id, run_id)
             _mark_failed(db_path, run_id, _safe_error(exc))
             return get_run(db_path, user_id, run_id)
         raise
     finally:
         if publication_lock is not None:
             publication_lock.release()
+
+
+def recover_interrupted_runtime_states(db_path: Path) -> None:
+    now = utc_now().isoformat()
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        interrupted = conn.execute(
+            "select id, project_id from runs where status = 'running'"
+        ).fetchall()
+        cancelled = conn.execute(
+            "select id, project_id from runs where status = 'cancel_requested'"
+        ).fetchall()
+        conn.execute(
+            """
+            update runs
+            set status = 'failed', trust_level = 'failed',
+                error_message = '进程重启中断', finished_at = ?,
+                index_artifact_path = null, zip_artifact_path = null
+            where status = 'running'
+            """,
+            (now,),
+        )
+        conn.execute(
+            """
+            update runs
+            set status = 'cancelled', trust_level = 'failed',
+                error_message = '运行已取消', finished_at = ?,
+                index_artifact_path = null, zip_artifact_path = null
+            where status = 'cancel_requested'
+            """,
+            (now,),
+        )
+        for row in interrupted:
+            conn.execute("delete from artifacts where run_id = ?", (row["id"],))
+            conn.execute(
+                "update projects set last_run_status = 'failed', updated_at = ? where id = ?",
+                (now, row["project_id"]),
+            )
+        for row in cancelled:
+            conn.execute("delete from artifacts where run_id = ?", (row["id"],))
+            conn.execute(
+                "update projects set last_run_status = 'cancelled', updated_at = ? where id = ?",
+                (now, row["project_id"]),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def list_queued_runs(db_path: Path) -> list[sqlite3.Row]:
+    conn = connect_db(db_path)
+    try:
+        return conn.execute(
+            "select * from runs where status = 'queued' order by created_at asc, id asc"
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def queued_run_task(data_root: Path, run: sqlite3.Row) -> RunTask:
+    project = project_paths(
+        data_root,
+        int(run["user_id"]),
+        int(run["project_id"]),
+    )
+    paths = web_run_paths(project, int(run["id"]))
+    queue = ApprovalQueue.read(paths.approval_queue)
+    return RunTask(
+        int(run["id"]),
+        int(run["user_id"]),
+        queue.next_resume_candidate() is not None,
+    )
+
+
+def queue_run_resume(
+    db_path: Path,
+    data_root: Path,
+    user_id: int,
+    run_id: int,
+) -> sqlite3.Row:
+    run = get_run(db_path, user_id, run_id)
+    if run["status"] != "needs_approval":
+        raise ValueError("run is not waiting for approval")
+    project = _load_project(db_path, int(run["project_id"]), user_id)
+    paths = web_run_paths(
+        project_paths(data_root, user_id, int(project["id"])),
+        run_id,
+    )
+    if ApprovalQueue.read(paths.approval_queue).next_resume_candidate() is None:
+        raise ValueError("no approved or denied approval to resume")
+
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            """
+            update runs
+            set status = 'queued', deadline_at = null, finished_at = null
+            where id = ? and user_id = ? and status = 'needs_approval'
+            """,
+            (run_id, user_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("run is no longer waiting for approval")
+        queued = conn.execute(
+            "select * from runs where id = ?",
+            (run_id,),
+        ).fetchone()
+        conn.commit()
+        return queued
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _gate_artifact_is_current(result: RunResult, paths: RunPaths) -> bool:
@@ -741,6 +950,7 @@ def _run_mock_agent(paths: RunPaths, settings: dict) -> RunResult:
         governance_config=workspace_config.governance,
         audit_dir=paths.audit,
         approval_queue_file=paths.approval_queue,
+        stop_check=settings.get("_stop_check"),
     )
     return runner.run()
 
@@ -780,6 +990,7 @@ def _run_resume_agent(paths: RunPaths, settings: dict) -> RunResult:
         audit_dir=paths.audit,
         approval_queue_file=paths.approval_queue,
         reset_audit=False,
+        stop_check=settings.get("_stop_check"),
     )
     return runner.resume_from_approval()
 
@@ -828,17 +1039,18 @@ def _load_project(db_path: Path, project_id: int, user_id: int) -> sqlite3.Row:
         conn.close()
 
 
-def _mark_running(db_path: Path, run_id: int) -> bool:
+def _mark_running(db_path: Path, run_id: int, *, deadline_at: str | None = None) -> bool:
     now = utc_now().isoformat()
     conn = connect_db(db_path)
     try:
         cursor = conn.execute(
             """
             update runs
-            set status = ?, started_at = ?, finished_at = null, error_message = null
+            set status = ?, started_at = ?, finished_at = null, error_message = null,
+                deadline_at = ?
             where id = ? and status = ?
             """,
-            ("running", now, run_id, "queued"),
+            ("running", now, deadline_at, run_id, "queued"),
         )
         conn.commit()
         return cursor.rowcount == 1
@@ -846,17 +1058,24 @@ def _mark_running(db_path: Path, run_id: int) -> bool:
         conn.close()
 
 
-def _mark_resume_running(db_path: Path, user_id: int, run_id: int) -> sqlite3.Row | None:
+def _mark_resume_running(
+    db_path: Path,
+    user_id: int,
+    run_id: int,
+    *,
+    deadline_at: str | None = None,
+) -> sqlite3.Row | None:
     now = utc_now().isoformat()
     conn = connect_db(db_path)
     try:
         cursor = conn.execute(
             """
             update runs
-            set status = ?, started_at = ?, finished_at = null, error_message = null
-            where id = ? and user_id = ? and status = ?
+            set status = ?, started_at = ?, finished_at = null, error_message = null,
+                deadline_at = ?
+            where id = ? and user_id = ? and status in ('queued', 'needs_approval')
             """,
-            ("running", now, run_id, user_id, "needs_approval"),
+            ("running", now, deadline_at, run_id, user_id),
         )
         conn.commit()
         if cursor.rowcount == 1:
@@ -949,6 +1168,12 @@ def _prepare_run_publication(
             (trust_level, str(index_artifact_path), str(zip_artifact_path), run_id),
         )
         if cursor.rowcount != 1:
+            current = conn.execute(
+                "select status from runs where id = ?",
+                (run_id,),
+            ).fetchone()
+            if current is not None and current["status"] == "cancel_requested":
+                raise RunCancelled("运行已取消")
             raise RuntimeError("run is not ready for publication")
         _record_artifacts(conn, run_id, index_artifact_path, zip_artifact_path)
         _sync_approvals(conn, run_id, queue)
@@ -1140,6 +1365,233 @@ def _mark_failed(db_path: Path, run_id: int, error_message: str) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def cancel_run(db_path: Path, user_id: int, run_id: int) -> sqlite3.Row:
+    now = utc_now().isoformat()
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        run = conn.execute(
+            "select * from runs where id = ? and user_id = ?",
+            (run_id, user_id),
+        ).fetchone()
+        if run is None:
+            raise ValueError("run not found")
+
+        original_status = run["status"]
+        if original_status == "queued":
+            target_status = "cancelled"
+        elif original_status == "running":
+            target_status = "cancel_requested"
+        elif original_status == "needs_approval":
+            target_status = "cancelled"
+        elif original_status == "cancel_requested":
+            conn.execute(
+                """
+                update runs
+                set cancel_requested_at = coalesce(cancel_requested_at, ?)
+                where id = ? and user_id = ? and status = 'cancel_requested'
+                """,
+                (now, run_id, user_id),
+            )
+            updated = conn.execute(
+                "select * from runs where id = ?",
+                (run_id,),
+            ).fetchone()
+            conn.commit()
+            return updated
+        else:
+            raise RunCancellationConflict("run cannot be cancelled from current status")
+
+        finished_at = now if target_status == "cancelled" else None
+        cursor = conn.execute(
+            """
+            update runs
+            set status = ?,
+                cancel_requested_at = ?,
+                finished_at = ?,
+                error_message = ?,
+                trust_level = case
+                    when ? = 'cancelled' then 'failed'
+                    else trust_level
+                end,
+                index_artifact_path = case
+                    when ? = 'cancelled' then null
+                    else index_artifact_path
+                end,
+                zip_artifact_path = case
+                    when ? = 'cancelled' then null
+                    else zip_artifact_path
+                end
+            where id = ? and user_id = ? and status = ?
+            """,
+            (
+                target_status,
+                now,
+                finished_at,
+                "运行已取消" if target_status == "cancelled" else None,
+                target_status,
+                target_status,
+                target_status,
+                run_id,
+                user_id,
+                original_status,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("run status changed during cancellation")
+        if target_status == "cancelled":
+            conn.execute("delete from artifacts where run_id = ?", (run_id,))
+            conn.execute(
+                """
+                update projects
+                set last_run_status = 'cancelled', updated_at = ?
+                where id = (select project_id from runs where id = ?)
+                """,
+                (now, run_id),
+            )
+        updated = conn.execute(
+            "select * from runs where id = ?",
+            (run_id,),
+        ).fetchone()
+        conn.commit()
+        return updated
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def cancel_queued_run_for_shutdown(db_path: Path, run_id: int) -> None:
+    now = utc_now().isoformat()
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            """
+            update runs
+            set status = 'cancelled', trust_level = 'failed',
+                error_message = '运行已取消', finished_at = ?,
+                cancel_requested_at = coalesce(cancel_requested_at, ?),
+                index_artifact_path = null, zip_artifact_path = null
+            where id = ? and status = 'queued'
+            """,
+            (now, now, run_id),
+        )
+        if cursor.rowcount == 1:
+            conn.execute("delete from artifacts where run_id = ?", (run_id,))
+            conn.execute(
+                """
+                update projects
+                set last_run_status = 'cancelled', updated_at = ?
+                where id = (select project_id from runs where id = ?)
+                """,
+                (now, run_id),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def request_running_cancel_for_shutdown(db_path: Path, run_id: int) -> None:
+    now = utc_now().isoformat()
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            update runs
+            set status = 'cancel_requested',
+                cancel_requested_at = coalesce(cancel_requested_at, ?)
+            where id = ? and status = 'running'
+            """,
+            (now, run_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _mark_stopped(
+    db_path: Path,
+    run_id: int,
+    *,
+    status: str,
+    error_message: str,
+) -> None:
+    if status not in {"cancelled", "timed_out"}:
+        raise ValueError("invalid stopped run status")
+    now = utc_now().isoformat()
+    conn = connect_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            """
+            update runs
+            set status = ?,
+                trust_level = 'failed',
+                index_artifact_path = null,
+                zip_artifact_path = null,
+                error_message = ?,
+                finished_at = ?,
+                cancel_requested_at = case
+                    when ? = 'cancelled' then coalesce(cancel_requested_at, ?)
+                    else cancel_requested_at
+                end
+            where id = ? and status in ('running', 'cancel_requested')
+            """,
+            (status, error_message, now, status, now, run_id),
+        )
+        if cursor.rowcount == 1:
+            conn.execute("delete from artifacts where run_id = ?", (run_id,))
+            conn.execute(
+                """
+                update projects
+                set last_run_status = ?, updated_at = ?
+                where id = (select project_id from runs where id = ?)
+                """,
+                (status, now, run_id),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _finish_if_stopped(
+    db_path: Path,
+    run_id: int,
+    checker: Callable[[], None],
+) -> bool:
+    try:
+        checker()
+    except RunCancelled as exc:
+        _mark_stopped(db_path, run_id, status="cancelled", error_message=str(exc))
+        return True
+    except RunTimedOut as exc:
+        _mark_stopped(db_path, run_id, status="timed_out", error_message=str(exc))
+        return True
+
+    current = _load_run(db_path, run_id)
+    if current["status"] == "cancel_requested":
+        _mark_stopped(
+            db_path,
+            run_id,
+            status="cancelled",
+            error_message="运行已取消",
+        )
+        return True
+    return False
 
 
 def _publish_artifacts(paths: RunPaths, expected_sha256: str) -> tuple[Path, Path]:

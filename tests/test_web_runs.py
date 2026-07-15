@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 import specgate.web_runs as web_runs
 import specgate.run_storage as run_storage
 import specgate.workspace_fs as workspace_fs
+from specgate.approvals import ApprovalQueue, PendingApproval
 from specgate.run_storage import (
     initialize_run_storage as initialize_run_storage_real,
     promote_run_workspace as promote_run_workspace_real,
@@ -20,6 +21,7 @@ from specgate.run_storage import (
 from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
 from specgate.web_projects import create_manual_project, project_paths, web_run_paths
+from specgate.web_runtime import RunCancelled, RunTask, RunTimedOut
 from specgate.web_runs import ActiveRunConflict, create_run, execute_run_once, get_run
 from specgate.workspace_fs import WorkspacePathError
 
@@ -45,6 +47,117 @@ class WebRunsTests(unittest.TestCase):
             index_html=None,
         )
         return db_path, data_root, user, project
+
+    def test_recover_interrupted_runtime_states_is_conservative(self):
+        db_path, _data_root, user, project = self.make_context()
+        statuses = (
+            "queued",
+            "running",
+            "cancel_requested",
+            "needs_approval",
+            "publishing",
+            "completed",
+            "failed",
+            "cancelled",
+            "timed_out",
+        )
+        with closing(connect_db(db_path)) as conn:
+            for index, status in enumerate(statuses):
+                conn.execute(
+                    """
+                    insert into runs (
+                        project_id, user_id, status, prompt, created_at,
+                        cancel_requested_at
+                    ) values (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        project["id"],
+                        user["id"],
+                        status,
+                        status,
+                        f"2026-07-14T00:00:{index:02d}Z",
+                        "2026-07-14T00:00:30Z" if status == "cancel_requested" else None,
+                    ),
+                )
+            conn.commit()
+
+        web_runs.recover_interrupted_runtime_states(db_path)
+
+        with closing(connect_db(db_path)) as conn:
+            recovered = {
+                row["prompt"]: row
+                for row in conn.execute("select * from runs").fetchall()
+            }
+        self.assertEqual(recovered["queued"]["status"], "queued")
+        self.assertEqual(recovered["running"]["status"], "failed")
+        self.assertEqual(recovered["running"]["error_message"], "进程重启中断")
+        self.assertIsNotNone(recovered["running"]["finished_at"])
+        self.assertEqual(recovered["cancel_requested"]["status"], "cancelled")
+        self.assertEqual(
+            recovered["cancel_requested"]["cancel_requested_at"],
+            "2026-07-14T00:00:30Z",
+        )
+        for status in (
+            "needs_approval",
+            "publishing",
+            "completed",
+            "failed",
+            "cancelled",
+            "timed_out",
+        ):
+            self.assertEqual(recovered[status]["status"], status)
+
+    def test_queued_task_mode_is_inferred_from_approval_queue(self):
+        db_path, data_root, user, first_project = self.make_context()
+        second_project = create_manual_project(
+            db_path,
+            data_root,
+            user["id"],
+            name="Resume Site",
+            spec_text="# Spec",
+            checklist_text="- Ship HTML.",
+            index_html=None,
+        )
+        first = create_run(
+            db_path,
+            first_project["id"],
+            user["id"],
+            "First",
+            data_root=data_root,
+        )
+        resumed = create_run(
+            db_path,
+            second_project["id"],
+            user["id"],
+            "Resume",
+            data_root=data_root,
+        )
+        resumed_paths = web_run_paths(
+            project_paths(data_root, user["id"], second_project["id"]),
+            resumed["id"],
+        )
+        ApprovalQueue(
+            [
+                PendingApproval(
+                    id="approval-step-1",
+                    step=1,
+                    action="finish",
+                    path=None,
+                    risk_level="review",
+                    reason="review",
+                    profile="review",
+                    status="denied",
+                )
+            ]
+        ).write(resumed_paths.approval_queue)
+
+        tasks = {
+            row["id"]: web_runs.queued_run_task(data_root, row)
+            for row in web_runs.list_queued_runs(db_path)
+        }
+
+        self.assertEqual(tasks[first["id"]], RunTask(first["id"], user["id"], False))
+        self.assertEqual(tasks[resumed["id"]], RunTask(resumed["id"], user["id"], True))
 
     def test_recover_interrupted_initializations_removes_partial_and_complete_storage(self):
         db_path, data_root, user, partial_project = self.make_context()
@@ -302,13 +415,178 @@ class WebRunsTests(unittest.TestCase):
         self.assertEqual(message["user_id"], user["id"])
         self.assertEqual(message["role"], "user")
         self.assertEqual(message["content"], "Build the result")
-        run_paths = web_run_paths(project_paths(data_root, user["id"], project["id"]), run["id"])
+        run_paths = web_run_paths(
+            project_paths(data_root, user["id"], project["id"]),
+            run["id"],
+        )
         self.assertTrue(run_paths.workspace.is_dir())
         self.assertTrue(run_paths.audit.is_dir())
         self.assertTrue(run_paths.artifacts.is_dir())
 
         with self.assertRaises(ValueError):
             create_run(db_path, project["id"], user["id"], "   ", data_root=data_root)
+
+    def test_create_run_rejects_user_active_limit_without_side_effects(self):
+        db_path, data_root, user, first_project = self.make_context()
+        second_project = create_manual_project(
+            db_path,
+            data_root,
+            user["id"],
+            name="Second Site",
+            spec_text="# Spec\nBuild another page.",
+            checklist_text="- Ship HTML.",
+            index_html=None,
+        )
+        create_run(
+            db_path,
+            first_project["id"],
+            user["id"],
+            "First run",
+            data_root=data_root,
+            max_active_runs_per_user=1,
+        )
+        second_paths = project_paths(data_root, user["id"], second_project["id"])
+        before_entries = tuple(second_paths.runs.iterdir())
+
+        with self.assertRaises(web_runs.RunLimitExceeded) as raised:
+            create_run(
+                db_path,
+                second_project["id"],
+                user["id"],
+                "Second run",
+                data_root=data_root,
+                max_active_runs_per_user=1,
+            )
+
+        self.assertEqual(raised.exception.scope, "user")
+        with closing(connect_db(db_path)) as conn:
+            count = conn.execute("select count(*) from runs").fetchone()[0]
+            messages = conn.execute("select count(*) from messages").fetchone()[0]
+        self.assertEqual(count, 1)
+        self.assertEqual(messages, 1)
+        self.assertEqual(tuple(second_paths.runs.iterdir()), before_entries)
+
+    def test_create_run_treats_cancel_requested_as_active(self):
+        db_path, data_root, user, project = self.make_context()
+        first = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "First run",
+            data_root=data_root,
+        )
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                "update runs set status = 'cancel_requested' where id = ?",
+                (first["id"],),
+            )
+            conn.commit()
+
+        with self.assertRaises(web_runs.RunLimitExceeded) as raised:
+            create_run(
+                db_path,
+                project["id"],
+                user["id"],
+                "Conflicting run",
+                data_root=data_root,
+            )
+
+        self.assertEqual(raised.exception.scope, "project")
+
+    def test_cancel_run_transitions_supported_states(self):
+        cases = {
+            "queued": "cancelled",
+            "running": "cancel_requested",
+            "needs_approval": "cancelled",
+            "cancel_requested": "cancel_requested",
+        }
+        for original, expected in cases.items():
+            with self.subTest(original=original):
+                db_path, data_root, user, project = self.make_context()
+                run = create_run(
+                    db_path,
+                    project["id"],
+                    user["id"],
+                    "Build",
+                    data_root=data_root,
+                )
+                with closing(connect_db(db_path)) as conn:
+                    conn.execute(
+                        "update runs set status = ? where id = ?",
+                        (original, run["id"]),
+                    )
+                    conn.commit()
+
+                result = web_runs.cancel_run(db_path, user["id"], run["id"])
+
+                self.assertEqual(result["status"], expected)
+                if expected == "cancelled":
+                    self.assertIsNotNone(result["finished_at"])
+                    self.assertEqual(result["error_message"], "运行已取消")
+                else:
+                    self.assertIsNone(result["finished_at"])
+                self.assertIsNotNone(result["cancel_requested_at"])
+
+    def test_cancel_run_rejects_publishing_and_terminal_states(self):
+        for status in ("publishing", "completed", "failed", "cancelled", "timed_out"):
+            with self.subTest(status=status):
+                db_path, data_root, user, project = self.make_context()
+                run = create_run(
+                    db_path,
+                    project["id"],
+                    user["id"],
+                    "Build",
+                    data_root=data_root,
+                )
+                with closing(connect_db(db_path)) as conn:
+                    conn.execute(
+                        "update runs set status = ? where id = ?",
+                        (status, run["id"]),
+                    )
+                    conn.commit()
+
+                with self.assertRaises(web_runs.RunCancellationConflict):
+                    web_runs.cancel_run(db_path, user["id"], run["id"])
+
+    def test_shutdown_state_helpers_cancel_only_expected_states(self):
+        db_path, data_root, user, queued_project = self.make_context()
+        running_project = create_manual_project(
+            db_path,
+            data_root,
+            user["id"],
+            name="Running Site",
+            spec_text="# Spec",
+            checklist_text="- Ship HTML.",
+            index_html=None,
+        )
+        queued = create_run(
+            db_path,
+            queued_project["id"],
+            user["id"],
+            "Queued",
+            data_root=data_root,
+        )
+        running = create_run(
+            db_path,
+            running_project["id"],
+            user["id"],
+            "Running",
+            data_root=data_root,
+        )
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                "update runs set status = 'running' where id = ?",
+                (running["id"],),
+            )
+            conn.commit()
+
+        web_runs.cancel_queued_run_for_shutdown(db_path, queued["id"])
+        web_runs.request_running_cancel_for_shutdown(db_path, running["id"])
+
+        self.assertEqual(get_run(db_path, user["id"], queued["id"])["status"], "cancelled")
+        stopped = get_run(db_path, user["id"], running["id"])
+        self.assertEqual(stopped["status"], "cancel_requested")
+        self.assertIsNotNone(stopped["cancel_requested_at"])
 
     def test_create_run_rejects_full_quarantine_parent_before_db_or_storage_creation(self):
         db_path, data_root, user, project = self.make_context()
@@ -831,6 +1109,173 @@ class WebRunsTests(unittest.TestCase):
             [(row["kind"], row["path"]) for row in artifacts],
             [("index", str(latest_index)), ("zip", str(result_zip))],
         )
+
+    def test_execute_run_records_deadline_and_timeout_terminal_state(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build",
+            data_root=data_root,
+        )
+
+        with patch(
+            "specgate.web_runs._run_mock_agent",
+            side_effect=RunTimedOut("运行已超时"),
+        ):
+            execute_run_once(
+                db_path,
+                data_root,
+                run["id"],
+                stop_check=lambda: None,
+                deadline_at="2026-07-14T12:01:00+00:00",
+            )
+
+        updated = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(updated["status"], "timed_out")
+        self.assertEqual(updated["deadline_at"], "2026-07-14T12:01:00+00:00")
+        self.assertIsNotNone(updated["finished_at"])
+        self.assertEqual(updated["error_message"], "运行已超时")
+
+    def test_cancelled_execution_never_prepares_publication(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build",
+            data_root=data_root,
+        )
+
+        with patch(
+            "specgate.web_runs._run_mock_agent",
+            side_effect=RunCancelled("运行已取消"),
+        ), patch("specgate.web_runs._prepare_run_publication") as prepare:
+            execute_run_once(
+                db_path,
+                data_root,
+                run["id"],
+                stop_check=lambda: None,
+            )
+
+        prepare.assert_not_called()
+        updated = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(updated["status"], "cancelled")
+        self.assertEqual(updated["error_message"], "运行已取消")
+
+    def test_cancel_after_artifact_generation_stops_before_publication(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build",
+            data_root=data_root,
+        )
+        armed = False
+        original_publish = web_runs._publish_artifacts
+        original_prepare = web_runs._prepare_run_publication
+
+        def publish_and_cancel(*args, **kwargs):
+            nonlocal armed
+            result = original_publish(*args, **kwargs)
+            armed = True
+            return result
+
+        def stop_check():
+            if armed:
+                raise RunCancelled("运行已取消")
+
+        with patch(
+            "specgate.web_runs._publish_artifacts",
+            side_effect=publish_and_cancel,
+        ), patch(
+            "specgate.web_runs._prepare_run_publication",
+            wraps=original_prepare,
+        ) as prepare:
+            execute_run_once(
+                db_path,
+                data_root,
+                run["id"],
+                stop_check=stop_check,
+            )
+
+        prepare.assert_not_called()
+        updated = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(updated["status"], "cancelled")
+        self.assertIsNone(updated["index_artifact_path"])
+        self.assertIsNone(updated["zip_artifact_path"])
+
+    def test_publication_cancel_race_finishes_cancelled(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build",
+            data_root=data_root,
+        )
+        original_prepare = web_runs._prepare_run_publication
+
+        def cancel_before_prepare(*args, **kwargs):
+            with closing(connect_db(db_path)) as conn:
+                conn.execute(
+                    """
+                    update runs
+                    set status = 'cancel_requested', cancel_requested_at = ?
+                    where id = ? and status = 'running'
+                    """,
+                    ("2026-07-14T12:00:00+00:00", run["id"]),
+                )
+                conn.commit()
+            return original_prepare(*args, **kwargs)
+
+        with patch(
+            "specgate.web_runs._prepare_run_publication",
+            side_effect=cancel_before_prepare,
+        ):
+            execute_run_once(db_path, data_root, run["id"])
+
+        updated = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(updated["status"], "cancelled")
+        self.assertEqual(
+            updated["cancel_requested_at"],
+            "2026-07-14T12:00:00+00:00",
+        )
+
+    def test_generic_error_after_cancel_request_does_not_overwrite_cancel(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build",
+            data_root=data_root,
+        )
+
+        def cancel_then_fail(*args, **kwargs):
+            with closing(connect_db(db_path)) as conn:
+                conn.execute(
+                    """
+                    update runs
+                    set status = 'cancel_requested', cancel_requested_at = ?
+                    where id = ? and status = 'running'
+                    """,
+                    ("2026-07-14T12:00:00+00:00", run["id"]),
+                )
+                conn.commit()
+            raise OSError("manifest interrupted")
+
+        with patch(
+            "specgate.web_runs._write_and_validate_publication_manifest",
+            side_effect=cancel_then_fail,
+        ):
+            execute_run_once(db_path, data_root, run["id"])
+
+        updated = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(updated["status"], "cancelled")
+        self.assertEqual(updated["error_message"], "运行已取消")
 
     def test_execute_run_once_rejects_stale_gate_result_before_publication(self):
         db_path, data_root, user, project = self.make_context()

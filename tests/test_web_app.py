@@ -11,6 +11,7 @@ import warnings
 import zipfile
 from contextlib import contextmanager
 from pathlib import Path
+from time import monotonic
 from unittest.mock import patch
 
 warnings.filterwarnings(
@@ -21,10 +22,12 @@ warnings.filterwarnings(
 from fastapi.testclient import TestClient
 import specgate.workspace_fs as workspace_fs
 import specgate.web_runs as web_runs
+from specgate.approvals import ApprovalQueue, PendingApproval
 from specgate.web_app import create_app
 from specgate.web_credentials import WebCredentialService
 from specgate.web_db import connect_db
 from specgate.web_projects import project_paths, web_run_paths
+from specgate.web_runtime import RuntimeShutdownSnapshot, WebRuntimeConfig
 from specgate.web_runs import create_run, execute_run_once
 from specgate.workspace_fs import WorkspacePathError, read_workspace_bytes
 
@@ -100,6 +103,45 @@ class WebAppTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["project"]
+
+    def make_approved_run(self, client, app, project):
+        run = create_run(
+            app.state.db_path,
+            project["id"],
+            1,
+            "Resume after approval",
+            data_root=app.state.data_root,
+        )
+        paths = web_run_paths(
+            project_paths(app.state.data_root, 1, project["id"]),
+            run["id"],
+        )
+        ApprovalQueue(
+            [
+                PendingApproval(
+                    id="approval-step-1",
+                    step=1,
+                    action="write_file",
+                    path="index.html",
+                    risk_level="review",
+                    reason="write requires approval",
+                    profile="review",
+                    status="approved",
+                    action_payload={
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": "approved"},
+                    },
+                )
+            ]
+        ).write(paths.approval_queue)
+        with closing(connect_db(app.state.db_path)) as conn:
+            conn.execute(
+                "update runs set status = 'needs_approval' where id = ?",
+                (run["id"],),
+            )
+            conn.commit()
+        return run
 
     def test_projects_require_session(self):
         client, _app = self.make_client()
@@ -198,11 +240,10 @@ class WebAppTests(unittest.TestCase):
         client, app = self.make_client()
         self.register(client)
         project = self.create_project(client)
-        with patch("specgate.web_app.start_run_background"):
-            created = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build the result"},
-            )
+        created = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the result"},
+        )
         run = created.json()["run"]
         with closing(connect_db(app.state.db_path)) as conn:
             conn.execute("update runs set status = 'publishing' where id = ?", (run["id"],))
@@ -219,11 +260,10 @@ class WebAppTests(unittest.TestCase):
         client, app = self.make_client()
         registered = self.register(client)
         project = self.create_project(client)
-        with patch("specgate.web_app.start_run_background"):
-            created = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build the result"},
-            )
+        created = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the result"},
+        )
         run = created.json()["run"]
         paths = project_paths(app.state.data_root, registered["user"]["id"], project["id"])
         replacement = paths.root / "unknown-promotion-source"
@@ -268,11 +308,10 @@ class WebAppTests(unittest.TestCase):
                 client, app = self.make_client()
                 registered = self.register(client)
                 project = self.create_project(client)
-                with patch("specgate.web_app.start_run_background"):
-                    created = client.post(
-                        f"/api/projects/{project['id']}/runs",
-                        json={"prompt": "Build the result"},
-                    )
+                created = client.post(
+                    f"/api/projects/{project['id']}/runs",
+                    json={"prompt": "Build the result"},
+                )
                 run = created.json()["run"]
                 paths = web_run_paths(
                     project_paths(
@@ -369,11 +408,10 @@ class WebAppTests(unittest.TestCase):
         client, app = self.make_client()
         self.register(client)
         project = self.create_project(client)
-        with patch("specgate.web_app.start_run_background"):
-            created = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build the result"},
-            )
+        created = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the result"},
+        )
         run = created.json()["run"]
         real_rename = workspace_fs.rename_workspace_tree_noreplace
         calls = 0
@@ -410,11 +448,10 @@ class WebAppTests(unittest.TestCase):
         self.register(client)
         project = self.create_project(client, index_html=None)
 
-        with patch("specgate.web_app.start_run_background") as starter:
-            response = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build the result"},
-            )
+        response = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the result"},
+        )
 
         self.assertEqual(response.status_code, 200, response.text)
         run = response.json()["run"]
@@ -427,7 +464,7 @@ class WebAppTests(unittest.TestCase):
         self.assertFalse(run["has_zip_artifact"])
         self.assertNotIn("index_artifact_url", run)
         self.assertNotIn("zip_artifact_url", run)
-        starter.assert_called_once_with(app.state.db_path, app.state.data_root, run["id"])
+        self.assertIn(run["id"], app.state.runtime.pending_run_ids())
 
         fetched = client.get(f"/api/runs/{run['id']}")
         self.assertEqual(fetched.status_code, 200, fetched.text)
@@ -436,85 +473,185 @@ class WebAppTests(unittest.TestCase):
         self.assertNotIn("index_artifact_path", fetched.json()["run"])
         self.assertNotIn("zip_artifact_path", fetched.json()["run"])
 
-    def test_app_shutdown_joins_started_run_threads(self):
-        _client, app = self.make_client()
-        joined = []
+    def test_post_run_returns_429_without_db_or_storage_when_runtime_is_full(self):
+        client, app = self.make_client(runtime_config=WebRuntimeConfig(1, 1, 2, 60))
+        self.register(client)
+        project = self.create_project(client, index_html=None)
+        first = app.state.runtime.reserve()
+        first.bind(9001)
+        second = app.state.runtime.reserve()
+        second.bind(9002)
+        self.addCleanup(first.release)
+        self.addCleanup(second.release)
+        paths = project_paths(app.state.data_root, 1, project["id"])
+        before_entries = tuple(paths.runs.iterdir())
 
-        class RecordingThread:
-            daemon = True
+        response = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Rejected by global capacity"},
+        )
 
-            def join(self, timeout=None):
-                joined.append(timeout)
+        self.assertEqual(response.status_code, 429, response.text)
+        self.assertEqual(
+            response.json()["detail"],
+            {
+                "code": "runtime_capacity_exceeded",
+                "scope": "global",
+                "message": "Web 运行队列已满 / Web runtime capacity is full",
+            },
+        )
+        with closing(connect_db(app.state.db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
+            self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 0)
+        self.assertEqual(tuple(paths.runs.iterdir()), before_entries)
 
-        with TestClient(app) as lifespan_client:
-            self.register(lifespan_client)
-            project = self.create_project(lifespan_client)
-            with patch("specgate.web_app.start_run_background", return_value=RecordingThread()):
-                response = lifespan_client.post(
+    def test_cancel_queued_run_removes_pending_work(self):
+        client, app = self.make_client()
+        self.register(client)
+        project = self.create_project(client, index_html=None)
+        created = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build then cancel"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        run = created.json()["run"]
+        self.assertIn(run["id"], app.state.runtime.pending_run_ids())
+
+        response = client.post(f"/api/runs/{run['id']}/cancel")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["run"]["status"], "cancelled")
+        self.assertNotIn(run["id"], app.state.runtime.pending_run_ids())
+        stored = client.get(f"/api/runs/{run['id']}").json()["run"]
+        self.assertEqual(stored["status"], "cancelled")
+        self.assertIsNotNone(stored["cancel_requested_at"])
+
+    def test_cancel_running_run_signals_worker(self):
+        _client, app = self.make_client(runtime_config=WebRuntimeConfig(1, 1, 2, 60))
+        started = threading.Event()
+
+        def blocked_agent(paths, settings):
+            started.set()
+            while True:
+                settings["_stop_check"]()
+                threading.Event().wait(0.01)
+
+        with patch("specgate.web_runs._run_mock_agent", side_effect=blocked_agent):
+            with TestClient(app) as client:
+                self.register(client)
+                project = self.create_project(client, index_html=None)
+                created = client.post(
                     f"/api/projects/{project['id']}/runs",
-                    json={"prompt": "Build the result"},
+                    json={"prompt": "Block until cancelled"},
                 )
-            self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(created.status_code, 200, created.text)
+                run_id = created.json()["run"]["id"]
+                self.assertTrue(started.wait(timeout=1))
 
-        self.assertEqual(len(joined), 1)
-        self.assertGreater(joined[0], 0)
-        self.assertLessEqual(joined[0], 5)
+                response = client.post(f"/api/runs/{run_id}/cancel")
 
-    def test_app_shutdown_uses_single_deadline_for_unfinished_run_threads(self):
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["run"]["status"], "cancel_requested")
+                deadline = monotonic() + 2
+                status = "cancel_requested"
+                while monotonic() < deadline and status == "cancel_requested":
+                    threading.Event().wait(0.01)
+                    status = client.get(f"/api/runs/{run_id}").json()["run"]["status"]
+                self.assertEqual(status, "cancelled")
+
+    def test_resume_is_queued_on_bounded_runtime(self):
+        client, app = self.make_client(runtime_config=WebRuntimeConfig(1, 1, 2, 60))
+        self.register(client)
+        project = self.create_project(client, index_html=None)
+        run = self.make_approved_run(client, app, project)
+
+        response = client.post(f"/api/runs/{run['id']}/resume")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["run"]["status"], "queued")
+        self.assertIn(run["id"], app.state.runtime.pending_run_ids())
+
+    def test_resume_capacity_failure_preserves_needs_approval(self):
+        client, app = self.make_client(runtime_config=WebRuntimeConfig(1, 1, 2, 60))
+        self.register(client)
+        project = self.create_project(client, index_html=None)
+        run = self.make_approved_run(client, app, project)
+        first = app.state.runtime.reserve()
+        first.bind(9001)
+        second = app.state.runtime.reserve()
+        second.bind(9002)
+        self.addCleanup(first.release)
+        self.addCleanup(second.release)
+
+        response = client.post(f"/api/runs/{run['id']}/resume")
+
+        self.assertEqual(response.status_code, 429, response.text)
+        self.assertEqual(response.json()["detail"]["scope"], "global")
+        stored = client.get(f"/api/runs/{run['id']}").json()["run"]
+        self.assertEqual(stored["status"], "needs_approval")
+
+    def test_app_shutdown_persists_runtime_snapshot_before_joining_workers(self):
         _client, app = self.make_client()
-        join_timeouts = []
+        snapshot = RuntimeShutdownSnapshot((11,), (12,))
 
-        class UnfinishedThread:
-            daemon = True
-
-            def join(self, timeout=None):
-                join_timeouts.append(timeout)
-
-            def is_alive(self):
-                return True
-
-        threads = [UnfinishedThread(), UnfinishedThread()]
-        with patch("specgate.web_app.monotonic", side_effect=[100.0, 101.0, 104.5]):
+        with patch.object(app.state.runtime, "start"), patch.object(
+            app.state.runtime, "refill"
+        ), patch.object(
+            app.state.runtime, "begin_shutdown", return_value=snapshot
+        ) as begin_shutdown, patch.object(
+            app.state.runtime, "join"
+        ) as join, patch(
+            "specgate.web_app.cancel_queued_run_for_shutdown"
+        ) as cancel_queued, patch(
+            "specgate.web_app.request_running_cancel_for_shutdown"
+        ) as request_running_cancel:
             with TestClient(app):
-                app.state.run_threads.extend(threads)
+                pass
 
-        self.assertEqual(join_timeouts, [4.0, 0.5])
-        self.assertTrue(all(thread.daemon for thread in threads))
+        begin_shutdown.assert_called_once_with()
+        cancel_queued.assert_called_once_with(app.state.db_path, 11)
+        request_running_cancel.assert_called_once_with(app.state.db_path, 12)
+        join.assert_called_once_with(5.0)
+        self.assertFalse(hasattr(app.state, "run_threads"))
 
-    def test_post_run_returns_409_for_active_run_without_starting_thread(self):
-        client, _app = self.make_client()
+    def test_post_run_returns_429_for_active_run_without_scheduling_second_run(self):
+        client, app = self.make_client()
         self.register(client)
         project = self.create_project(client, index_html=None)
 
-        with patch("specgate.web_app.start_run_background") as starter:
-            first = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "First run"},
-            )
-            self.assertEqual(first.status_code, 200, first.text)
-            starter.reset_mock()
+        first = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "First run"},
+        )
+        self.assertEqual(first.status_code, 200, first.text)
 
-            conflict = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Conflicting run"},
-            )
+        conflict = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Conflicting run"},
+        )
 
-        self.assertEqual(conflict.status_code, 409, conflict.text)
+        self.assertEqual(conflict.status_code, 429, conflict.text)
         self.assertEqual(
             conflict.json(),
-            {"detail": "该项目已有进行中的运行 / This project already has an active run"},
+            {
+                "detail": {
+                    "code": "run_limit_exceeded",
+                    "scope": "project",
+                    "message": "该项目已有进行中的运行 / This project already has an active run",
+                }
+            },
         )
-        starter.assert_not_called()
+        self.assertEqual(app.state.runtime.pending_run_ids(), (first.json()["run"]["id"],))
 
     def test_post_run_returns_stable_503_when_database_is_locked(self):
-        client, _app = self.make_client(raise_server_exceptions=False)
+        client, app = self.make_client(raise_server_exceptions=False)
         self.register(client)
         project = self.create_project(client, index_html=None)
 
         with patch(
             "specgate.web_app.create_run",
             side_effect=sqlite3.OperationalError("database is locked"),
-        ), patch("specgate.web_app.start_run_background") as starter:
+        ):
             response = client.post(
                 f"/api/projects/{project['id']}/runs",
                 json={"prompt": "Build the result"},
@@ -525,17 +662,16 @@ class WebAppTests(unittest.TestCase):
             response.json(),
             {"detail": "运行创建暂时不可用 / Run creation is temporarily unavailable"},
         )
-        starter.assert_not_called()
+        self.assertEqual(app.state.runtime.scheduled_run_ids(), set())
 
     def test_run_debug_endpoint_returns_backend_audit_payload(self):
         client, app = self.make_client()
         self.register(client)
         project = self.create_project(client, index_html=None)
-        with patch("specgate.web_app.start_run_background"):
-            run = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build the result"},
-            ).json()["run"]
+        run = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the result"},
+        ).json()["run"]
         execute_run_once(app.state.db_path, app.state.data_root, run["id"])
 
         response = client.get(f"/api/runs/{run['id']}/debug")
@@ -689,11 +825,10 @@ class WebAppTests(unittest.TestCase):
         client, _app = self.make_client()
         self.register(client)
         project = self.create_project(client)
-        with patch("specgate.web_app.start_run_background"):
-            run = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build the result"},
-            ).json()["run"]
+        run = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the result"},
+        ).json()["run"]
 
         index = client.get(f"/api/runs/{run['id']}/artifacts/index")
         result_zip = client.get(f"/api/runs/{run['id']}/artifacts/zip")
@@ -705,11 +840,10 @@ class WebAppTests(unittest.TestCase):
         client, app = self.make_client()
         user = self.register(client)["user"]
         project = self.create_project(client)
-        with patch("specgate.web_app.start_run_background"):
-            run = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build the result"},
-            ).json()["run"]
+        run = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the result"},
+        ).json()["run"]
         paths = web_run_paths(
             project_paths(app.state.data_root, user["id"], project["id"]),
             run["id"],
@@ -734,11 +868,10 @@ class WebAppTests(unittest.TestCase):
         client, app = self.make_client()
         self.register(client)
         project = self.create_project(client, index_html=None)
-        with patch("specgate.web_app.start_run_background"):
-            run = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build the result"},
-            ).json()["run"]
+        run = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the result"},
+        ).json()["run"]
         execute_run_once(app.state.db_path, app.state.data_root, run["id"])
 
         response = client.get(f"/api/runs/{run['id']}/artifacts/index")
@@ -760,17 +893,15 @@ class WebAppTests(unittest.TestCase):
         client, app = self.make_client()
         user = self.register(client)["user"]
         project = self.create_project(client, index_html=None)
-        with patch("specgate.web_app.start_run_background"):
-            run1 = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build the first result"},
-            ).json()["run"]
+        run1 = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the first result"},
+        ).json()["run"]
         execute_run_once(app.state.db_path, app.state.data_root, run1["id"])
-        with patch("specgate.web_app.start_run_background"):
-            run2 = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build the second result"},
-            ).json()["run"]
+        run2 = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the second result"},
+        ).json()["run"]
         execute_run_once(
             app.state.db_path,
             app.state.data_root,
@@ -821,11 +952,10 @@ class WebAppTests(unittest.TestCase):
         client, app = self.make_client()
         user = self.register(client)["user"]
         project = self.create_project(client, index_html=None)
-        with patch("specgate.web_app.start_run_background"):
-            run = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build the result"},
-            ).json()["run"]
+        run = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the result"},
+        ).json()["run"]
         execute_run_once(app.state.db_path, app.state.data_root, run["id"])
         paths = web_run_paths(
             project_paths(app.state.data_root, user["id"], project["id"]),
@@ -851,11 +981,10 @@ class WebAppTests(unittest.TestCase):
         client, app = self.make_client()
         self.register(client)
         project = self.create_project(client, index_html=None)
-        with patch("specgate.web_app.start_run_background"):
-            run = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build the result"},
-            ).json()["run"]
+        run = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the result"},
+        ).json()["run"]
         execute_run_once(app.state.db_path, app.state.data_root, run["id"])
         sentinel = "EXTERNAL_ARTIFACT_SENTINEL"
 
@@ -886,11 +1015,10 @@ class WebAppTests(unittest.TestCase):
         client, app = self.make_client()
         user = self.register(client)["user"]
         project = self.create_project(client, index_html=None)
-        with patch("specgate.web_app.start_run_background"):
-            run = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build the result"},
-            ).json()["run"]
+        run = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the result"},
+        ).json()["run"]
         execute_run_once(app.state.db_path, app.state.data_root, run["id"])
         paths = web_run_paths(
             project_paths(app.state.data_root, user["id"], project["id"]),
@@ -921,11 +1049,10 @@ class WebAppTests(unittest.TestCase):
         client, app = self.make_client()
         user = self.register(client)["user"]
         project = self.create_project(client)
-        with patch("specgate.web_app.start_run_background"):
-            run = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build the result"},
-            ).json()["run"]
+        run = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the result"},
+        ).json()["run"]
         execute_run_once(app.state.db_path, app.state.data_root, run["id"])
         paths = web_run_paths(
             project_paths(app.state.data_root, user["id"], project["id"]),
@@ -955,11 +1082,10 @@ class WebAppTests(unittest.TestCase):
         client, _app = self.make_client()
         self.register(client)
         project = self.create_project(client)
-        with patch("specgate.web_app.start_run_background"):
-            run = client.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build the result"},
-            ).json()["run"]
+        run = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the result"},
+        ).json()["run"]
 
         listed = client.get("/api/projects")
         detail = client.get(f"/api/projects/{project['id']}")
@@ -1031,6 +1157,36 @@ class WebAppTests(unittest.TestCase):
 
         recover_initializations.assert_called_once_with(app.state.db_path, app.state.data_root)
         recover_publications.assert_called_once_with(app.state.db_path, app.state.data_root)
+
+    def test_lifespan_refills_queued_runs_from_database(self):
+        client, app = self.make_client(runtime_config=WebRuntimeConfig(1, 1, 2, 60))
+        self.register(client)
+        project = self.create_project(client, index_html=None)
+        run = create_run(
+            app.state.db_path,
+            project["id"],
+            1,
+            "Recover queued run",
+            data_root=app.state.data_root,
+        )
+        executed = threading.Event()
+        observed = []
+
+        def execute_recovered(db_path, data_root, run_id, **kwargs):
+            observed.append(run_id)
+            with closing(connect_db(db_path)) as conn:
+                conn.execute(
+                    "update runs set status = 'completed', finished_at = ? where id = ?",
+                    ("2026-07-14T12:00:00Z", run_id),
+                )
+                conn.commit()
+            executed.set()
+
+        with patch("specgate.web_app.execute_run_once", side_effect=execute_recovered):
+            with TestClient(app):
+                self.assertTrue(executed.wait(timeout=1))
+
+        self.assertEqual(observed, [run["id"]])
 
     def test_upload_rejects_files_over_limit(self):
         client, _app = self.make_client()
@@ -1158,11 +1314,10 @@ class WebAppTests(unittest.TestCase):
         client_a, app = self.make_client()
         self.register(client_a, "alice", "correct-password")
         project = self.create_project(client_a, "Alice Site")
-        with patch("specgate.web_app.start_run_background"):
-            run = client_a.post(
-                f"/api/projects/{project['id']}/runs",
-                json={"prompt": "Build Alice result"},
-            ).json()["run"]
+        run = client_a.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build Alice result"},
+        ).json()["run"]
 
         client_b = TestClient(app)
         self.addCleanup(client_b.close)

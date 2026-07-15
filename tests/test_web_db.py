@@ -2,6 +2,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import closing
 from importlib import import_module
@@ -36,6 +37,11 @@ class WebDbTests(unittest.TestCase):
                     context_strategy text not null default 'injection-safe',
                     api_key_configured integer not null default 0,
                     api_key_ciphertext text
+                );
+                create table runs (
+                    id integer primary key,
+                    status text not null,
+                    prompt text not null
                 );
                 insert into users values (1, 'alice', 'hash');
                 insert into user_settings values (
@@ -73,9 +79,9 @@ class WebDbTests(unittest.TestCase):
                     "artifacts",
                 },
             )
-            self.assertEqual(user_version, 2)
+            self.assertEqual(user_version, 3)
 
-    def test_new_database_uses_schema_version_two_and_credentials_table(self):
+    def test_new_database_uses_schema_version_three_and_credentials_table(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "web.sqlite3"
 
@@ -85,7 +91,7 @@ class WebDbTests(unittest.TestCase):
                 version = conn.execute("pragma user_version").fetchone()[0]
                 columns = self.table_columns(conn, "user_credentials")
 
-            self.assertEqual(version, 2)
+            self.assertEqual(version, 3)
             self.assertGreaterEqual(
                 set(columns),
                 {
@@ -99,6 +105,93 @@ class WebDbTests(unittest.TestCase):
                     "updated_at",
                 },
             )
+
+    def test_new_database_uses_schema_version_three_and_runtime_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "web.sqlite3"
+
+            init_db(db_path)
+
+            with closing(connect_db(db_path)) as conn:
+                self.assertEqual(conn.execute("pragma user_version").fetchone()[0], 3)
+                columns = {
+                    row["name"]
+                    for row in conn.execute("pragma table_info(runs)").fetchall()
+                }
+            self.assertIn("cancel_requested_at", columns)
+            self.assertIn("deadline_at", columns)
+
+    def test_connect_db_enables_runtime_concurrency_pragmas(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "web.sqlite3"
+            init_db(db_path)
+
+            with closing(connect_db(db_path)) as conn:
+                self.assertEqual(conn.execute("pragma foreign_keys").fetchone()[0], 1)
+                self.assertEqual(conn.execute("pragma journal_mode").fetchone()[0], "wal")
+                self.assertEqual(conn.execute("pragma synchronous").fetchone()[0], 1)
+                self.assertEqual(conn.execute("pragma busy_timeout").fetchone()[0], 5000)
+
+    def test_version_two_migrates_runtime_columns_without_data_loss(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "web.sqlite3"
+            with closing(sqlite3.connect(db_path)) as conn:
+                conn.executescript(
+                    """
+                    create table runs (
+                        id integer primary key,
+                        status text not null,
+                        prompt text not null
+                    );
+                    insert into runs (id, status, prompt) values (7, 'queued', 'legacy');
+                    pragma user_version = 2;
+                    """
+                )
+
+            init_db(db_path)
+
+            with closing(connect_db(db_path)) as conn:
+                row = conn.execute("select * from runs where id = 7").fetchone()
+                self.assertEqual(conn.execute("pragma user_version").fetchone()[0], 3)
+            self.assertEqual(row["prompt"], "legacy")
+            self.assertIsNone(row["cancel_requested_at"])
+            self.assertIsNone(row["deadline_at"])
+
+    def test_short_writer_contention_completes_with_busy_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "web.sqlite3"
+            init_db(db_path)
+            first = connect_db(db_path)
+            try:
+                first.execute("begin immediate")
+                first.execute(
+                    "insert into users (username, password_hash) values ('first', 'hash')"
+                )
+                attempting = threading.Event()
+                result = []
+
+                def second_writer():
+                    try:
+                        with closing(connect_db(db_path)) as conn:
+                            attempting.set()
+                            conn.execute(
+                                "insert into users (username, password_hash) values ('second', 'hash')"
+                            )
+                            conn.commit()
+                        result.append("committed")
+                    except Exception as exc:
+                        result.append(type(exc).__name__)
+
+                thread = threading.Thread(target=second_writer)
+                thread.start()
+                self.assertTrue(attempting.wait(timeout=1))
+                first.commit()
+                thread.join(timeout=1)
+
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(result, ["committed"])
+            finally:
+                first.close()
 
     def test_version_one_hmac_state_requires_reentry(self):
         db_path = self.create_version_one_database(configured=True)
@@ -117,7 +210,7 @@ class WebDbTests(unittest.TestCase):
             ).fetchone()
             version = conn.execute("pragma user_version").fetchone()[0]
 
-        self.assertEqual(version, 2)
+        self.assertEqual(version, 3)
         self.assertEqual(credential[2], "requires_reentry")
         self.assertIsNone(credential[3])
         self.assertEqual(legacy, (0, None))
@@ -142,7 +235,7 @@ class WebDbTests(unittest.TestCase):
             count = conn.execute(
                 "select count(*) from user_credentials"
             ).fetchone()[0]
-        self.assertEqual(version, 2)
+        self.assertEqual(version, 3)
         self.assertEqual(count, 1)
 
     def test_version_one_migration_rolls_back_on_schema_error(self):

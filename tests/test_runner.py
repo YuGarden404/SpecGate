@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from specgate.actions import ActionParseError, parse_action
+from specgate.gate import GateResult
 from specgate.llm import MockLLM
 from specgate.metrics import RunMetrics
 from specgate.policy import WorkspacePolicy
@@ -123,6 +124,310 @@ class FinishAfterExternalMutationLLM:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_stop_check_can_abort_before_first_llm_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# Task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            llm = RecordingLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md"},
+                set(),
+            )
+
+            def stop_check():
+                raise RuntimeError("stop before llm")
+
+            with self.assertRaisesRegex(RuntimeError, "stop before llm"):
+                AgentRunner(
+                    root,
+                    llm,
+                    policy,
+                    stop_check=stop_check,
+                ).run()
+
+            self.assertEqual(llm.contexts, [])
+
+    def test_stop_check_aborts_after_tool_before_next_llm(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# Task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": FIXED_HTML},
+                    },
+                    {
+                        "schema_version": "1",
+                        "action": "finish",
+                        "args": {"summary": "done"},
+                    },
+                ]
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"write_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            armed = False
+
+            def stop_check():
+                if armed:
+                    raise RuntimeError("stop after tool")
+
+            runner = AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=3,
+                stop_check=stop_check,
+            )
+            original_dispatch = runner.dispatcher.dispatch
+
+            def dispatch_and_arm(action):
+                nonlocal armed
+                result = original_dispatch(action)
+                armed = True
+                return result
+
+            runner.dispatcher.dispatch = dispatch_and_arm
+
+            with self.assertRaisesRegex(RuntimeError, "stop after tool"):
+                runner.run()
+
+            self.assertEqual(llm.calls, 1)
+            self.assertTrue((root / "index.html").exists())
+
+    def test_stop_check_aborts_after_llm_before_action_parsing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# Task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            armed = False
+
+            class ArmingLLM:
+                def complete(self, context):
+                    nonlocal armed
+                    armed = True
+                    return "not json"
+
+            def stop_check():
+                if armed:
+                    raise RuntimeError("stop after llm")
+
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md"},
+                set(),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "stop after llm"):
+                AgentRunner(
+                    root,
+                    ArmingLLM(),
+                    policy,
+                    max_steps=1,
+                    stop_check=stop_check,
+                ).run()
+
+    def test_stop_check_aborts_at_next_step_before_second_llm_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# Task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            armed = False
+            armed_checks = 0
+
+            class ParseErrorLLM:
+                def __init__(self):
+                    self.calls = 0
+
+                def complete(self, context):
+                    nonlocal armed
+                    self.calls += 1
+                    armed = True
+                    return "not json"
+
+            def stop_check():
+                nonlocal armed_checks
+                if armed:
+                    armed_checks += 1
+                    if armed_checks == 2:
+                        raise RuntimeError("stop before second step")
+
+            llm = ParseErrorLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md"},
+                set(),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "stop before second step"):
+                AgentRunner(
+                    root,
+                    llm,
+                    policy,
+                    max_steps=2,
+                    stop_check=stop_check,
+                ).run()
+
+            self.assertEqual(llm.calls, 1)
+
+    def test_stop_check_aborts_after_gate_before_finish(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# Task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(FIXED_HTML, encoding="utf-8")
+            armed = False
+
+            def gate_and_arm(*args, **kwargs):
+                nonlocal armed
+                armed = True
+                return GateResult(True, [], [], "passed")
+
+            def stop_check():
+                if armed:
+                    raise RuntimeError("stop after gate")
+
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                set(),
+            )
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "finish",
+                        "args": {"summary": "done"},
+                    }
+                ]
+            )
+
+            with mock.patch("specgate.runner.run_html_gate", side_effect=gate_and_arm):
+                with self.assertRaisesRegex(RuntimeError, "stop after gate"):
+                    AgentRunner(
+                        root,
+                        llm,
+                        policy,
+                        max_steps=1,
+                        stop_check=stop_check,
+                    ).run()
+
+    def test_multi_agent_stop_check_aborts_after_role_llm(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# Task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            armed = False
+
+            class ArmingRoleLLM:
+                def __init__(self):
+                    self.calls = 0
+
+                def complete(self, context):
+                    nonlocal armed
+                    self.calls += 1
+                    armed = True
+                    return json.dumps(
+                        {
+                            "schema_version": "1",
+                            "action": "finish",
+                            "args": {"summary": "role complete"},
+                        }
+                    )
+
+            def stop_check():
+                if armed:
+                    raise RuntimeError("stop after role llm")
+
+            llm = ArmingRoleLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md"},
+                set(),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "stop after role llm"):
+                AgentRunner(
+                    root,
+                    llm,
+                    policy,
+                    max_steps=3,
+                    context_strategy="multi-agent-isolated",
+                    stop_check=stop_check,
+                ).run()
+
+            self.assertEqual(llm.calls, 1)
+
+    def test_multi_agent_stop_check_aborts_after_tool_before_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# Task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "finish",
+                        "args": {"summary": "plan"},
+                    },
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": FIXED_HTML},
+                    },
+                ]
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"write_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            armed = False
+
+            def stop_check():
+                if armed:
+                    raise RuntimeError("stop after role tool")
+
+            runner = AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=3,
+                context_strategy="multi-agent-isolated",
+                stop_check=stop_check,
+            )
+            original_dispatch = runner.dispatcher.dispatch
+
+            def dispatch_and_arm(action):
+                nonlocal armed
+                result = original_dispatch(action)
+                armed = True
+                return result
+
+            runner.dispatcher.dispatch = dispatch_and_arm
+            with mock.patch(
+                "specgate.runner.run_html_gate",
+                return_value=GateResult(True, [], [], "passed"),
+            ) as gate:
+                with self.assertRaisesRegex(RuntimeError, "stop after role tool"):
+                    runner.run()
+
+            gate.assert_not_called()
+
     def test_write_actions_require_string_path_and_content(self):
         invalid_args = (
             {"path": "index.html"},
@@ -1981,6 +2286,63 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(approval_claimed["payload"]["queue_revision"], 1)
             self.assertEqual(resume_finished["payload"]["queue_revision"], 2)
             self.assertEqual(llm.calls, 1)
+
+    def test_resume_stop_check_aborts_before_approved_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("original", encoding="utf-8")
+            ApprovalQueue(
+                [
+                    PendingApproval(
+                        id="approval-step-1",
+                        step=1,
+                        action="replace_file",
+                        path="README.md",
+                        risk_level="review",
+                        reason="replace_file requires human review",
+                        profile="review",
+                        status="approved",
+                        action_payload={
+                            "schema_version": "1",
+                            "action": "replace_file",
+                            "args": {"path": "README.md", "content": "approved"},
+                        },
+                    )
+                ]
+            ).write(approval_queue_path(root))
+            policy = WorkspacePolicy(
+                root,
+                {"replace_file", "finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md"},
+                {"README.md"},
+            )
+
+            def stop_check():
+                raise RuntimeError("stop before approved action")
+
+            runner = AgentRunner(
+                root,
+                MockLLM([]),
+                policy,
+                max_steps=1,
+                governance_config=GovernanceConfig(
+                    profile="review",
+                    review_actions={"replace_file"},
+                    review_paths={"README.md"},
+                ),
+                stop_check=stop_check,
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "stop before approved action"):
+                runner.resume_from_approval()
+
+            self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "original")
+            self.assertEqual(
+                ApprovalQueue.read(approval_queue_path(root)).approvals[0].status,
+                "approved",
+            )
 
     def test_resume_from_applying_approval_accepts_already_applied_content(self):
         with tempfile.TemporaryDirectory() as tmp:

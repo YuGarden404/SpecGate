@@ -622,8 +622,8 @@ function setRunPill(status) {
   const pill = byId("run-status-pill");
   if (pill) {
     pill.textContent = translateRunStatus(status);
-    pill.classList.toggle("warning", status === "needs_approval");
-    pill.classList.toggle("danger", status === "failed");
+    pill.classList.toggle("warning", ["needs_approval", "cancel_requested"].includes(status));
+    pill.classList.toggle("danger", ["failed", "cancelled", "timed_out"].includes(status));
   }
 }
 
@@ -806,7 +806,7 @@ async function refreshRun(runId) {
     state.runDebug = null;
     setRunPill(state.currentRun.status);
     renderDetail();
-    if (!["queued", "running"].includes(state.currentRun.status)) {
+    if (!["queued", "running", "cancel_requested"].includes(state.currentRun.status)) {
       clearPolling();
       await Promise.all([loadProjects(), loadApprovals()]);
       if (state.selectedProject) {
@@ -816,6 +816,28 @@ async function refreshRun(runId) {
     }
   } catch (error) {
     clearPolling();
+    setMessage(error.message, true);
+  }
+}
+
+async function cancelRun(run, button) {
+  button.disabled = true;
+  try {
+    const payload = await apiJson(`/api/runs/${run.id}/cancel`, { method: "POST" });
+    state.currentRun = payload.run;
+    state.runDebug = null;
+    setRunPill(state.currentRun.status);
+    renderDetail();
+    if (["queued", "running", "cancel_requested"].includes(state.currentRun.status)) {
+      pollRun(state.currentRun.id);
+    } else {
+      clearPolling();
+    }
+    setMessage(
+      state.currentRun.status === "cancel_requested" ? "正在取消运行。" : "运行已取消。",
+    );
+  } catch (error) {
+    button.disabled = false;
     setMessage(error.message, true);
   }
 }
@@ -871,6 +893,16 @@ function renderStatusDetail(content) {
     card.append(renderBasicRunRows(null));
     content.append(card);
     return;
+  }
+
+  if (["queued", "running", "needs_approval"].includes(run.status)) {
+    const cancelButton = el(
+      "button",
+      { type: "button", className: "secondary cancel-run-button" },
+      ["取消运行"],
+    );
+    cancelButton.addEventListener("click", () => cancelRun(run, cancelButton));
+    card.append(cancelButton);
   }
 
   const body = el("div", { className: "run-workspace" }, ["正在加载运行证据..."]);
@@ -1283,8 +1315,13 @@ function translateRunStatus(status) {
   const values = {
     completed: "已完成",
     idle: "空闲",
+    initializing: "初始化中",
     running: "运行中",
     queued: "排队中",
+    publishing: "发布中",
+    cancel_requested: "正在取消",
+    cancelled: "已取消",
+    timed_out: "已超时",
     failed: "失败",
     needs_approval: "等待审批",
   };

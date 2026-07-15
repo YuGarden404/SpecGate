@@ -316,7 +316,8 @@ http://127.0.0.1:8000
 - 用户设置页，可用 AES-256-GCM 加密保存 API key；当前仍然只运行 `MockLLM`，保存凭据不会启用或调用真实 LLM。
 - 手动创建项目，或上传 zip 项目。上传项目必须包含 `SPEC` / `TASK_SPEC` 之一和 `CHECKLIST`，导入后会规范化为 `TASK_SPEC.md` 和 `CHECKLIST.md`；也可以包含已有 `index.html` 和其他辅助文件。
 - Codex 风格的左侧项目列表、中央任务输入、右侧预览/报告/审批/设置面板。
-- 后台 run 状态轮询：`queued`、`running`、`needs_approval`、`completed`、`failed`。
+- 后台 run 状态轮询：`queued`、`running`、`needs_approval`、`cancel_requested`、`publishing`、`completed`、`cancelled`、`timed_out`、`failed`。
+- Web 运行工作台可以取消排队中、运行中或等待审批的任务；运行中的取消是协作式的，会在当前阻塞步骤返回并到达下一个安全停止点后确认。
 - Web HITL 审批：首次创建不存在的 `index.html` 可以直接执行；覆盖任何已有文件时会先暂停为 `needs_approval`，不会在审批前修改文件。页面 approve / deny 会携带队列 revision，冲突时重载最新状态；随后由 resume 应用已批准 action，或把拒绝原因反馈给 Agent 重新规划。
 - 产物下载和源码预览。生成的 HTML 默认作为下载附件或纯文本源码查看，避免在同源认证上下文中直接执行用户/模型生成的 HTML。
 
@@ -345,6 +346,17 @@ $env:SPECGATE_WEB_SECURE_COOKIES="1"
 ```
 
 Web API key 使用独立的 `SPECGATE_WEB_CREDENTIAL_KEY` 主密钥加密，不能复用其他服务密钥；生成、备份和恢复方式见 `docs/DEPLOYMENT.md`。会话仍使用数据库里的随机 session token。WebUI 仍只运行 MockLLM，不会因为保存 API key 就调用真实 LLM。
+
+Web 运行时默认使用 4 个固定 worker 和 32 个排队槽位；每个用户最多同时保留 4 个活动 run，每个项目最多 1 个活动 run。worker 认领任务后开始计算 60 秒执行超时，排队时间和人工审批等待时间不计入超时。可通过以下环境变量调整，合法范围和单进程部署约束见 `docs/DEPLOYMENT.md`：
+
+```text
+SPECGATE_WEB_WORKERS=4
+SPECGATE_WEB_QUEUE_CAPACITY=32
+SPECGATE_WEB_MAX_ACTIVE_RUNS_PER_USER=4
+SPECGATE_WEB_RUN_TIMEOUT_SECONDS=60
+```
+
+当前课程验收和 Web 运行仍只使用 `MockLLM`。这些并发、取消、超时与恢复机制均由确定性单元测试验证，不需要真实 LLM 或网络。
 
 上传 zip 当前限制为 5 MiB。导入逻辑会拒绝绝对路径、路径逃逸、Windows 盘符、反斜杠路径和空路径，避免 zip 内容写出隔离目录。
 
@@ -399,7 +411,7 @@ python -m unittest discover -s tests -v
 - MVP 不开放 shell。
 - MVP 不做 Playwright。
 - MVP 只处理静态单页 HTML 任务。
-- WebUI 是静态报告，不是实时 dashboard。
+- WebUI 通过轮询展示 run 状态，但生成内容仍限定为静态单页 HTML 和可审计报告，不执行同源模型生成页面。
 
 ## 安全边界
 

@@ -778,3 +778,30 @@
 - GREEN：在 `Set up Python` 与 `Regenerate mock demo` 之间增加项目依赖安装步骤，聚焦 workflow 测试通过。
 - 本地全量回归：`python -m unittest discover -s tests`，结果为 `Ran 754 tests in 317.027s`、`OK (skipped=20)`。
 - Git 与远端 Pages 复验仍由用户执行。
+
+## 2026-07-14 Web 运行时并发与恢复加固
+
+- 分支：`feat-web-runtime-hardening`。
+- 已确认边界：单 Web 进程、固定 worker、有界队列、协作式取消、worker 认领后开始计算执行超时；排队和人工审批等待不计时；Web 与自动验收只使用 MockLLM。
+- Superpowers 流程：
+  - 使用 `brainstorming` 和 `writing-plans` 确认设计并生成 12 个任务的实施计划。
+  - 使用 `executing-plans` 和 `test-driven-development` 逐项执行 RED→GREEN。
+  - 遇到审批恢复组合回归后使用 `systematic-debugging` 追踪 queued 双语义根因。
+  - 完成前使用 `requesting-code-review` 做主线程差异审查，并使用 `verification-before-completion` 获取新鲜证据。
+  - 当前协作规则未授权自动委派，因此没有派发 subagent；Git 和 PR 操作继续由用户执行。
+- 设计与实现：
+  - 数据库升级为 schema v3，新增 `cancel_requested_at`、`deadline_at`，连接统一启用 WAL、`synchronous=NORMAL` 和 5 秒 busy timeout，并覆盖 v1→v2→v3 与 v2→v3 迁移。
+  - 新增 `WebRuntimeCoordinator`：默认 4 worker、32 排队槽位、每用户 4 个活动 run、60 秒执行超时；配置严格校验，容量预留确保 429 前不创建数据库或目录副作用。
+  - Runner 在首次执行、每步开始、LLM/工具/Gate 返回、HITL resume 和多角色边界调用通用 `stop_check`。
+  - Web run 增加取消、超时、发布前停止、产物清理与 CAS 竞争处理；取消 API 覆盖 queued、running 和 needs_approval。
+  - 首次运行和 HITL resume 共用有界调度器；启动时按顺序补入持久化 queued，遗留 running 收敛为失败，cancel_requested 收敛为已取消。
+  - 应用关闭先冻结调度并取得 pending/running 快照，再写入数据库取消状态，最后共享同一个 5 秒 join deadline；旧 `app.state.run_threads` 和应用层每 run 线程入口已移除。
+  - 前端增加取消按钮、`cancel_requested` 持续轮询，以及初始化、发布、取消和超时的中文状态与告警样式。
+- TDD 与调试证据：
+  - 配置、schema、容量、超时、恢复、关闭、API 和前端契约均先出现缺少接口或状态不符的预期失败，再实现最小行为。
+  - 高风险组合首次运行暴露旧测试回归：普通 queued 首次运行被 `resume_run_once()` 当作审批恢复并抛出错误。根因是异步恢复后 queued 同时承担首次执行和 resume 排队语义；修复后的测试同时证明“有已决定审批候选的 queued run 可以恢复”和“普通 queued run 幂等无操作”。
+  - 清理旧线程测试桩后，Web 应用测试为 `Ran 46 tests ... OK (skipped=1)`。
+  - 高风险组合测试为 `Ran 247 tests in 74.289s`、`OK (skipped=1)`。
+  - 最终全量测试为 `Ran 799 tests in 129.557s`、`OK (skipped=20)`；命令中的非法 `unsafe` profile argparse 输出来自预期拒绝测试，不是失败。
+  - `python -m compileall -q src tests` 无输出且退出码为 0；`git diff --check` 退出码为 0，仅显示 Windows 工作区的 LF→CRLF 提示，没有空白错误。
+- 未执行 `git add`、`git commit`、`git push` 或 PR 操作；远端 GitHub Actions 等待用户提交并 push 后验证。
