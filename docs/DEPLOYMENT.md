@@ -20,6 +20,32 @@ http://<服务器公网IP>:8000
 
 如果后续购买域名或使用服务器面板，可以再把域名反向代理到 `127.0.0.1:8000`。
 
+### Web 运行时与数据库约束
+
+生产部署保持单个 Web 进程，不要给 Uvicorn 增加多个 worker。当前有界调度器和运行恢复由单进程内的固定 worker 池协调；横向扩展需要额外的跨进程任务租约，不属于本阶段范围。
+
+可配置项如下。所有值必须是十进制整数；非法值会让应用启动失败，避免静默回退到不安全配置。
+
+| 环境变量 | 默认值 | 合法范围 | 含义 |
+| --- | ---: | ---: | --- |
+| `SPECGATE_WEB_WORKERS` | 4 | 1–16 | 同时执行 run 的固定 worker 数 |
+| `SPECGATE_WEB_QUEUE_CAPACITY` | 32 | 1–256 | 等待 worker 的最大排队数 |
+| `SPECGATE_WEB_MAX_ACTIVE_RUNS_PER_USER` | 4 | 1–32 | 单用户活动 run 上限，且不得超过 worker 与队列容量之和 |
+| `SPECGATE_WEB_RUN_TIMEOUT_SECONDS` | 60 | 1–3600 | worker 认领任务后的执行超时秒数 |
+
+默认配置等价于：
+
+```text
+SPECGATE_WEB_WORKERS=4
+SPECGATE_WEB_QUEUE_CAPACITY=32
+SPECGATE_WEB_MAX_ACTIVE_RUNS_PER_USER=4
+SPECGATE_WEB_RUN_TIMEOUT_SECONDS=60
+```
+
+排队和人工审批等待不计入执行超时。取消为协作式：排队任务会直接移出队列，运行任务会收到取消信号，并在当前阻塞调用返回后的安全停止点终止。进程重启时，遗留 `running` 会稳定收敛为失败，`cancel_requested` 收敛为已取消，持久化的 `queued` 按创建顺序重新补入有界队列。
+
+SQLite 连接启用 WAL、`synchronous=NORMAL` 和 5 秒 `busy_timeout`，用于缩短读写互斥并为短写锁竞争提供等待窗口。这些设置不替代单 Web 进程约束。课程验收和 Web 运行仍只使用 `MockLLM`，不会访问真实 LLM。
+
 ## 2. 本地 Docker 验证
 
 在仓库根目录构建镜像：
@@ -42,6 +68,10 @@ $credentialKey = [Convert]::ToBase64String($bytes).Replace("+", "-").Replace("/"
 
 docker run --rm -p 8000:8000 `
   -e SPECGATE_WEB_CREDENTIAL_KEY="$credentialKey" `
+  -e SPECGATE_WEB_WORKERS="4" `
+  -e SPECGATE_WEB_QUEUE_CAPACITY="32" `
+  -e SPECGATE_WEB_MAX_ACTIVE_RUNS_PER_USER="4" `
+  -e SPECGATE_WEB_RUN_TIMEOUT_SECONDS="60" `
   -v "${PWD}\var\specgate_web_docker:/data/specgate-web" `
   specgate:local
 ```
@@ -92,6 +122,10 @@ docker run -d \
   -p 8000:8000 \
   -e SPECGATE_WEB_CREDENTIAL_KEY="<替换为上一步生成的主密钥>" \
   -e SPECGATE_WEB_DATA="/data/specgate-web" \
+  -e SPECGATE_WEB_WORKERS="4" \
+  -e SPECGATE_WEB_QUEUE_CAPACITY="32" \
+  -e SPECGATE_WEB_MAX_ACTIVE_RUNS_PER_USER="4" \
+  -e SPECGATE_WEB_RUN_TIMEOUT_SECONDS="60" \
   -v /opt/specgate/data:/data/specgate-web \
   specgate:latest
 ```

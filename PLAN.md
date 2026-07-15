@@ -2134,3 +2134,35 @@ SPEC 覆盖：
 - 修复：在生成 mock demo 前执行 `python -m pip install -e .`，与 CI、Docker 安装方式保持一致。
 - 回归：新增 workflow 顺序测试，防止以后再次先运行 CLI、后安装依赖。
 - 远端验证：等待热修复合并到 `main` 后回填 Pages 结果。
+
+# 2026-07-14 Web 运行时并发与恢复加固
+
+详细设计与逐步计划：
+
+- `docs/superpowers/specs/2026-07-14-web-runtime-hardening-design.md`
+- `docs/superpowers/plans/2026-07-14-web-runtime-hardening.md`
+
+完成状态：
+
+- [x] Task 1：SQLite schema v3、WAL、busy timeout 与 v1/v2 迁移。
+- [x] Task 2：严格配置解析和合法范围校验。
+- [x] Task 3：固定 worker、有界队列、容量预留、去重与 FIFO refill。
+- [x] Task 4：Runner 通用停止边界。
+- [x] Task 5：取消/超时终态、发布竞争和产物清理。
+- [x] Task 6：全局、用户和项目三级准入及无副作用 429。
+- [x] Task 7：取消 API 与 queued/running/needs_approval 状态转换。
+- [x] Task 8：HITL resume 接入有界调度器。
+- [x] Task 9：进程重启状态恢复和持久化 queued 补入。
+- [x] Task 10：主动关闭、数据库收敛和统一 5 秒等待预算。
+- [x] Task 11：Web 取消按钮、持续轮询和中文状态。
+- [x] Task 12：README、部署材料、开发日志和全量验证。
+
+验证结果：高风险组合 `Ran 247 tests ... OK (skipped=1)`；全量 `Ran 799 tests ... OK (skipped=20)`；`python -m compileall -q src tests` 与 `git diff --check` 均通过。所有运行与验收继续使用 MockLLM，不需要真实 LLM 或网络。
+
+待用户提交后回填：
+
+- Git commit：待填写。
+- PR URL：待填写。
+- GitHub Ubuntu CI：待填写。
+
+Agent 未执行 `git add`、`git commit`、`git push` 或 PR 操作。

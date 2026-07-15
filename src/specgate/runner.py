@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+from typing import Callable
 
 from specgate.actions import Action, ActionParseError, parse_action
 from specgate.approvals import (
@@ -81,6 +82,7 @@ class AgentRunner:
         audit_dir: Path | None = None,
         approval_queue_file: Path | None = None,
         reset_audit: bool = True,
+        stop_check: Callable[[], None] | None = None,
     ):
         self.root = root
         self.llm = llm
@@ -93,14 +95,19 @@ class AgentRunner:
         self.dispatcher = ToolDispatcher(policy, snapshot)
         self.run_dir = audit_dir or root / "runs" / "latest"
         self.approval_queue_file = approval_queue_file or approval_queue_path(root)
+        self._stop_check = stop_check or (lambda: None)
         self.trace = TraceStore(self.run_dir / "trace.jsonl", reset=reset_audit)
         if reset_audit:
             self._reset_run_artifacts()
 
     def run(self) -> RunResult:
+        self._check_stop()
         if self.context_strategy == "multi-agent-isolated":
             return self._run_multi_agent_loop(reset_queue=True)
         return self._run_loop(reset_queue=True)
+
+    def _check_stop(self) -> None:
+        self._stop_check()
 
     def _reset_run_artifacts(self) -> None:
         for name in ("retrieval.json", "compression.json", "isolation.json"):
@@ -148,6 +155,7 @@ class AgentRunner:
             else None
         )
         gate = run_html_gate(self.root / "index.html", checklist_path)
+        self._check_stop()
         metrics = replace(
             metrics,
             gate_runs=metrics.gate_runs + 1,
@@ -481,6 +489,7 @@ class AgentRunner:
             return latest_gate, metrics
 
         tool_result = self.dispatcher.dispatch(action)
+        self._check_stop()
         metrics = replace(
             metrics,
             tool_calls=metrics.tool_calls + 1,
@@ -556,6 +565,7 @@ class AgentRunner:
             {"step": step, "role": role, "phase": phase, "context_chars": context_chars},
         )
         raw = self.llm.complete(context)
+        self._check_stop()
         metrics = replace(metrics, llm_calls=metrics.llm_calls + 1)
         self.trace.append("llm_response", {"step": step, "role": role, "phase": phase, "text": raw})
 
@@ -729,6 +739,7 @@ class AgentRunner:
         permission_decisions: list[PermissionDecision] = list(initial_permission_decisions or [])
 
         for step in range(1, self.max_steps + 1):
+            self._check_stop()
             context, context_metadata = build_context_pack_with_metadata(
                 self.root,
                 latest_gate,
@@ -747,6 +758,7 @@ class AgentRunner:
                 {"step": step, "strategy": self.context_strategy, "context_chars": context_chars},
             )
             raw = self.llm.complete(context)
+            self._check_stop()
             metrics = replace(metrics, llm_calls=metrics.llm_calls + 1)
             self.trace.append("llm_response", {"step": step, "text": raw})
 
@@ -837,6 +849,7 @@ class AgentRunner:
                 continue
 
             tool_result = self.dispatcher.dispatch(action)
+            self._check_stop()
             metrics = replace(
                 metrics,
                 tool_calls=metrics.tool_calls + 1,
@@ -886,6 +899,7 @@ class AgentRunner:
         return self._finish_result(self.max_steps, latest_gate, metrics, permission_decisions)
 
     def resume_from_approval(self) -> RunResult:
+        self._check_stop()
         queue_path = self.approval_queue_file
         store = ApprovalStore(queue_path)
         queue = store.read_existing()

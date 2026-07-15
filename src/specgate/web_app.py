@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import threading
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
-from time import monotonic
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
@@ -36,12 +34,29 @@ from specgate.web_projects import (
 )
 from specgate.web_runs import (
     ActiveRunConflict,
+    RunCancellationConflict,
+    RunLimitExceeded,
+    cancel_queued_run_for_shutdown,
+    cancel_run,
     create_run,
+    execute_run_once,
     get_run,
+    list_queued_runs,
+    queued_run_task,
+    queue_run_resume,
     recover_interrupted_run_initializations,
     recover_interrupted_run_publications,
+    recover_interrupted_runtime_states,
+    request_running_cancel_for_shutdown,
     resume_run_once,
-    start_run_background,
+)
+from specgate.web_runtime import (
+    RunControl,
+    RunTask,
+    RuntimeCapacityExceeded,
+    WebRuntimeConfig,
+    WebRuntimeCoordinator,
+    load_web_runtime_config,
 )
 from specgate.web_settings import clear_api_key, get_settings, update_settings, upsert_api_key
 from specgate.workspace_fs import WorkspacePathError, read_workspace_bytes, read_workspace_text
@@ -99,6 +114,7 @@ def create_app(
     db_path: Path | None = None,
     secure_cookies: bool | None = None,
     credential_key: str | None = None,
+    runtime_config: WebRuntimeConfig | None = None,
 ) -> FastAPI:
     resolved_data_root = Path(
         data_root
@@ -114,25 +130,55 @@ def create_app(
     resolved_data_root.mkdir(parents=True, exist_ok=True)
     init_db(resolved_db_path)
     recover_interrupted_run_initializations(resolved_db_path, resolved_data_root)
+    recover_interrupted_runtime_states(resolved_db_path)
     recover_interrupted_run_publications(resolved_db_path, resolved_data_root)
     resolved_secure_cookies = (
         os.environ.get("SPECGATE_WEB_SECURE_COOKIES") == "1"
         if secure_cookies is None
         else secure_cookies
     )
+    resolved_runtime_config = runtime_config or load_web_runtime_config()
+
+    def execute_runtime_task(task: RunTask, control: RunControl) -> None:
+        if task.resume:
+            resume_run_once(
+                resolved_db_path,
+                resolved_data_root,
+                task.user_id,
+                task.run_id,
+                stop_check=control.check,
+                deadline_at=control.deadline_at,
+            )
+        else:
+            execute_run_once(
+                resolved_db_path,
+                resolved_data_root,
+                task.run_id,
+                stop_check=control.check,
+                deadline_at=control.deadline_at,
+            )
+
+    runtime = WebRuntimeCoordinator(resolved_runtime_config, execute_runtime_task)
+
+    def refill_provider(scheduled_run_ids: set[int]) -> RunTask | None:
+        for row in list_queued_runs(resolved_db_path):
+            if int(row["id"]) not in scheduled_run_ids:
+                return queued_run_task(resolved_data_root, row)
+        return None
+
+    runtime.set_refill_provider(refill_provider)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        app.state.runtime.start()
+        app.state.runtime.refill()
         yield
-        deadline = monotonic() + RUN_THREAD_SHUTDOWN_TIMEOUT_SECONDS
-        with app.state.run_threads_lock:
-            threads = list(app.state.run_threads)
-            app.state.run_threads.clear()
-        for thread in threads:
-            remaining = deadline - monotonic()
-            if remaining <= 0:
-                break
-            thread.join(timeout=remaining)
+        snapshot = app.state.runtime.begin_shutdown()
+        for run_id in snapshot.pending_run_ids:
+            cancel_queued_run_for_shutdown(app.state.db_path, run_id)
+        for run_id in snapshot.running_run_ids:
+            request_running_cancel_for_shutdown(app.state.db_path, run_id)
+        app.state.runtime.join(RUN_THREAD_SHUTDOWN_TIMEOUT_SECONDS)
 
     app = FastAPI(title="SpecGate Web", lifespan=lifespan)
 
@@ -150,6 +196,8 @@ def create_app(
         )
     app.state.data_root = resolved_data_root
     app.state.db_path = resolved_db_path
+    app.state.runtime_config = resolved_runtime_config
+    app.state.runtime = runtime
     raw_credential_key = (
         credential_key
         if credential_key is not None
@@ -159,9 +207,6 @@ def create_app(
         resolved_db_path,
         raw_credential_key,
     )
-    app.state.run_threads = []
-    app.state.run_threads_lock = threading.Lock()
-
     @app.post("/api/auth/register")
     def register(payload: AuthRequest, response: Response) -> dict[str, Any]:
         try:
@@ -341,24 +386,45 @@ def create_app(
         user=Depends(current_user),
     ) -> dict[str, Any]:
         try:
+            reservation = app.state.runtime.reserve()
+        except RuntimeCapacityExceeded as exc:
+            raise HTTPException(
+                status_code=429,
+                detail={"code": exc.code, "scope": exc.scope, "message": str(exc)},
+            ) from exc
+        try:
             run = create_run(
                 app.state.db_path,
                 project_id,
                 int(user["id"]),
                 payload.prompt,
                 data_root=app.state.data_root,
+                max_active_runs_per_user=(
+                    app.state.runtime_config.max_active_runs_per_user
+                ),
+                on_reserved_run=reservation.bind,
             )
-        except ActiveRunConflict as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            app.state.runtime.submit(
+                reservation,
+                RunTask(int(run["id"]), int(user["id"]), False),
+            )
+        except (ActiveRunConflict, RunLimitExceeded) as exc:
+            reservation.release()
+            raise HTTPException(
+                status_code=429,
+                detail={"code": exc.code, "scope": exc.scope, "message": str(exc)},
+            ) from exc
         except sqlite3.OperationalError as exc:
+            reservation.release()
             if _is_sqlite_lock_error(exc):
                 raise HTTPException(status_code=503, detail=RUN_CREATION_UNAVAILABLE_MESSAGE) from exc
             raise
         except ValueError as exc:
+            reservation.release()
             raise _http_error_for_value_error(exc) from exc
-        thread = start_run_background(app.state.db_path, app.state.data_root, int(run["id"]))
-        with app.state.run_threads_lock:
-            app.state.run_threads.append(thread)
+        except Exception:
+            reservation.release()
+            raise
         return {"run": _run_dict(run)}
 
     @app.get("/api/runs/{run_id}")
@@ -367,6 +433,27 @@ def create_app(
             run = get_run(app.state.db_path, int(user["id"]), run_id)
         except ValueError as exc:
             raise _http_error_for_value_error(exc) from exc
+        return {"run": _run_dict(run)}
+
+    @app.post("/api/runs/{run_id}/cancel")
+    def cancel_project_run(
+        run_id: int,
+        user=Depends(current_user),
+    ) -> dict[str, Any]:
+        try:
+            run = cancel_run(app.state.db_path, int(user["id"]), run_id)
+        except RunCancellationConflict as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        except ValueError as exc:
+            raise _http_error_for_value_error(exc) from exc
+
+        if run["status"] == "cancelled":
+            app.state.runtime.discard_pending(run_id)
+        elif run["status"] == "cancel_requested":
+            app.state.runtime.signal_cancel(run_id)
         return {"run": _run_dict(run)}
 
     @app.get("/api/runs/{run_id}/debug")
@@ -454,11 +541,30 @@ def create_app(
     @app.post("/api/runs/{run_id}/resume")
     def resume(run_id: int, user=Depends(current_user)) -> dict[str, Any]:
         try:
-            run = resume_run_once(app.state.db_path, app.state.data_root, int(user["id"]), run_id)
-            if run is None:
-                run = get_run(app.state.db_path, int(user["id"]), run_id)
+            reservation = app.state.runtime.reserve()
+        except RuntimeCapacityExceeded as exc:
+            raise HTTPException(
+                status_code=429,
+                detail={"code": exc.code, "scope": exc.scope, "message": str(exc)},
+            ) from exc
+        try:
+            reservation.bind(run_id)
+            run = queue_run_resume(
+                app.state.db_path,
+                app.state.data_root,
+                int(user["id"]),
+                run_id,
+            )
+            app.state.runtime.submit(
+                reservation,
+                RunTask(run_id, int(user["id"]), True),
+            )
         except ValueError as exc:
+            reservation.release()
             raise _http_error_for_value_error(exc) from exc
+        except Exception:
+            reservation.release()
+            raise
         return {"run": _run_dict(run)}
 
     @app.get("/api/settings")
@@ -663,6 +769,8 @@ def _run_dict(row) -> dict[str, Any]:
         "created_at": data["created_at"],
         "started_at": data["started_at"],
         "finished_at": data["finished_at"],
+        "cancel_requested_at": data["cancel_requested_at"],
+        "deadline_at": data["deadline_at"],
         "has_index_artifact": bool(data["index_artifact_path"]),
         "has_zip_artifact": bool(data["zip_artifact_path"]),
     }

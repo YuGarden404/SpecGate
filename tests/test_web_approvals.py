@@ -12,7 +12,13 @@ from specgate.approvals import ApprovalQueue, PendingApproval
 from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
 from specgate.web_projects import create_manual_project, project_paths, web_run_paths
-from specgate.web_runs import create_run, execute_run_once, get_run, resume_run_once
+from specgate.web_runs import (
+    create_run,
+    execute_run_once,
+    get_run,
+    queue_run_resume,
+    resume_run_once,
+)
 from specgate.trace import TraceStore
 from specgate.web_approvals import (
     ApprovalConsistencyError,
@@ -404,7 +410,7 @@ class WebApprovalsTests(unittest.TestCase):
         self.assertEqual(old_queue.approvals[0].status, "approved")
         self.assertEqual(new_queue.approvals[0].status, "pending")
 
-    def test_resume_run_once_only_resumes_needs_approval_runs(self):
+    def test_resume_run_once_only_resumes_queued_run_with_decided_approval(self):
         db_path, data_root, alice, _bob, alice_project, _bob_project = self.make_context()
         completed_project = create_manual_project(
             db_path,
@@ -466,6 +472,14 @@ class WebApprovalsTests(unittest.TestCase):
                     artifact_sha256=hashlib.sha256(content.encode("utf-8")).hexdigest()
                 ),
             )
+
+        queued_resume = queue_run_resume(
+            db_path,
+            data_root,
+            alice["id"],
+            needs_run["id"],
+        )
+        self.assertEqual(queued_resume["status"], "queued")
 
         with patch("specgate.web_runs._run_resume_agent", side_effect=fake_resume) as runner:
             updated = resume_run_once(db_path, data_root, alice["id"], needs_run["id"])

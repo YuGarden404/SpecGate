@@ -287,6 +287,27 @@ class WebStaticTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIn(text, app_js)
 
+    def test_app_contains_run_cancel_action_and_runtime_status_labels(self) -> None:
+        app_js = read_static("app.js")
+
+        for snippet in (
+            "async function cancelRun",
+            "`/api/runs/${run.id}/cancel`",
+            'className: "secondary cancel-run-button"',
+            '["queued", "running", "needs_approval"].includes(run.status)',
+            '["queued", "running", "cancel_requested"].includes(',
+            'cancel_requested: "正在取消"',
+            'cancelled: "已取消"',
+            'timed_out: "已超时"',
+            'publishing: "发布中"',
+            'initializing: "初始化中"',
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, app_js)
+
+        self.assertIn('["failed", "cancelled", "timed_out"].includes(status)', app_js)
+        self.assertIn('["needs_approval", "cancel_requested"].includes(status)', app_js)
+
     def test_sidebar_hotzone_uses_multiple_reveal_events(self) -> None:
         app_js = read_static("app.js")
         for snippet in (
