@@ -805,3 +805,25 @@
   - 最终全量测试为 `Ran 799 tests in 129.557s`、`OK (skipped=20)`；命令中的非法 `unsafe` profile argparse 输出来自预期拒绝测试，不是失败。
   - `python -m compileall -q src tests` 无输出且退出码为 0；`git diff --check` 退出码为 0，仅显示 Windows 工作区的 LF→CRLF 提示，没有空白错误。
 - 未执行 `git add`、`git commit`、`git push` 或 PR 操作；远端 GitHub Actions 等待用户提交并 push 后验证。
+
+## 2026-07-15 Runner 运行配置接线
+
+- 分支：`feat-runtime-config-wiring`。
+- 已确认边界：Web 与自动验收只使用 `MockLLM`；不接真实 LLM；Git 暂存、提交、push 和 PR 由用户执行；本轮按用户选择使用 Inline Execution，没有派发 subagent。
+- Superpowers 流程：使用 `executing-plans`、`test-driven-development` 和 `systematic-debugging` 逐项执行；完成前使用 `requesting-code-review`、`verification-before-completion` 和 `finishing-a-development-branch`。
+- 已确认七项配置：`governance_profile`、`context_strategy`、`max_steps`、`context_budget_chars`、`retrieval_top_k`、`retrieval_budget_chars`、`compression_max_tool_result_chars`。数值默认值分别为 5、12000、6、9000、1200，合法范围由 `RunRuntimeConfig` 统一维护。
+- 数据库与不变量：
+  - schema 升级为 v4；v3→v4 在单事务内增加 Settings 数值列和 `runs.runtime_config_json`，旧 run 回填 `source=migration`，失败时完整回滚。
+  - 创建 run 在 `BEGIN IMMEDIATE` 事务内读取 Settings 并写入 `source=created` 的规范化 JSON，Settings 并发更新不能产生混合字段快照。
+  - 首次执行、HITL resume 和 queued 重启补入不再读取最新 Settings，只解析 run 自身快照；Trace 记录 `runtime_config_applied` 及 initial/resume phase。
+- Runner 接线：Context builder 和 AgentRunner 显式接收上下文字符预算、`RetrievalConfig` 和 `CompressionConfig`；普通与多角色路径共用同一配置，同时保留安全关键段和 allowed-read 策略。
+- TDD 与调试证据：
+  - 配置核心 6 项测试通过；schema v4 迁移组合 17 项测试通过；Settings/API 组合 54 项测试通过（跳过 1 项）。
+  - 首次执行/resume 快照组合 78 项测试通过。
+  - 非法快照测试先暴露错误断言：数据库保留损坏原文用于取证，但错误信息、Debug/API 和 Trace 不得回显。修正测试契约及错位断言后，针对性 2 项与 Web 高风险组合 142 项测试通过（跳过 1 项）。
+  - Debug/Audit/Settings 新增 3 条契约测试先因字段和页面能力缺失失败；最小实现后相关组合 100 项测试通过（跳过 1 项）。损坏快照仅返回 `invalid_runtime_config`，不回显原始 JSON sentinel。
+- 主线程代码审查发现 queued resume 在“API 已校验、worker 尚未认领”期间若快照损坏，解析异常会逃出并使 run 持续保持 queued；同时首次执行解析失败可能覆盖并发取消终态。新增两条 RED 回归后，以带期望状态的事务更新收敛为 `failed / invalid_runtime_config`，并保留已发生的取消状态；相关 4 条针对性测试和 144 条 Web 恢复组合测试通过（跳过 1 项）。
+- 最终高风险聚焦测试：`Ran 282 tests in 91.153s`、`OK (skipped=1)`。
+- 最终全量测试：`Ran 822 tests in 131.279s`、`OK (skipped=20)`；命令中的非法 `unsafe` profile argparse 输出来自预期拒绝测试，不是失败。
+- `python -m compileall -q src tests` 与 `node --check src/specgate/web_static/app.js` 均无输出且退出码为 0；`git diff --check` 退出码为 0，仅有 Windows LF→CRLF 提示，没有空白错误。
+- 未执行 `git add`、`git commit`、`git push` 或 PR 操作；远端 GitHub Actions 等待用户提交并 push 后运行。

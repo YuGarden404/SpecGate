@@ -321,6 +321,24 @@ http://127.0.0.1:8000
 - Web HITL 审批：首次创建不存在的 `index.html` 可以直接执行；覆盖任何已有文件时会先暂停为 `needs_approval`，不会在审批前修改文件。页面 approve / deny 会携带队列 revision，冲突时重载最新状态；随后由 resume 应用已批准 action，或把拒绝原因反馈给 Agent 重新规划。
 - 产物下载和源码预览。生成的 HTML 默认作为下载附件或纯文本源码查看，避免在同源认证上下文中直接执行用户/模型生成的 HTML。
 
+### Web 运行配置快照
+
+设置页提供七项会真正传入 Runner 的运行配置：
+
+| 配置 | 默认值 | 合法范围或选项 |
+| --- | ---: | --- |
+| `governance_profile` | `review` | `strict`、`demo`、`review` |
+| `context_strategy` | `injection-safe` | `injection-safe`、`rag-select`、`compressed-rag` |
+| `max_steps` | `5` | `1`–`20` |
+| `context_budget_chars` | `12000` | `1000`–`100000` |
+| `retrieval_top_k` | `6` | `1`–`20` |
+| `retrieval_budget_chars` | `9000` | `500`–`50000` |
+| `compression_max_tool_result_chars` | `1200` | `100`–`10000` |
+
+设置只影响之后创建的 run。创建 run 时，七项配置会在同一 SQLite 事务中规范化为不可变 JSON 快照；首次执行、HITL resume、排队补入和进程重启恢复都只使用该快照，不会读取后来修改的用户设置。非法或损坏的快照会稳定失败关闭，不会调用 Agent 或发布产物。
+
+运行工作台的 Debug/Audit 页面会展示本次 run 的实际配置及 `runtime_config_applied` Trace 事件，便于核对创建、恢复和审计行为。Web 运行与课程验收仍只使用 `MockLLM`，这些设置不会启用真实 LLM。
+
 WebUI 默认数据目录是：
 
 ```text

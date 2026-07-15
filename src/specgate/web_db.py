@@ -1,8 +1,10 @@
 import sqlite3
 from pathlib import Path
 
+from specgate.runtime_config import RunRuntimeConfig
 
-LATEST_SCHEMA_VERSION = 3
+
+LATEST_SCHEMA_VERSION = 4
 
 USER_CREDENTIALS_SCHEMA = """
 create table if not exists user_credentials (
@@ -40,6 +42,11 @@ create table if not exists user_settings (
     user_id integer primary key references users(id) on delete cascade,
     governance_profile text not null default 'review',
     context_strategy text not null default 'injection-safe',
+    max_steps integer not null default 5,
+    context_budget_chars integer not null default 12000,
+    retrieval_top_k integer not null default 6,
+    retrieval_budget_chars integer not null default 9000,
+    compression_max_tool_result_chars integer not null default 1200,
     api_key_configured integer not null default 0,
     api_key_ciphertext text
 );
@@ -81,7 +88,8 @@ create table if not exists runs (
     started_at text,
     finished_at text,
     cancel_requested_at text,
-    deadline_at text
+    deadline_at text,
+    runtime_config_json text
 );
 
 create table if not exists approvals (
@@ -106,7 +114,7 @@ create table if not exists artifacts (
     created_at text not null default current_timestamp
 );
 
-pragma user_version = 3;
+pragma user_version = 4;
 """
 
 
@@ -172,6 +180,66 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
         raise
 
 
+def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    conn.execute("begin immediate")
+    try:
+        conn.execute(
+            "alter table user_settings add column max_steps integer not null default 5"
+        )
+        conn.execute(
+            "alter table user_settings add column context_budget_chars integer not null default 12000"
+        )
+        conn.execute(
+            "alter table user_settings add column retrieval_top_k integer not null default 6"
+        )
+        conn.execute(
+            "alter table user_settings add column retrieval_budget_chars integer not null default 9000"
+        )
+        conn.execute(
+            """
+            alter table user_settings
+            add column compression_max_tool_result_chars integer not null default 1200
+            """
+        )
+        conn.execute("alter table runs add column runtime_config_json text")
+        rows = conn.execute(
+            """
+            select runs.id,
+                   coalesce(user_settings.governance_profile, 'review')
+                       as governance_profile,
+                   coalesce(user_settings.context_strategy, 'injection-safe')
+                       as context_strategy,
+                   coalesce(user_settings.max_steps, 5) as max_steps,
+                   coalesce(user_settings.context_budget_chars, 12000)
+                       as context_budget_chars,
+                   coalesce(user_settings.retrieval_top_k, 6) as retrieval_top_k,
+                   coalesce(user_settings.retrieval_budget_chars, 9000)
+                       as retrieval_budget_chars,
+                   coalesce(user_settings.compression_max_tool_result_chars, 1200)
+                       as compression_max_tool_result_chars
+            from runs
+            left join user_settings on user_settings.user_id = runs.user_id
+            order by runs.id
+            """
+        ).fetchall()
+        for row in rows:
+            config = RunRuntimeConfig.for_migration(dict(row))
+            conn.execute(
+                "update runs set runtime_config_json = ? where id = ?",
+                (config.to_json(), row["id"]),
+            )
+        missing = conn.execute(
+            "select count(*) from runs where runtime_config_json is null"
+        ).fetchone()[0]
+        if missing:
+            raise RuntimeError("runtime config migration left empty snapshots")
+        conn.execute("pragma user_version = 4")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = connect_db(db_path)
@@ -185,7 +253,10 @@ def init_db(db_path: Path) -> None:
             version = 2
         if version == 2:
             _migrate_v2_to_v3(conn)
-            return
+            version = 3
+        if version == 3:
+            _migrate_v3_to_v4(conn)
+            version = 4
         if version == LATEST_SCHEMA_VERSION:
             conn.execute(USER_CREDENTIALS_SCHEMA)
             conn.commit()

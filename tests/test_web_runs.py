@@ -18,6 +18,7 @@ from specgate.run_storage import (
     initialize_run_storage as initialize_run_storage_real,
     promote_run_workspace as promote_run_workspace_real,
 )
+from specgate.runtime_config import RunRuntimeConfig, RuntimeConfigError
 from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
 from specgate.web_projects import create_manual_project, project_paths, web_run_paths
@@ -404,6 +405,10 @@ class WebRunsTests(unittest.TestCase):
         self.assertEqual(run["prompt"], "Build the result")
         self.assertEqual(run["project_id"], project["id"])
         self.assertEqual(run["user_id"], user["id"])
+        self.assertEqual(
+            RunRuntimeConfig.from_json(run["runtime_config_json"]),
+            RunRuntimeConfig(),
+        )
 
         with closing(connect_db(db_path)) as conn:
             message = conn.execute(
@@ -425,6 +430,113 @@ class WebRunsTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             create_run(db_path, project["id"], user["id"], "   ", data_root=data_root)
+
+    def test_create_run_freezes_complete_nondefault_runtime_config(self):
+        db_path, data_root, user, project = self.make_context()
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                """
+                update user_settings
+                set governance_profile = 'strict',
+                    context_strategy = 'compressed-rag',
+                    max_steps = 8,
+                    context_budget_chars = 20000,
+                    retrieval_top_k = 5,
+                    retrieval_budget_chars = 8000,
+                    compression_max_tool_result_chars = 700
+                where user_id = ?
+                """,
+                (user["id"],),
+            )
+            conn.commit()
+
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build with frozen config",
+            data_root=data_root,
+        )
+
+        self.assertEqual(
+            RunRuntimeConfig.from_json(run["runtime_config_json"]),
+            RunRuntimeConfig(
+                governance_profile="strict",
+                context_strategy="compressed-rag",
+                max_steps=8,
+                context_budget_chars=20000,
+                retrieval_top_k=5,
+                retrieval_budget_chars=8000,
+                compression_max_tool_result_chars=700,
+            ),
+        )
+
+    def test_create_run_and_settings_update_cannot_mix_snapshot_fields(self):
+        db_path, data_root, user, project = self.make_context()
+        snapshot_read = threading.Event()
+        allow_create = threading.Event()
+        update_attempted = threading.Event()
+        update_done = threading.Event()
+        original_from_settings = RunRuntimeConfig.from_settings
+
+        def delayed_snapshot(values):
+            snapshot_read.set()
+            self.assertTrue(allow_create.wait(timeout=2))
+            return original_from_settings(values)
+
+        def update_settings_row():
+            with closing(connect_db(db_path)) as conn:
+                update_attempted.set()
+                conn.execute(
+                    """
+                    update user_settings
+                    set governance_profile = 'strict',
+                        context_strategy = 'compressed-rag',
+                        max_steps = 8,
+                        context_budget_chars = 20000,
+                        retrieval_top_k = 5,
+                        retrieval_budget_chars = 8000,
+                        compression_max_tool_result_chars = 700
+                    where user_id = ?
+                    """,
+                    (user["id"],),
+                )
+                conn.commit()
+            update_done.set()
+
+        with ThreadPoolExecutor(max_workers=2) as executor, patch.object(
+            web_runs.RunRuntimeConfig,
+            "from_settings",
+            side_effect=delayed_snapshot,
+        ):
+            creation = executor.submit(
+                create_run,
+                db_path,
+                project["id"],
+                user["id"],
+                "Build with concurrent settings update",
+                data_root=data_root,
+            )
+            self.assertTrue(snapshot_read.wait(timeout=2))
+            update = executor.submit(update_settings_row)
+            self.assertTrue(update_attempted.wait(timeout=2))
+            self.assertFalse(update_done.wait(timeout=0.1))
+            allow_create.set()
+            run = creation.result(timeout=2)
+            update.result(timeout=2)
+
+        self.assertEqual(
+            RunRuntimeConfig.from_json(run["runtime_config_json"]),
+            RunRuntimeConfig(),
+        )
+        with closing(connect_db(db_path)) as conn:
+            stored = conn.execute(
+                "select * from user_settings where user_id = ?",
+                (user["id"],),
+            ).fetchone()
+        self.assertEqual(stored["governance_profile"], "strict")
+        self.assertEqual(stored["max_steps"], 8)
+        self.assertEqual(stored["compression_max_tool_result_chars"], 700)
 
     def test_create_run_rejects_user_active_limit_without_side_effects(self):
         db_path, data_root, user, first_project = self.make_context()
@@ -1282,8 +1394,8 @@ class WebRunsTests(unittest.TestCase):
         run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
         original_run_mock_agent = web_runs._run_mock_agent
 
-        def mutate_after_final_gate(paths, settings):
-            result = original_run_mock_agent(paths, settings)
+        def mutate_after_final_gate(paths, config, **kwargs):
+            result = original_run_mock_agent(paths, config, **kwargs)
             (paths.workspace / "index.html").write_text("third-party change", encoding="utf-8")
             return result
 
@@ -1413,36 +1525,45 @@ class WebRunsTests(unittest.TestCase):
         self.assertTrue(contender.try_acquire())
         contender.release()
 
-    def test_execute_run_once_uses_user_governance_and_context_settings(self):
+    def test_execute_run_once_uses_created_runtime_snapshot_after_settings_change(self):
         db_path, data_root, user, project = self.make_context()
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                """
+                update user_settings
+                set governance_profile = 'strict', context_strategy = 'rag-select',
+                    max_steps = 3, context_budget_chars = 16000,
+                    retrieval_top_k = 4, retrieval_budget_chars = 7000,
+                    compression_max_tool_result_chars = 900
+                where user_id = ?
+                """,
+                (user["id"],),
+            )
+            conn.commit()
         run = create_run(db_path, project["id"], user["id"], "Build the result", data_root=data_root)
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                """
+                update user_settings
+                set governance_profile = 'review', context_strategy = 'injection-safe',
+                    max_steps = 5, context_budget_chars = 12000,
+                    retrieval_top_k = 6, retrieval_budget_chars = 9000,
+                    compression_max_tool_result_chars = 1200
+                where user_id = ?
+                """,
+                (user["id"],),
+            )
+            conn.commit()
 
-        runtime_settings = {
-            "governance_profile": "strict",
-            "context_strategy": "rag-select",
-        }
-        with patch(
-            "specgate.web_runs.get_runtime_settings",
-            return_value=runtime_settings,
-        ) as get_runtime:
-            execute_run_once(db_path, data_root, run["id"])
-
-        get_runtime.assert_called_once_with(db_path, int(user["id"]))
-        self.assertFalse(
-            {
-                "api_key",
-                "api_key_configured",
-                "api_key_ciphertext",
-                "credentials",
-            }
-            & runtime_settings.keys()
-        )
+        execute_run_once(db_path, data_root, run["id"])
 
         paths = project_paths(data_root, user["id"], project["id"])
         run_paths = web_run_paths(paths, run["id"])
         trace_text = (run_paths.audit / "trace.jsonl").read_text(encoding="utf-8")
         self.assertIn('"strategy": "rag-select"', trace_text)
         self.assertIn('"profile": "strict"', trace_text)
+        self.assertIn('"event_type": "runtime_config_applied"', trace_text)
+        self.assertIn('"max_steps": 3', trace_text)
         self.assertFalse((paths.workspace / "runs" / "latest").exists())
 
     def test_execute_run_once_failure_marks_run_failed_when_index_is_missing(self):
@@ -1528,6 +1649,107 @@ class WebRunsTests(unittest.TestCase):
                 (run["id"],),
             ).fetchone()[0]
         self.assertEqual(artifact_count, 0)
+
+    def test_invalid_runtime_snapshot_never_calls_agent_or_publishes(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build with corrupt config",
+            data_root=data_root,
+        )
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                "update runs set runtime_config_json = ? where id = ?",
+                ('{"schema_version":99,"raw":"SECRET_RUNTIME_CONFIG_SENTINEL"}', run["id"]),
+            )
+            conn.commit()
+
+        with patch("specgate.web_runs._run_mock_agent") as agent:
+            execute_run_once(db_path, data_root, run["id"])
+
+        stored = get_run(db_path, user["id"], run["id"])
+        paths = web_run_paths(
+            project_paths(data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        self.assertEqual(stored["status"], "failed")
+        self.assertEqual(stored["error_message"], "invalid_runtime_config")
+        self.assertNotIn(
+            "SECRET_RUNTIME_CONFIG_SENTINEL",
+            stored["error_message"],
+        )
+        self.assertFalse(paths.index_artifact.exists())
+        self.assertFalse(paths.zip_artifact.exists())
+        agent.assert_not_called()
+        with closing(connect_db(db_path)) as conn:
+            artifact_count = conn.execute(
+                "select count(*) from artifacts where run_id = ?",
+                (run["id"],),
+            ).fetchone()[0]
+        self.assertEqual(artifact_count, 0)
+
+    def test_queued_resume_with_corrupt_snapshot_fails_closed(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Resume with corrupt config",
+            data_root=data_root,
+        )
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                """
+                update runs
+                set status = 'queued', runtime_config_json = ?
+                where id = ?
+                """,
+                ('{"schema_version":99}', run["id"]),
+            )
+            conn.commit()
+        queue = Mock()
+        queue.next_resume_candidate.return_value = object()
+
+        with (
+            patch("specgate.web_runs.ApprovalQueue.read", return_value=queue),
+            patch("specgate.web_runs._run_resume_agent") as agent,
+        ):
+            result = web_runs.resume_run_once(
+                db_path,
+                data_root,
+                user["id"],
+                run["id"],
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error_message"], "invalid_runtime_config")
+        agent.assert_not_called()
+
+    def test_invalid_snapshot_does_not_overwrite_concurrent_cancellation(self):
+        db_path, data_root, user, project = self.make_context()
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Cancel while parsing config",
+            data_root=data_root,
+        )
+
+        def cancel_then_fail(_run):
+            web_runs.cancel_run(db_path, user["id"], run["id"])
+            raise RuntimeConfigError("runtime_config_json")
+
+        with patch(
+            "specgate.web_runs._parse_run_runtime_config",
+            side_effect=cancel_then_fail,
+        ):
+            execute_run_once(db_path, data_root, run["id"])
+
+        stored = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(stored["status"], "cancelled")
+        self.assertEqual(stored["error_message"], "运行已取消")
 
     def test_execute_run_once_ignores_runs_that_are_not_queued(self):
         db_path, data_root, user, project = self.make_context()

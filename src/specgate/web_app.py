@@ -32,6 +32,7 @@ from specgate.web_projects import (
     project_paths,
     web_run_paths,
 )
+from specgate.runtime_config import RuntimeConfigError
 from specgate.web_runs import (
     ActiveRunConflict,
     RunCancellationConflict,
@@ -95,6 +96,11 @@ class RunRequest(BaseModel):
 class SettingsRequest(BaseModel):
     governance_profile: str
     context_strategy: str
+    max_steps: StrictInt = Field(ge=1, le=20)
+    context_budget_chars: StrictInt = Field(ge=1000, le=100000)
+    retrieval_top_k: StrictInt = Field(ge=1, le=20)
+    retrieval_budget_chars: StrictInt = Field(ge=500, le=50000)
+    compression_max_tool_result_chars: StrictInt = Field(ge=100, le=10000)
 
 
 class ApiKeyRequest(BaseModel):
@@ -183,7 +189,20 @@ def create_app(
     app = FastAPI(title="SpecGate Web", lifespan=lifespan)
 
     @app.exception_handler(RequestValidationError)
-    async def request_validation_error(_request: Request, exc: RequestValidationError):
+    async def request_validation_error(request: Request, exc: RequestValidationError):
+        if request.url.path == "/api/settings":
+            errors = exc.errors()
+            field = str(errors[0]["loc"][-1]) if errors else "runtime_config"
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "detail": {
+                        "code": "invalid_runtime_config",
+                        "message": "运行配置无效 / Invalid runtime configuration",
+                        "field": field,
+                    }
+                },
+            )
         return JSONResponse(
             status_code=400,
             content={
@@ -559,6 +578,19 @@ def create_app(
                 reservation,
                 RunTask(run_id, int(user["id"]), True),
             )
+        except RuntimeConfigError as exc:
+            reservation.release()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": exc.code,
+                    "message": (
+                        "运行配置快照无效 / "
+                        "Invalid runtime configuration snapshot"
+                    ),
+                    "field": exc.field,
+                },
+            ) from exc
         except ValueError as exc:
             reservation.release()
             raise _http_error_for_value_error(exc) from exc
@@ -585,8 +617,22 @@ def create_app(
                 int(user["id"]),
                 payload.governance_profile,
                 payload.context_strategy,
+                payload.max_steps,
+                payload.context_budget_chars,
+                payload.retrieval_top_k,
+                payload.retrieval_budget_chars,
+                payload.compression_max_tool_result_chars,
                 app.state.web_credentials,
             )
+        except RuntimeConfigError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": exc.code,
+                    "message": str(exc),
+                    "field": exc.field,
+                },
+            ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"settings": settings}

@@ -530,10 +530,10 @@ class WebAppTests(unittest.TestCase):
         _client, app = self.make_client(runtime_config=WebRuntimeConfig(1, 1, 2, 60))
         started = threading.Event()
 
-        def blocked_agent(paths, settings):
+        def blocked_agent(paths, _config, *, stop_check=None, **_kwargs):
             started.set()
             while True:
-                settings["_stop_check"]()
+                stop_check()
                 threading.Event().wait(0.01)
 
         with patch("specgate.web_runs._run_mock_agent", side_effect=blocked_agent):
@@ -589,6 +589,33 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.json()["detail"]["scope"], "global")
         stored = client.get(f"/api/runs/{run['id']}").json()["run"]
         self.assertEqual(stored["status"], "needs_approval")
+
+    def test_resume_rejects_invalid_runtime_snapshot_without_scheduling(self):
+        client, app = self.make_client(runtime_config=WebRuntimeConfig(1, 1, 2, 60))
+        self.register(client)
+        project = self.create_project(client, index_html=None)
+        run = self.make_approved_run(client, app, project)
+        with closing(connect_db(app.state.db_path)) as conn:
+            conn.execute(
+                "update runs set runtime_config_json = ? where id = ?",
+                ('{"schema_version":99}', run["id"]),
+            )
+            conn.commit()
+
+        response = client.post(f"/api/runs/{run['id']}/resume")
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(
+            response.json()["detail"],
+            {
+                "code": "invalid_runtime_config",
+                "message": "运行配置快照无效 / Invalid runtime configuration snapshot",
+                "field": "runtime_config_json",
+            },
+        )
+        stored = client.get(f"/api/runs/{run['id']}").json()["run"]
+        self.assertEqual(stored["status"], "needs_approval")
+        self.assertNotIn(run["id"], app.state.runtime.scheduled_run_ids())
 
     def test_app_shutdown_persists_runtime_snapshot_before_joining_workers(self):
         _client, app = self.make_client()
@@ -696,11 +723,21 @@ class WebAppTests(unittest.TestCase):
 
         updated = client.put(
             "/api/settings",
-            json={"governance_profile": "strict", "context_strategy": "rag-select"},
+            json={
+                "governance_profile": "strict",
+                "context_strategy": "rag-select",
+                "max_steps": 8,
+                "context_budget_chars": 20000,
+                "retrieval_top_k": 5,
+                "retrieval_budget_chars": 8000,
+                "compression_max_tool_result_chars": 700,
+            },
         )
         self.assertEqual(updated.status_code, 200, updated.text)
         self.assertEqual(updated.json()["settings"]["governance_profile"], "strict")
         self.assertEqual(updated.json()["settings"]["context_strategy"], "rag-select")
+        self.assertEqual(updated.json()["settings"]["max_steps"], 8)
+        self.assertEqual(updated.json()["settings"]["context_budget_chars"], 20000)
 
         api_key = client.put("/api/settings/api-key", json={"api_key": "sk-test-secret"})
         self.assertEqual(api_key.status_code, 200, api_key.text)
@@ -710,6 +747,37 @@ class WebAppTests(unittest.TestCase):
         cleared = client.delete("/api/settings/api-key")
         self.assertEqual(cleared.status_code, 200, cleared.text)
         self.assertFalse(cleared.json()["settings"]["api_key_configured"])
+
+    def test_settings_reject_strict_integer_errors_without_changing_values(self):
+        client, _app = self.make_client(credential_key=TEST_KEY)
+        self.register(client)
+        valid = {
+            "governance_profile": "strict",
+            "context_strategy": "compressed-rag",
+            "max_steps": 8,
+            "context_budget_chars": 20000,
+            "retrieval_top_k": 5,
+            "retrieval_budget_chars": 8000,
+            "compression_max_tool_result_chars": 700,
+        }
+        accepted = client.put("/api/settings", json=valid)
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+
+        for value in (True, 5.0, "5", 21):
+            with self.subTest(value=value):
+                response = client.put(
+                    "/api/settings",
+                    json={**valid, "max_steps": value},
+                )
+                self.assertEqual(response.status_code, 400, response.text)
+                self.assertEqual(
+                    response.json()["detail"]["code"],
+                    "invalid_runtime_config",
+                )
+                self.assertEqual(response.json()["detail"]["field"], "max_steps")
+
+        stored = client.get("/api/settings").json()["settings"]
+        self.assertEqual({key: stored[key] for key in valid}, valid)
 
     def test_api_key_put_requires_configured_credential_store(self):
         client, _app = self.make_client(credential_key=None)

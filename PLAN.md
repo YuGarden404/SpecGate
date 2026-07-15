@@ -2166,3 +2166,27 @@ SPEC 覆盖：
 - GitHub Ubuntu CI：待填写。
 
 Agent 未执行 `git add`、`git commit`、`git push` 或 PR 操作。
+
+# 2026-07-15 Runner 运行配置接线
+
+详细设计与逐步计划：
+
+- `docs/superpowers/specs/2026-07-15-runtime-config-wiring-design.md`
+- `docs/superpowers/plans/2026-07-15-runtime-config-wiring.md`
+
+完成状态：
+
+- [x] Task 1：强类型七项运行配置、严格范围和规范化 JSON。
+- [x] Task 2：SQLite schema v4、Settings 数值列、run 快照与原子迁移。
+- [x] Task 3：Settings 服务、严格 API 校验和无副作用失败。
+- [x] Task 4：创建 run 时在同一事务内冻结完整配置快照。
+- [x] Task 5：Context、Retrieval 和 Compression 使用显式预算。
+- [x] Task 6：AgentRunner 接收并传递运行配置。
+- [x] Task 7：首次执行、HITL resume 和恢复只使用创建时快照。
+- [x] Task 8：非法快照稳定失败关闭且不发布产物。
+- [x] Task 9：Debug、Audit 和 Settings 页面展示实际运行配置。
+- [x] Task 10：中文材料、最终全量验证和交付审查。
+
+验证结果：高风险聚焦套件 `Ran 282 tests ... OK (skipped=1)`；主线程审查修复后 Web 恢复组合 `Ran 144 tests ... OK (skipped=1)`；最终全量 `Ran 822 tests ... OK (skipped=20)`。`python -m compileall -q src tests`、`node --check src/specgate/web_static/app.js` 和 `git diff --check` 均通过。
+
+本阶段继续只使用 `MockLLM` 和确定性单元测试，不访问真实 LLM 或网络。Git 暂存、提交、推送和 PR 仍由用户执行。

@@ -20,6 +20,7 @@ from specgate.approvals import (
     target_state_matches,
 )
 from specgate.context import build_context_pack_with_metadata, build_role_context_pack_with_metadata
+from specgate.context_lifecycle import CompressionConfig
 from specgate.gate import GateResult, run_html_gate
 from specgate.isolation import RoleExecution, action_allowed_for_role, build_isolation_evidence, role_context_for
 from specgate.llm import LLMClient
@@ -27,6 +28,7 @@ from specgate.memory import append_memory
 from specgate.metrics import PermissionDecision, RunMetrics, TrustSummary, build_trust_summary, classify_rule_family
 from specgate.multi_agent import MultiAgentState, phase_for_role, summary_requests_repair
 from specgate.policy import WorkspacePolicy
+from specgate.retrieval import RetrievalConfig
 from specgate.snapshot import FileSnapshot
 from specgate.tools import ToolDispatcher
 from specgate.trace import TraceStore, redact
@@ -83,6 +85,9 @@ class AgentRunner:
         approval_queue_file: Path | None = None,
         reset_audit: bool = True,
         stop_check: Callable[[], None] | None = None,
+        context_budget_chars: int = 12000,
+        retrieval_config: RetrievalConfig | None = None,
+        compression_config: CompressionConfig | None = None,
     ):
         self.root = root
         self.llm = llm
@@ -96,6 +101,9 @@ class AgentRunner:
         self.run_dir = audit_dir or root / "runs" / "latest"
         self.approval_queue_file = approval_queue_file or approval_queue_path(root)
         self._stop_check = stop_check or (lambda: None)
+        self.context_budget_chars = context_budget_chars
+        self.retrieval_config = retrieval_config or RetrievalConfig()
+        self.compression_config = compression_config or CompressionConfig()
         self.trace = TraceStore(self.run_dir / "trace.jsonl", reset=reset_audit)
         if reset_audit:
             self._reset_run_artifacts()
@@ -547,6 +555,9 @@ class AgentRunner:
             runtime_feedback=runtime_feedback,
             strategy=self.context_strategy,
             policy=self.policy,
+            context_budget_chars=self.context_budget_chars,
+            retrieval_config=self.retrieval_config,
+            compression_config=self.compression_config,
         )
         metrics = self._record_retrieval(metrics, context_metadata)
         metrics = self._record_compression(metrics, context_metadata)
@@ -746,6 +757,9 @@ class AgentRunner:
                 runtime_feedback,
                 strategy=self.context_strategy,
                 policy=self.policy,
+                context_budget_chars=self.context_budget_chars,
+                retrieval_config=self.retrieval_config,
+                compression_config=self.compression_config,
             )
             metrics = self._record_retrieval(metrics, context_metadata)
             metrics = self._record_compression(metrics, context_metadata)

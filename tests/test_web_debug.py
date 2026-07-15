@@ -11,6 +11,7 @@ import specgate.web_debug as web_debug_module
 from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
 from specgate.web_debug import build_run_debug
+from specgate.runtime_config import RunRuntimeConfig
 from specgate.workspace_fs import (
     WorkspacePathError,
     open_workspace_file,
@@ -76,6 +77,48 @@ class WebDebugTests(unittest.TestCase):
         self.assertIn("trace", payload)
         self.assertIn("events", payload["trace"])
         self.assertIn("evidence", payload)
+
+    def test_build_run_debug_returns_normalized_runtime_config(self):
+        db_path, data_root, user, _project, run = self.make_completed_run()
+        config = RunRuntimeConfig(
+            governance_profile="strict",
+            context_strategy="compressed-rag",
+            max_steps=8,
+            context_budget_chars=20000,
+            retrieval_top_k=5,
+            retrieval_budget_chars=8000,
+            compression_max_tool_result_chars=700,
+        )
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                "update runs set runtime_config_json = ? where id = ?",
+                (config.to_json(), run["id"]),
+            )
+            conn.commit()
+
+        payload = build_run_debug(db_path, data_root, user["id"], run["id"])
+
+        self.assertEqual(payload["runtime_config"], config.to_dict())
+        self.assertIsNone(payload["runtime_config_error"])
+
+    def test_build_run_debug_hides_invalid_runtime_config_source(self):
+        db_path, data_root, user, _project, run = self.make_completed_run()
+        sentinel = "RAW_RUNTIME_CONFIG_SENTINEL"
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                "update runs set runtime_config_json = ? where id = ?",
+                (
+                    json.dumps({"schema_version": 99, "raw": sentinel}),
+                    run["id"],
+                ),
+            )
+            conn.commit()
+
+        payload = build_run_debug(db_path, data_root, user["id"], run["id"])
+
+        self.assertIsNone(payload["runtime_config"])
+        self.assertEqual(payload["runtime_config_error"], "invalid_runtime_config")
+        self.assertNotIn(sentinel, json.dumps(payload, ensure_ascii=False))
 
     def test_build_run_debug_limits_trace_events_and_event_size(self):
         db_path, data_root, user, project, run = self.make_completed_run()

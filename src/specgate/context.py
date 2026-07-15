@@ -125,6 +125,7 @@ def _render_retrieved_context(
     root: Path,
     latest_gate: GateResult | None,
     policy: WorkspacePolicy | None = None,
+    retrieval_config: RetrievalConfig | None = None,
 ) -> tuple[str, dict]:
     task_spec = str(redact(_read_query_source(root, "TASK_SPEC.md", policy)))
     checklist = str(redact(_read_query_source(root, "CHECKLIST.md", policy)))
@@ -133,7 +134,7 @@ def _render_retrieved_context(
     result = retrieve_chunks(
         root,
         query_terms,
-        RetrievalConfig(),
+        retrieval_config or RetrievalConfig(),
         allowed_read_paths=policy.allowed_read_paths if policy is not None else None,
     )
     metadata = _retrieval_metadata(result)
@@ -313,23 +314,38 @@ def build_context_pack_with_metadata(
     runtime_feedback: list[dict] | None = None,
     strategy: str = "baseline",
     policy: WorkspacePolicy | None = None,
+    *,
+    context_budget_chars: int = 12000,
+    retrieval_config: RetrievalConfig | None = None,
+    compression_config: CompressionConfig | None = None,
 ) -> tuple[str, dict]:
     if strategy not in VALID_CONTEXT_STRATEGIES:
         raise ValueError(f"unknown context strategy: {strategy}")
 
     selection = select_context_files(
         root,
+        budget_chars=context_budget_chars,
         allowed_read_paths=policy.allowed_read_paths if policy is not None else None,
     )
+    resolved_retrieval = retrieval_config or RetrievalConfig()
+    resolved_compression = compression_config or CompressionConfig()
     retrieved_sections: list[str] = []
     retrieval_metadata = None
     compression_like = strategy in {"compressed-rag", *ISOLATED_HARNESS_STRATEGIES}
     if strategy in {"rag-select", "compressed-rag", *ISOLATED_HARNESS_STRATEGIES}:
-        rendered_retrieval, retrieval_metadata = _render_retrieved_context(root, latest_gate, policy)
+        rendered_retrieval, retrieval_metadata = _render_retrieved_context(
+            root,
+            latest_gate,
+            policy,
+            resolved_retrieval,
+        )
         retrieved_sections.append("## Retrieved Context\n" + rendered_retrieval)
     compression_summary = None
     if compression_like:
-        compression_summary = compress_runtime_feedback(runtime_feedback or [], CompressionConfig())
+        compression_summary = compress_runtime_feedback(
+            runtime_feedback or [],
+            resolved_compression,
+        )
     safety_sections = []
     if strategy == "injection-safe":
         safety_sections.append(
@@ -390,8 +406,21 @@ def build_context_pack(
     runtime_feedback: list[dict] | None = None,
     strategy: str = "baseline",
     policy: WorkspacePolicy | None = None,
+    *,
+    context_budget_chars: int = 12000,
+    retrieval_config: RetrievalConfig | None = None,
+    compression_config: CompressionConfig | None = None,
 ) -> str:
-    context, _metadata = build_context_pack_with_metadata(root, latest_gate, runtime_feedback, strategy, policy)
+    context, _metadata = build_context_pack_with_metadata(
+        root,
+        latest_gate,
+        runtime_feedback,
+        strategy,
+        policy,
+        context_budget_chars=context_budget_chars,
+        retrieval_config=retrieval_config,
+        compression_config=compression_config,
+    )
     return context
 
 
@@ -403,6 +432,10 @@ def build_role_context_pack_with_metadata(
     runtime_feedback: list[dict] | None = None,
     strategy: str = "multi-agent-isolated",
     policy: WorkspacePolicy | None = None,
+    *,
+    context_budget_chars: int = 12000,
+    retrieval_config: RetrievalConfig | None = None,
+    compression_config: CompressionConfig | None = None,
 ) -> tuple[str, dict]:
     role_context = role_context_for(role)
     role_runtime_feedback = _runtime_feedback_for_role(role_context.role, runtime_feedback)
@@ -412,6 +445,9 @@ def build_role_context_pack_with_metadata(
         runtime_feedback=role_runtime_feedback,
         strategy=strategy,
         policy=policy,
+        context_budget_chars=context_budget_chars,
+        retrieval_config=retrieval_config,
+        compression_config=compression_config,
     )
     role_sections = [
         "## Current Role\n"
