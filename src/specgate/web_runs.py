@@ -5,7 +5,6 @@ import io
 import json
 import os
 import sqlite3
-import threading
 import zipfile
 from contextlib import AbstractContextManager
 from pathlib import Path
@@ -523,16 +522,6 @@ def get_run(db_path: Path, user_id: int, run_id: int) -> sqlite3.Row:
         return row
     finally:
         conn.close()
-
-
-def start_run_background(db_path: Path, data_root: Path, run_id: int) -> threading.Thread:
-    thread = threading.Thread(
-        target=execute_run_once,
-        args=(db_path, data_root, run_id),
-        daemon=True,
-    )
-    thread.start()
-    return thread
 
 
 def execute_run_once(

@@ -613,7 +613,7 @@ def run_real_llm(
             governance_config=settings.governance,
         ).run()
     except LLMProviderError as exc:
-        print(f"provider request failed: {exc}")
+        print(f"provider request failed: {redact(str(exc))}")
         return 1
     gate = result.final_gate or run_html_gate(root / "index.html", root / "CHECKLIST.md")
     generate_report(
@@ -680,7 +680,7 @@ def run_real_eval(
             suite=suite,
         )
     except LLMProviderError as exc:
-        print(f"provider request failed: {exc}")
+        print(f"provider request failed: {redact(str(exc))}")
         return 1
     if suite.total_cases == 0:
         print(f"SpecGate eval found no cases: {root}")

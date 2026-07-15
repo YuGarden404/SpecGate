@@ -59,13 +59,15 @@ class OpenAICompatibleLLMTests(unittest.TestCase):
             OpenAICompatibleLLM(base_url="https://api.example.test/v1", api_key="", model="test-model")
 
     def test_http_error_is_wrapped_without_leaking_api_key(self):
+        error_body = BytesIO(b'{"error":"REFLECTED_BODY_SECRET_7b21"}')
+
         def forbidden(request, timeout):
             raise HTTPError(
                 request.full_url,
                 403,
                 "Forbidden",
                 hdrs={},
-                fp=BytesIO(b'{"error":"model not allowed"}'),
+                fp=error_body,
             )
 
         llm = OpenAICompatibleLLM(
@@ -79,9 +81,33 @@ class OpenAICompatibleLLMTests(unittest.TestCase):
             llm.complete("context pack")
 
         message = str(caught.exception)
-        self.assertIn("HTTP 403", message)
-        self.assertIn("model not allowed", message)
+        self.assertEqual(message, "HTTP 403 Forbidden")
+        self.assertNotIn("REFLECTED_BODY_SECRET_7b21", message)
         self.assertNotIn("sk-test-secret", message)
+        self.assertTrue(error_body.closed)
+
+    def test_http_error_uses_standard_reason_and_handles_missing_body_stream(self):
+        def forbidden(request, timeout):
+            raise HTTPError(
+                request.full_url,
+                403,
+                "REFLECTED_REASON_SECRET_4c12",
+                hdrs={},
+                fp=None,
+            )
+
+        llm = OpenAICompatibleLLM(
+            base_url="https://api.example.test/v1",
+            api_key="sk-test-secret",
+            model="test-model",
+            opener=forbidden,
+        )
+
+        with self.assertRaises(LLMProviderError) as caught:
+            llm.complete("context pack")
+
+        self.assertEqual(str(caught.exception), "HTTP 403 Forbidden")
+        self.assertNotIn("REFLECTED_REASON_SECRET_4c12", str(caught.exception))
 
     def test_timeout_is_wrapped_as_provider_error(self):
         def timeout(request, timeout):

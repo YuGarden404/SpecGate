@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import specgate.workspace_fs as workspace_fs
 from specgate.trace import redact
 
 
@@ -26,11 +27,15 @@ def _memory_path(root: Path) -> Path:
 
 
 def _load_memory(root: Path) -> dict[str, Any]:
-    path = _memory_path(root)
-    if not path.exists():
+    text = workspace_fs.read_optional_workspace_text(
+        root,
+        MEMORY_FILE,
+        encoding="utf-8",
+    )
+    if text is None:
         return {"runs": []}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(text)
     except json.JSONDecodeError:
         return {"runs": []}
     if not isinstance(data, dict) or not isinstance(data.get("runs"), list):
@@ -51,7 +56,12 @@ def append_memory(root: Path, passed: bool, steps: int, gate_summary: str) -> Pa
     )
     data["runs"] = runs[-MAX_MEMORY_RUNS:]
     path = _memory_path(root)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    workspace_fs.write_workspace_text(
+        root,
+        MEMORY_FILE,
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     return path
 
 

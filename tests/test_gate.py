@@ -34,6 +34,30 @@ VALID_HTML = """<!doctype html>
 
 
 class HtmlGateTests(unittest.TestCase):
+    def test_invalid_utf8_artifact_returns_structured_gate_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "index.html").write_bytes(b"\xff\xfe")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+
+            result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
+
+            self.assertFalse(result.passed)
+            self.assertEqual(result.issues[0].code, "invalid_artifact_encoding")
+            self.assertEqual(result.issues[0].evidence, "invalid_encoding")
+
+    def test_invalid_utf8_checklist_returns_structured_gate_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "index.html").write_text(VALID_HTML, encoding="utf-8")
+            (root / "CHECKLIST.md").write_bytes(b"\xff\xfe")
+
+            result = run_html_gate(root / "index.html", root / "CHECKLIST.md")
+
+            self.assertFalse(result.passed)
+            self.assertEqual(result.issues[0].code, "invalid_checklist_encoding")
+            self.assertEqual(result.issues[0].evidence, "invalid_encoding")
+
     def test_page_without_search_passes_when_checklist_does_not_require_search(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

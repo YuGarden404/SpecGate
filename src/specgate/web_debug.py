@@ -355,7 +355,8 @@ def _read_json_evidence(audit_root: Path, relative: str) -> Any:
     except UnicodeDecodeError:
         return {"error": "audit evidence is not valid UTF-8"}
     try:
-        return redact(json.loads(content))
+        evidence = redact(json.loads(content))
+        return None if evidence == {} else evidence
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
         return {"error": str(redact(str(exc)))}
 

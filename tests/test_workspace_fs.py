@@ -18,6 +18,7 @@ from unittest import mock
 import specgate.workspace_fs as workspace_fs
 from specgate.workspace_fs import (
     WorkspacePathError,
+    append_workspace_text,
     copy_workspace_tree,
     iter_workspace_files,
     is_link_like,
@@ -207,6 +208,34 @@ class LinkLikeTests(unittest.TestCase):
 
 
 class WorkspaceFileIOTests(unittest.TestCase):
+    def test_append_workspace_text_creates_and_extends_regular_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            append_workspace_text(root, "runs/latest/trace.jsonl", "first\n")
+            append_workspace_text(root, "runs/latest/trace.jsonl", "second\n")
+
+            self.assertEqual(
+                read_workspace_text(root, "runs/latest/trace.jsonl"),
+                "first\nsecond\n",
+            )
+
+    def test_append_workspace_text_rejects_link_without_changing_external_file(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            external = Path(outside) / "sentinel.txt"
+            external.write_text("EXTERNAL_APPEND_SENTINEL", encoding="utf-8")
+            self._symlink_or_skip(external, root / "trace.jsonl")
+
+            with self.assertRaises(WorkspacePathError) as raised:
+                append_workspace_text(root, "trace.jsonl", "attacker-controlled\n")
+
+            self.assertIn(raised.exception.rule_family, {"linked_path", "reparse_point"})
+            self.assertEqual(
+                external.read_text(encoding="utf-8"),
+                "EXTERNAL_APPEND_SENTINEL",
+            )
+
     def test_update_mode_creates_without_truncating_regular_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

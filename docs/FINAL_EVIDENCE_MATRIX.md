@@ -6,11 +6,10 @@
 
 ## 2. 最终版本快照
 
-- 文档同步基线：`main@f45e73a`。
-- 最近功能合并：PR #15，Runner 配置接线。
-- 本地功能基线：`Ran 822 tests ... OK (skipped=20)`，记录于 `AGENT_LOG.md`。
-- 最终文档同步回归：`Ran 829 tests in 133.150s`、`OK (skipped=20)`。
-- 远端最终状态：PR #15 合并后的 CI #43 与 Pages #26 为绿色，见 `evidence/github-actions-runtime-config.png`。
+- 当前主线基线：`main@e73e937`。
+- 最近合并：PR #17，学生本人确认后的项目反思。
+- 当前安全加固分支回归：`Ran 846 tests in 216.617s`、`OK (skipped=27)`。
+- 远端最近状态：PR #17 合并后的 CI #47 与 Pages #28 为绿色；仓库截图保留到 PR #16 前后的关键工作流，最新编号由 GitHub Actions 页面核对。
 - 公开入口：<https://yugarden404.github.io/SpecGate/>。
 
 ## 3. 课程交付物
@@ -23,7 +22,7 @@
 | 凭据治理 | 已完成 | `src/specgate/credentials.py`、`src/specgate/web_credentials.py` | 凭据测试，无明文回显 |
 | 分发 | 已完成 | `Dockerfile`、`.gitlab-ci.yml` | Docker build/smoke 与 CI |
 | 公开 WebUI | 已完成 | `README.md`、`.github/workflows/pages.yml` | 打开 Pages URL |
-| 学生反思 | 学生负责最终确认 | `REFLECTION.md`、`docs/REFLECTION_FACT_CHECK.md` | 学生本人复核过期事实 |
+| 学生反思 | 已由学生确认 | `REFLECTION.md`、`docs/REFLECTION_FACT_CHECK.md` | PR #17 与学生确认记录 |
 
 ## 4. 核心机制
 
@@ -49,6 +48,8 @@
 | Pages 热修复 | `20c0102` | `73fbb34` | [#13](https://github.com/YuGarden404/SpecGate/pull/13) | `evidence/github-actions-web-runtime-and-credentials.png` |
 | Web 运行时 | `e5fc981` | `49f66a2` | [#14](https://github.com/YuGarden404/SpecGate/pull/14) | `evidence/github-actions-web-runtime-and-credentials.png` |
 | Runner 配置 | `a523137` | `f45e73a` | [#15](https://github.com/YuGarden404/SpecGate/pull/15) | `evidence/github-actions-runtime-config.png` |
+| 最终材料 | `116cc10` | `fa3278a` | [#16](https://github.com/YuGarden404/SpecGate/pull/16) | 合并后 CI/Pages |
+| 学生反思 | `d550032` | `e73e937` | [#17](https://github.com/YuGarden404/SpecGate/pull/17) | CI #47、Pages #28 |
 
 ## 6. CI 与截图说明
 
@@ -80,7 +81,7 @@ node --check src/specgate/web_static/app.js
 git diff --check
 ```
 
-本阶段新鲜全量结果：`Ran 829 tests in 133.150s`、`OK (skipped=20)`。非法 `unsafe` governance profile 的 argparse 输出来自预期拒绝测试，不是失败。
+当前安全加固分支全量结果：`Ran 846 tests in 216.617s`、`OK (skipped=27)`。非法 `unsafe` governance profile 的 argparse 输出来自预期拒绝测试，不是失败；新增跳过项主要来自 Windows 当前没有创建符号链接的权限。
 
 ## 9. 边界
 

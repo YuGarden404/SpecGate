@@ -4,6 +4,7 @@ import json
 from html import escape
 from pathlib import Path
 
+import specgate.workspace_fs as workspace_fs
 from specgate.approvals import approval_queue_path, read_approval_queue_if_present
 from specgate.gate import GateResult
 from specgate.memory import load_memory_summary
@@ -78,6 +79,20 @@ def _safe_text(value: object) -> str:
     return str(redact(str(value)))
 
 
+def _read_optional_report_text(root: Path, relative: str) -> str | None:
+    relative_path = Path(relative)
+    current = root
+    for part in relative_path.parent.parts:
+        current = current / part
+        if workspace_fs.bind_workspace_tree(current, missing_ok=True) is None:
+            return None
+    return workspace_fs.read_optional_workspace_text(
+        root,
+        relative,
+        encoding="utf-8",
+    )
+
+
 def _render_approval_history(root: Path) -> str:
     try:
         queue = read_approval_queue_if_present(root, approval_queue_path(root))
@@ -117,12 +132,12 @@ def _render_approval_history(root: Path) -> str:
 
 
 def _render_retrieval_evidence(root: Path) -> str:
-    retrieval_path = root / "runs" / "latest" / "retrieval.json"
-    if not retrieval_path.exists():
+    text = _read_optional_report_text(root, "runs/latest/retrieval.json")
+    if text is None:
         return "<h2>Retrieval Evidence</h2><p>No retrieval evidence recorded.</p>"
 
     try:
-        data = json.loads(retrieval_path.read_text(encoding="utf-8"))
+        data = json.loads(text)
         if not isinstance(data, dict):
             raise ValueError("retrieval evidence must be an object")
         selected_chunks = data.get("selected_chunks", [])
@@ -172,12 +187,12 @@ def _render_retrieval_evidence(root: Path) -> str:
 
 
 def _render_compression_evidence(root: Path) -> str:
-    compression_path = root / "runs" / "latest" / "compression.json"
-    if not compression_path.exists():
+    text = _read_optional_report_text(root, "runs/latest/compression.json")
+    if text is None:
         return "<h2>Compression Evidence</h2><p>No compression evidence recorded.</p>"
 
     try:
-        data = json.loads(compression_path.read_text(encoding="utf-8"))
+        data = json.loads(text)
         if not isinstance(data, dict):
             raise ValueError("compression evidence must be an object")
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
@@ -195,12 +210,12 @@ def _render_compression_evidence(root: Path) -> str:
 
 
 def _render_role_isolation_evidence(root: Path) -> str:
-    isolation_path = root / "runs" / "latest" / "isolation.json"
-    if not isolation_path.exists():
+    text = _read_optional_report_text(root, "runs/latest/isolation.json")
+    if text is None:
         return "<h2>Role Isolation Evidence</h2><p>No role isolation evidence recorded.</p>"
 
     try:
-        data = json.loads(isolation_path.read_text(encoding="utf-8"))
+        data = json.loads(text)
         if not isinstance(data, dict):
             raise ValueError("role isolation evidence must be an object")
         roles = data.get("roles", [])
@@ -263,12 +278,12 @@ def _render_role_isolation_evidence(root: Path) -> str:
 
 
 def _render_prompt_injection_safety(root: Path) -> str:
-    security_path = root / "runs" / "latest" / "security.json"
-    if not security_path.exists():
+    text = _read_optional_report_text(root, "runs/latest/security.json")
+    if text is None:
         return "<h2>Prompt Injection Safety</h2><p>No prompt injection safety evidence recorded.</p>"
 
     try:
-        data = json.loads(security_path.read_text(encoding="utf-8"))
+        data = json.loads(text)
         if not isinstance(data, dict):
             raise ValueError("prompt injection safety evidence must be an object")
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
@@ -285,12 +300,12 @@ def _render_prompt_injection_safety(root: Path) -> str:
 
 
 def _render_benchmark_summary(root: Path) -> str:
-    benchmark_path = root / "eval-runs" / "latest" / "benchmark.json"
-    if not benchmark_path.exists():
+    text = _read_optional_report_text(root, "eval-runs/latest/benchmark.json")
+    if text is None:
         return "<h2>Benchmark Summary</h2><p>No benchmark summary recorded.</p>"
 
     try:
-        data = json.loads(benchmark_path.read_text(encoding="utf-8"))
+        data = json.loads(text)
         if not isinstance(data, dict):
             raise ValueError("benchmark summary must be an object")
         results = data.get("results", [])
@@ -357,12 +372,12 @@ def _strip_action_payload(value: object) -> object:
 
 
 def _render_run_events(root: Path) -> str:
-    trace_path = root / "runs" / "latest" / "trace.jsonl"
-    if not trace_path.exists():
+    text = _read_optional_report_text(root, "runs/latest/trace.jsonl")
+    if text is None:
         return "<p>No trace events found.</p>"
 
     items: list[str] = []
-    for line in trace_path.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         if not line.strip():
             continue
         try:
@@ -390,9 +405,8 @@ def generate_report(
     trust: TrustSummary | None = None,
     profile: str = "strict",
 ) -> Path:
-    report_dir = root / "reports" / "latest"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    output = report_dir / "index.html"
+    workspace_fs.ensure_workspace_directory(root, "reports/latest")
+    output = root / "reports" / "latest" / "index.html"
     issues = "\n".join(f"<li>{escape(issue.code)}: {escape(issue.message)}</li>" for issue in gate.issues)
     checks = "\n".join(f"<li>{escape(check.code)}: {'PASS' if check.passed else 'FAIL'}</li>" for check in gate.checks)
     tools = "\n".join(
@@ -444,5 +458,10 @@ def generate_report(
   <p><a href="../../index.html">Final artifact</a></p>
 </body>
 </html>"""
-    output.write_text(html, encoding="utf-8")
+    workspace_fs.write_workspace_text(
+        root,
+        "reports/latest/index.html",
+        html,
+        encoding="utf-8",
+    )
     return output
