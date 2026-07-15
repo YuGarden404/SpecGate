@@ -841,3 +841,19 @@
 - 高风险聚焦套件：`Ran 181 tests in 7.758s`、`OK (skipped=5)`。
 - 最终全量回归：`Ran 829 tests in 133.150s`、`OK (skipped=20)`；非法 `unsafe` profile 的 argparse 输出来自预期拒绝测试。
 - 主线程最终审查发现并修正 1 个 Important 文档问题：Gate/HITL 阶段末尾仍称等待远端 CI，现已回填 `e17b8e5` / PR #11 / `f2b4e88`；其余旧术语扫描命中均为明确的历史或迁移说明。
+
+## 2026-07-15 后端审计安全边界加固
+
+- 分支：`fix-backend-audit-hardening`，基线 `main@e73e937`；Git 暂存、提交、推送和 PR 仍由用户执行。
+- 产品边界：Web 与课程验收继续默认使用 MockLLM；用户配置 API Key 后启用真实 LLM 的能力留到 `feat-real-llm-web-integration`。
+- Superpowers：使用 `brainstorming`、`writing-plans`、`executing-plans`、`test-driven-development` 和 `systematic-debugging`；按用户选择采用 Inline Execution，没有派发 subagent。
+- RED→GREEN：
+  - 安全追加接口缺失导致 ImportError；实现 `append_workspace_text()` 并迁移 Trace 后，Task 1 的 96 项回归通过（跳过 8 项平台能力测试）。
+  - Memory、Report、Runner 未调用安全边界的三个跨平台测试先失败；迁移后 Task 2 的 98 项回归通过（跳过 5 项）。
+  - Tool、Gate 与 Runner 的非法 UTF-8 用例均先抛出 `UnicodeDecodeError`；修复同时发现 Context artifact summary 的直接读取，统一安全读取后 112 项回归通过（跳过 6 项）。
+  - Provider 异常先回显任意正文哨兵，CLI 先回显密钥；丢弃正文并纵深脱敏后 LLM/CLI 46 项回归通过。
+  - Web 架构测试先证明 `start_run_background` 仍存在；删除后 Web runtime/run/app/approvals 共 145 项通过（跳过 1 项）。
+- 系统调试：第一次全量 `Ran 845 tests` 时，Web debug 把安全重置的空 evidence `{}` 返回给前端，破坏既有 `null` 契约；在 `_read_json_evidence()` 边界规范化空对象后，原失败测试及 `tests.test_web_debug` 20 项通过。
+- 定向安全回归：`Ran 422 tests in 153.419s`、`OK (skipped=17)`。
+- 主线程审查补充远端控制 HTTP reason 与 `fp=None` 场景，测试先回显 reason 哨兵，再改为标准库状态原因并安全关闭可选响应流；最终全量回归：`Ran 846 tests in 216.617s`、`OK (skipped=27)`。新增跳过项均为 Windows 当前无符号链接权限的真实攻击测试，另有既有平台跳过。
+- 本阶段未访问真实 LLM 或外部模型网络，也未执行任何 Git 写操作。

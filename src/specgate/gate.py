@@ -118,12 +118,32 @@ def _unsafe_input_result(kind: str, error: workspace_fs.WorkspacePathError) -> G
     return GateResult(False, [_check(code, False, message)], [issue], f"Gate failed: {repair_hint}")
 
 
+def _invalid_encoding_result(kind: str) -> GateResult:
+    if kind == "artifact":
+        code = "invalid_artifact_encoding"
+        message = "index.html is not valid UTF-8"
+        repair_hint = "Replace index.html with a valid UTF-8 regular file"
+    else:
+        code = "invalid_checklist_encoding"
+        message = "checklist is not valid UTF-8"
+        repair_hint = "Replace the checklist with a valid UTF-8 regular file"
+    issue = _issue(code, message, "invalid_encoding", repair_hint)
+    return GateResult(
+        False,
+        [_check(code, False, message)],
+        [issue],
+        f"Gate failed: {repair_hint}",
+    )
+
+
 def run_html_gate(html_path: Path, checklist_path: Path | None) -> GateResult:
     checks: list[GateCheck] = []
     issues: list[GateIssue] = []
 
     try:
         artifact_input = _read_gate_file(html_path)
+    except UnicodeDecodeError:
+        return _invalid_encoding_result("artifact")
     except workspace_fs.WorkspacePathError as exc:
         return _unsafe_input_result("artifact", exc)
     if artifact_input is None:
@@ -136,6 +156,8 @@ def run_html_gate(html_path: Path, checklist_path: Path | None) -> GateResult:
     if checklist_path is not None:
         try:
             checklist_input = _read_gate_file(checklist_path)
+        except UnicodeDecodeError:
+            return _invalid_encoding_result("checklist")
         except workspace_fs.WorkspacePathError as exc:
             return _unsafe_input_result("checklist", exc)
         if checklist_input is not None:

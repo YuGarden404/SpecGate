@@ -1200,7 +1200,9 @@ review_actions = ["replace_file"]
                 pass
 
             def complete(self, context: str) -> str:
-                raise LLMProviderError("HTTP 503 Service Unavailable")
+                raise LLMProviderError(
+                    "HTTP 503 Service Unavailable: sk-cli-error-secret123456"
+                )
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1234,6 +1236,7 @@ review_actions = ["replace_file"]
             self.assertIn("HTTP 503", text)
             self.assertNotIn("Traceback", text)
             self.assertNotIn("sk-test-secret", text)
+            self.assertNotIn("sk-cli-error-secret123456", text)
 
     def test_real_run_fails_closed_without_credential(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1349,7 +1352,9 @@ review_actions = ["replace_file"]
                 pass
 
             def complete(self, context: str) -> str:
-                raise LLMProviderError("HTTP 403 Forbidden: model not allowed")
+                raise LLMProviderError(
+                    "HTTP 403 Forbidden: sk-cli-error-secret123456"
+                )
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1391,6 +1396,7 @@ review_actions = ["replace_file"]
             self.assertIn("HTTP 403", text)
             self.assertNotIn("Traceback", text)
             self.assertNotIn("sk-test-secret", text)
+            self.assertNotIn("sk-cli-error-secret123456", text)
 
 
 if __name__ == "__main__":

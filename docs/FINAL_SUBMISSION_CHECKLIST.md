@@ -31,7 +31,7 @@ MVP 范围：
 | 实施计划 | 已完成 | `PLAN.md`、`docs/superpowers/plans/` |
 | 规约过程记录 | 已完成 | `SPEC_PROCESS.md` |
 | 开发日志 | 已完成 | `AGENT_LOG.md` |
-| 学生反思 | 待学生最终事实确认 | `REFLECTION.md`、`docs/REFLECTION_FACT_CHECK.md` |
+| 学生反思 | 已由学生确认 | `REFLECTION.md`、`docs/REFLECTION_FACT_CHECK.md`、PR #17 |
 | 源代码 | 已完成 | `src/specgate/` |
 | 单元测试 | 已完成 | `tests/` |
 | Mock LLM 测试路径 | 已完成 | `src/specgate/llm.py`、`tests/test_runner.py`、`tests/test_cli.py` |
@@ -51,7 +51,7 @@ MVP 范围：
 | --- | --- | --- |
 | Action 协议 | `src/specgate/actions.py` | 只接受严格 JSON object，拒绝 Markdown code fence、缺字段和非法参数。 |
 | 工具管理 | `src/specgate/tool_registry.py`、`src/specgate/tools.py` | Tool Registry 描述工具名称、权限、参数和结果，dispatcher 只执行注册工具。 |
-| 安全边界 | `src/specgate/policy.py`、`src/specgate/snapshot.py` | 阻止未知动作、路径越界、allowlist 外写入和运行期间外部修改覆盖。 |
+| 安全边界 | `src/specgate/policy.py`、`src/specgate/snapshot.py`、`src/specgate/workspace_fs.py` | 阻止未知动作、路径越界、链接逃逸、allowlist 外写入、非法编码崩溃和运行期间外部修改覆盖。 |
 | 上下文与记忆 | `src/specgate/context_selector.py`、`src/specgate/context.py`、`src/specgate/memory.py` | 支持 Select/Compress/Isolate、预算控制、Context Manifest 和跨会话摘要。 |
 | Gate 闭环 | `src/specgate/gate.py`、`src/specgate/runner.py` | Gate 失败摘要回灌给下一轮，驱动 MockLLM 生成修复动作。 |
 | HITL 正确性 | `src/specgate/approvals.py`、`src/specgate/web_approvals.py` | revision/CAS、`applying` claim、resume 幂等和最终 Gate。 |
@@ -84,6 +84,8 @@ MVP 范围：
 | Pages 热修复 | `20c0102` | `73fbb34` | [#13](https://github.com/YuGarden404/SpecGate/pull/13) |
 | Web 运行时 | `e5fc981` | `49f66a2` | [#14](https://github.com/YuGarden404/SpecGate/pull/14) |
 | Runner 配置 | `a523137` | `f45e73a` | [#15](https://github.com/YuGarden404/SpecGate/pull/15) |
+| 最终材料 | `116cc10` | `fa3278a` | [#16](https://github.com/YuGarden404/SpecGate/pull/16) |
+| 学生反思 | `d550032` | `e73e937` | [#17](https://github.com/YuGarden404/SpecGate/pull/17) |
 
 PR #12 合并后 Pages 曾因依赖缺失失败，PR #13 修复后恢复通过；该失败—修复历史与最终 CI/Pages 状态均保留在 `docs/FINAL_EVIDENCE_MATRIX.md` 和 `docs/evidence/` 中。
 
@@ -130,4 +132,4 @@ docker run --rm specgate:local
 - 有上下文、安全、工具三条工程主线。
 - 有 Lab 10 Skill 与 Lab 9-12 取舍说明。
 
-后续可选增强只保留真实 LLM provider 和 AgentPack 草案；Lab 11 Hook sample 已实现并通过测试。`REFLECTION.md` 仍须由学生本人完成最终事实确认。
+后续可选增强只保留真实 LLM Web 接入和 AgentPack 草案；Lab 11 Hook sample 已实现并通过测试，`REFLECTION.md` 已由学生本人确认。

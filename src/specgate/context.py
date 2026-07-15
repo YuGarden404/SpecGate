@@ -5,6 +5,7 @@ import html
 import json
 from pathlib import Path
 
+import specgate.workspace_fs as workspace_fs
 from specgate.context_lifecycle import CompressionConfig, compress_runtime_feedback, pin_critical_sections
 from specgate.context_selector import ContextSelection, select_context_files
 from specgate.gate import GateResult
@@ -42,9 +43,21 @@ def _read_allowed(path: Path, policy: WorkspacePolicy | None) -> bool:
 def _artifact_summary(path: Path, policy: WorkspacePolicy | None = None) -> str:
     if not _read_allowed(path, policy):
         return "Artifact summary unavailable: read policy does not allow artifact inspection"
-    if not path.exists():
+    root = policy.root if policy is not None else path.parent
+    try:
+        relative = path.relative_to(root).as_posix()
+    except ValueError:
+        return "Artifact summary unavailable: artifact is outside the workspace"
+    try:
+        content = workspace_fs.read_optional_workspace_text(
+            root,
+            relative,
+            encoding="utf-8",
+        )
+    except UnicodeDecodeError:
+        return "Artifact summary unavailable: index.html is not valid UTF-8"
+    if content is None:
         return "index.html 摘要：文件不存在"
-    content = path.read_text(encoding="utf-8")
     node_count = content.count('class="node"') + content.count("class='node'")
     return f"index.html 摘要：{len(content)} 字符，node 出现 {node_count} 次"
 

@@ -1,8 +1,10 @@
+import inspect
 import threading
 import unittest
 from datetime import datetime, timezone
 from time import monotonic
 
+import specgate.web_runs as web_runs
 from specgate.web_runtime import (
     RunCancelled,
     RunControl,
@@ -22,6 +24,14 @@ def wait_until(predicate, timeout=1.0):
             return True
         threading.Event().wait(0.01)
     return predicate()
+
+
+class WebRuntimeArchitectureTests(unittest.TestCase):
+    def test_web_runs_has_no_per_run_thread_entrypoint(self):
+        source = inspect.getsource(web_runs)
+
+        self.assertFalse(hasattr(web_runs, "start_run_background"))
+        self.assertNotIn("threading.Thread(", source)
 
 
 class WebRuntimeConfigTests(unittest.TestCase):

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from specgate.security import SECRET_PATTERNS
+from specgate.workspace_fs import append_workspace_text, write_workspace_text
 
 
 def redact(value: Any) -> Any:
@@ -24,9 +25,10 @@ def redact(value: Any) -> Any:
 class TraceStore:
     def __init__(self, path: Path, reset: bool = False):
         self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.root = path.parent
+        self.relative = path.name
         if reset:
-            self.path.write_text("", encoding="utf-8")
+            write_workspace_text(self.root, self.relative, "", encoding="utf-8")
 
     def append(self, event_type: str, payload: dict[str, Any]) -> None:
         event = {
@@ -34,5 +36,9 @@ class TraceStore:
             "event_type": event_type,
             "payload": redact(payload),
         }
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        append_workspace_text(
+            self.root,
+            self.relative,
+            json.dumps(event, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )

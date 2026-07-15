@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from http.client import responses as HTTP_STATUS_REASONS
 from urllib import error, request
 from typing import Protocol
 
@@ -85,11 +86,13 @@ class OpenAICompatibleLLM:
             with self.opener(req, timeout=self.timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-            if len(body) > 500:
-                body = body[:500] + "...[truncated]"
-            detail = f": {body}" if body else ""
-            raise LLMProviderError(f"HTTP {exc.code} {exc.reason}{detail}") from exc
+            try:
+                standard_reason = HTTP_STATUS_REASONS.get(exc.code)
+                reason = f" {standard_reason}" if standard_reason else ""
+                raise LLMProviderError(f"HTTP {exc.code}{reason}") from exc
+            finally:
+                if exc.fp is not None:
+                    exc.close()
         except error.URLError as exc:
             raise LLMProviderError(f"network error: {exc.reason}") from exc
         except TimeoutError as exc:

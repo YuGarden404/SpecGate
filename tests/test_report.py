@@ -12,6 +12,72 @@ from specgate.workspace_fs import WorkspacePathError
 
 
 class ReportTests(unittest.TestCase):
+    def test_generate_report_uses_safe_directory_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+            error = WorkspacePathError("unsafe reports", "reparse_point")
+
+            with mock.patch(
+                "specgate.workspace_fs.ensure_workspace_directory",
+                side_effect=error,
+            ) as safe_ensure:
+                with self.assertRaises(WorkspacePathError) as raised:
+                    generate_report(root, gate, 1)
+
+            self.assertIs(raised.exception, error)
+            safe_ensure.assert_called_once_with(root, "reports/latest")
+
+    def test_generate_report_rejects_linked_reports_directory_without_external_write(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            external = Path(outside)
+            sentinel = external / "index.html"
+            sentinel.write_text("EXTERNAL_REPORT_SENTINEL", encoding="utf-8")
+            try:
+                (root / "reports").symlink_to(external, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"symlink creation unavailable: {exc}")
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+
+            with self.assertRaises(WorkspacePathError):
+                generate_report(root, gate, 1)
+
+            self.assertEqual(
+                sentinel.read_text(encoding="utf-8"),
+                "EXTERNAL_REPORT_SENTINEL",
+            )
+
+    def test_generate_report_rejects_linked_evidence_without_rendering_external_content(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            evidence_dir = root / "runs" / "latest"
+            evidence_dir.mkdir(parents=True)
+            external = Path(outside) / "retrieval.json"
+            external.write_text(
+                json.dumps(
+                    {
+                        "query_terms": ["EXTERNAL_EVIDENCE_SENTINEL"],
+                        "candidate_count": 0,
+                        "selected_chunks": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            try:
+                (evidence_dir / "retrieval.json").symlink_to(external)
+            except OSError as exc:
+                self.skipTest(f"symlink creation unavailable: {exc}")
+            gate = GateResult(True, [GateCheck("doctype", True, "ok")], [], "Gate passed")
+
+            with self.assertRaises(WorkspacePathError):
+                generate_report(root, gate, 1)
+
+            self.assertIn(
+                "EXTERNAL_EVIDENCE_SENTINEL",
+                external.read_text(encoding="utf-8"),
+            )
+
     def test_generate_static_report(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -488,7 +554,7 @@ class ReportTests(unittest.TestCase):
                 error = WorkspacePathError(f"unsafe queue: {sentinel}", family)
 
                 with mock.patch(
-                    "specgate.workspace_fs.read_optional_workspace_text",
+                    "specgate.report.read_approval_queue_if_present",
                     side_effect=error,
                 ):
                     output = generate_report(root, gate, 1)

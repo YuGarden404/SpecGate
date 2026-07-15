@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Callable
 
+import specgate.workspace_fs as workspace_fs
 from specgate.actions import Action, ActionParseError, parse_action
 from specgate.approvals import (
     ApprovalQueue,
@@ -98,7 +99,13 @@ class AgentRunner:
         self.governance_profile = governance_profile if governance_profile is not None else self.governance_config.profile
         snapshot = FileSnapshot.capture(root, policy.allowed_write_paths)
         self.dispatcher = ToolDispatcher(policy, snapshot)
-        self.run_dir = audit_dir or root / "runs" / "latest"
+        if audit_dir is None:
+            workspace_fs.ensure_workspace_directory(root, "runs/latest")
+            self.run_dir = root / "runs" / "latest"
+        else:
+            audit_path = Path(audit_dir)
+            workspace_fs.ensure_workspace_directory(audit_path.parent, audit_path.name)
+            self.run_dir = audit_path
         self.approval_queue_file = approval_queue_file or approval_queue_path(root)
         self._stop_check = stop_check or (lambda: None)
         self.context_budget_chars = context_budget_chars
@@ -119,9 +126,12 @@ class AgentRunner:
 
     def _reset_run_artifacts(self) -> None:
         for name in ("retrieval.json", "compression.json", "isolation.json"):
-            path = self.run_dir / name
-            if path.exists():
-                path.unlink()
+            workspace_fs.write_workspace_text(
+                self.run_dir,
+                name,
+                "{}",
+                encoding="utf-8",
+            )
 
     def _reset_approval_queue(self) -> None:
         ApprovalQueue().write(self.approval_queue_file)
@@ -343,7 +353,9 @@ class AgentRunner:
             retrieval_context_chars=metrics.retrieval_context_chars
             + (used_chars if isinstance(used_chars, int) else 0),
         )
-        (self.run_dir / "retrieval.json").write_text(
+        workspace_fs.write_workspace_text(
+            self.run_dir,
+            "retrieval.json",
             json.dumps(retrieval, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
@@ -375,7 +387,9 @@ class AgentRunner:
             cleared_tool_results=metrics.cleared_tool_results
             + (cleared_tool_results if isinstance(cleared_tool_results, int) else 0),
         )
-        (self.run_dir / "compression.json").write_text(
+        workspace_fs.write_workspace_text(
+            self.run_dir,
+            "compression.json",
             json.dumps(compression, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
@@ -402,7 +416,9 @@ class AgentRunner:
             role_contexts=role_contexts if isinstance(role_contexts, int) else 0,
             isolated_state_keys=isolated_state_keys if isinstance(isolated_state_keys, int) else 0,
         )
-        (self.run_dir / "isolation.json").write_text(
+        workspace_fs.write_workspace_text(
+            self.run_dir,
+            "isolation.json",
             json.dumps(isolation, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )

@@ -46,6 +46,8 @@ SPECGATE_WEB_RUN_TIMEOUT_SECONDS=60
 
 SQLite 连接启用 WAL、`synchronous=NORMAL` 和 5 秒 `busy_timeout`，用于缩短读写互斥并为短写锁竞争提供等待窗口。这些设置不替代单 Web 进程约束。课程验收和 Web 运行仍只使用 `MockLLM`，不会访问真实 LLM。
 
+运行目录中的 Trace、Memory、Report 与 evidence 必须保持为普通目录和普通文件，不要把 `runs/`、`reports/`、`memory.json` 或 run audit 目录替换为符号链接、目录联接或 reparse point；SpecGate 会在安全文件句柄边界拒绝这类对象。非法 UTF-8 的 HTML/Checklist 会形成结构化失败。Provider HTTP 错误日志不得包含响应正文；排查远端错误时只使用状态码、服务端独立审计和脱敏请求标识。
+
 ## 2. 本地 Docker 验证
 
 在仓库根目录构建镜像：

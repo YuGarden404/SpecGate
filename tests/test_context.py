@@ -11,9 +11,29 @@ from specgate.context_lifecycle import CompressionConfig
 from specgate.retrieval import RetrievalConfig
 from specgate.gate import GateCheck, GateIssue, GateResult
 from specgate.trace import TraceStore
+from specgate.workspace_fs import WorkspacePathError
 
 
 class ContextTests(unittest.TestCase):
+    def test_trace_store_rejects_link_without_overwriting_external_file(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            external = Path(outside) / "trace.jsonl"
+            external.write_text("EXTERNAL_TRACE_SENTINEL", encoding="utf-8")
+            link = root / "trace.jsonl"
+            try:
+                link.symlink_to(external)
+            except OSError as exc:
+                self.skipTest(f"symlink creation unavailable: {exc}")
+
+            with self.assertRaises(WorkspacePathError):
+                TraceStore(link, reset=True)
+
+            self.assertEqual(
+                external.read_text(encoding="utf-8"),
+                "EXTERNAL_TRACE_SENTINEL",
+            )
+
     def test_context_builders_apply_explicit_budget_retrieval_and_compression_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

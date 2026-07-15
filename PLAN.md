@@ -2197,3 +2197,14 @@ Agent 未执行 `git add`、`git commit`、`git push` 或 PR 操作。
 - 最终全量：`Ran 829 tests in 133.150s`、`OK (skipped=20)`。
 
 原始 MVP 与各阶段计划中的历史未完成复选框保留为过程记录。最终完成事实以较新的阶段完成摘要、Git/PR 链和 `docs/FINAL_EVIDENCE_MATRIX.md` 为准，不反向改写早期计划原文。
+
+# 2026-07-15 后端审计安全边界加固
+
+- [x] Task 1：扩展 `workspace_fs` 安全追加写入并迁移 Trace。
+- [x] Task 2：迁移 Memory、Report、Runner evidence 与 Context artifact summary 的直接文件访问。
+- [x] Task 3：非法 UTF-8 转换为 Tool/Gate 结构化失败，Runner 不崩溃。
+- [x] Task 4：Provider 不读取 HTTP 错误正文，CLI 统一脱敏。
+- [x] Task 5：删除 `start_run_background()`，Web run 只经固定 worker 与有界队列。
+- [x] Task 6：同步设计、实施计划、README、部署与最终证据材料。
+
+TDD 定向安全回归：`Ran 422 tests in 153.419s`、`OK (skipped=17)`。第一次全量回归在 `845` 项中发现 1 个 Web debug 空 evidence 兼容性问题；根因是安全重置的 `{}` 被当成真实 evidence，修复为 API 边界规范化 `null` 后，`tests.test_web_debug` 共 20 项通过。主线程审查再补 1 项远端 reason 哨兵测试，最终全量回归为 `Ran 846 tests in 216.617s`、`OK (skipped=27)`。课程自动验收仍使用 MockLLM/StubLLM，不访问真实 LLM 或网络；真实 LLM Web 接入留给下一独立分支。

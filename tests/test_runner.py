@@ -126,6 +126,99 @@ class FinishAfterExternalMutationLLM:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_invalid_utf8_artifact_returns_failed_result_without_runner_crash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_bytes(b"\xff\xfe")
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                set(),
+            )
+
+            result = AgentRunner(
+                root,
+                MockLLM(
+                    [
+                        {
+                            "schema_version": "1",
+                            "action": "finish",
+                            "args": {"summary": "done"},
+                        }
+                    ]
+                ),
+                policy,
+                max_steps=1,
+            ).run()
+
+            self.assertFalse(result.passed)
+            self.assertIsNotNone(result.final_gate)
+            self.assertIn(
+                "invalid_artifact_encoding",
+                {issue.code for issue in result.final_gate.issues},
+            )
+
+    def test_runner_uses_safe_audit_directory_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            audit = Path(tmp) / "audit"
+            root.mkdir()
+            audit.mkdir()
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            policy = WorkspacePolicy(root, {"finish"}, {"TASK_SPEC.md"}, set())
+            error = WorkspacePathError("unsafe audit", "reparse_point")
+
+            with mock.patch(
+                "specgate.workspace_fs.ensure_workspace_directory",
+                side_effect=error,
+            ) as safe_ensure:
+                with self.assertRaises(WorkspacePathError) as raised:
+                    AgentRunner(root, MockLLM([]), policy, audit_dir=audit)
+
+            self.assertIs(raised.exception, error)
+            safe_ensure.assert_called_once_with(audit.parent, audit.name)
+
+    def test_runner_rejects_linked_default_runs_directory_without_external_write(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            try:
+                (root / "runs").symlink_to(Path(outside), target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"symlink creation unavailable: {exc}")
+            policy = WorkspacePolicy(root, {"finish"}, {"TASK_SPEC.md"}, set())
+
+            with self.assertRaises(WorkspacePathError):
+                AgentRunner(root, MockLLM([]), policy)
+
+            self.assertFalse((Path(outside) / "latest" / "trace.jsonl").exists())
+
+    def test_runner_rejects_linked_evidence_without_overwriting_external_file(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = Path(tmp) / "workspace"
+            audit = Path(tmp) / "audit"
+            root.mkdir()
+            audit.mkdir()
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            external = Path(outside) / "retrieval.json"
+            external.write_text("EXTERNAL_RUNNER_SENTINEL", encoding="utf-8")
+            try:
+                (audit / "retrieval.json").symlink_to(external)
+            except OSError as exc:
+                self.skipTest(f"symlink creation unavailable: {exc}")
+            policy = WorkspacePolicy(root, {"finish"}, {"TASK_SPEC.md"}, set())
+
+            with self.assertRaises(WorkspacePathError):
+                AgentRunner(root, MockLLM([]), policy, audit_dir=audit)
+
+            self.assertEqual(
+                external.read_text(encoding="utf-8"),
+                "EXTERNAL_RUNNER_SENTINEL",
+            )
+
     def test_stop_check_can_abort_before_first_llm_call(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1510,7 +1603,10 @@ class RunnerTests(unittest.TestCase):
 
             AgentRunner(root, llm, policy, max_steps=1, context_strategy="baseline").run()
 
-            self.assertFalse(stale_path.exists())
+            self.assertEqual(
+                json.loads(stale_path.read_text(encoding="utf-8")),
+                {},
+            )
 
     def test_isolated_harness_does_not_bypass_workspace_policy(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -17,6 +17,23 @@ class ToolDispatcherTests(unittest.TestCase):
         except OSError as exc:
             self.skipTest(f"symlink creation unavailable: {exc}")
 
+    def test_read_file_returns_invalid_encoding_result_for_non_utf8_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "index.html").write_bytes(b"\xff\xfe\x00")
+            policy = WorkspacePolicy(root, {"read_file"}, {"index.html"}, set())
+
+            result = ToolDispatcher(policy).dispatch(
+                Action("1", "read_file", {"path": "index.html"})
+            )
+
+            self.assertFalse(result.ok)
+            self.assertTrue(result.blocked)
+            self.assertEqual(result.rule_family, "invalid_encoding")
+            self.assertEqual(result.data["rule_family"], "invalid_encoding")
+            self.assertEqual(result.data["path"], "index.html")
+            self.assertNotIn("\\xff", result.message)
+
     def test_write_then_read_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

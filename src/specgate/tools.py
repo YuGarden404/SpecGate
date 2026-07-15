@@ -120,6 +120,15 @@ class ToolDispatcher:
                 relative_path,
                 encoding="utf-8",
             )
+        except UnicodeDecodeError:
+            return ToolResult(
+                False,
+                action.action,
+                f"invalid UTF-8 encoding: {relative_path}",
+                {"path": relative_path, "rule_family": "invalid_encoding"},
+                blocked=True,
+                rule_family="invalid_encoding",
+            )
         except workspace_fs.WorkspacePathError as exc:
             if isinstance(exc.__cause__, FileNotFoundError):
                 return ToolResult(False, action.action, f"file not found: {relative_path}")

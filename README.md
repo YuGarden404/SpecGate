@@ -462,6 +462,8 @@ python -m unittest discover -s tests -v
 
 Mock 模式不需要任何凭据。CLI 的 `specgate credentials status/set/clear <provider>` 使用系统 keyring，进程环境变量具有最高优先级；SpecGate 不读写 `.env`，keyring 不可用时失败关闭，也不会回退到明文文件。Web 凭据使用独立主密钥和 AES-256-GCM 加密，响应、异常、Trace 与普通数据库表不得出现凭据明文。
 
+Harness 自有的 Trace、Memory、Report、Context artifact summary 和 Runner evidence 也统一经过 `workspace_fs` 安全文件边界，不跟随符号链接、Windows 目录联接或 reparse point。工具或 Gate 读取到非法 UTF-8 时返回 `invalid_encoding` 结构化失败，不向用户暴露原始字节或 Python traceback。OpenAI-compatible Provider 的 HTTP 错误只保留状态码与标准原因，响应正文不会进入 CLI、Trace 或报告；Web run 只能通过 `WebRuntimeCoordinator` 的固定 worker 和有界队列执行。
+
 运行期间，SpecGate 会对允许写入的文件建立快照。`write_file` / `replace_file` 写入前会检查目标文件是否被外部修改；如果用户在 run 期间改过文件，harness 会阻止覆盖并在 trace 中记录 blocked tool result。
 
 ## 静态 Pages 评审入口

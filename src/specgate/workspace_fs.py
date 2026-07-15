@@ -588,6 +588,33 @@ def write_workspace_text(
     write_workspace_bytes(root, relative, data)
 
 
+def append_workspace_text(
+    root: str | os.PathLike[str],
+    relative: str,
+    content: str,
+    *,
+    encoding: str = "utf-8",
+    errors: str = "strict",
+) -> None:
+    data = content.encode(encoding, errors)
+    try:
+        with open_workspace_file(root, relative, "update", create=True) as handle:
+            handle.seek(0, os.SEEK_END)
+            remaining = memoryview(data)
+            while remaining:
+                written = handle.write(remaining)
+                if written is None or written <= 0 or written > len(remaining):
+                    raise OSError("workspace append made no progress")
+                remaining = remaining[written:]
+    except WorkspacePathError:
+        raise
+    except OSError as exc:
+        raise WorkspacePathError(
+            f"workspace file could not be appended: {relative}",
+            "path_race",
+        ) from exc
+
+
 def write_workspace_bytes(
     root: str | os.PathLike[str],
     relative: str,
