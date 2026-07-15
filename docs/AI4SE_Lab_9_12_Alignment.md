@@ -2,13 +2,13 @@
 
 ## 1. 当前结论
 
-SpecGate 当前已经完成 A 类 Coding Agent Harness 的 MVP，并完成三条工程主线的第一阶段：
+SpecGate 当前已经完成 A 类 Coding Agent Harness 的 MVP，并把三条工程主线深化为可重复验证的 harness 机制：
 
-- 上下文管理：Context Manifest、优先文件选择、运行产物跳过、预算控制。
-- 安全性：WorkspacePolicy、文件 allowlist、凭据 fail-closed、文件快照保护。
-- 工具管理：Tool Registry、工具元数据进入 context pack 和静态报告。
+- 上下文管理：Context Manifest、Select/Compress/Isolate、预算控制和多策略 benchmark。
+- 安全性：WorkspacePolicy、链接/路径边界、HITL revision/CAS、CLI 操作系统 keyring、Web AES-256-GCM 和文件快照保护。
+- 工具与运行治理：Tool Registry、最终 Gate、`WebRuntimeCoordinator` 固定 worker/有界队列，以及 schema v4 `runtime_config_json` 快照。
 
-Lab 9-12 对本项目有参考价值，但不需要全部实现。本阶段选择优先接入 Lab 10 Skill，把 SpecGate 的静态 HTML harness 流程沉淀为可复用技能。
+治理闭环仍是项目的主要贡献；Skill、上下文策略、HITL、Web 运行时和配置快照构成辅助证据。Lab 9-12 不需要全部实现：项目接入 Lab 10 Skill 和 Lab 11 可选 Hook sample，明确不引入 Browser MCP 或 AgentPack 运行时。
 
 ## 2. Lab 9：MCP
 
@@ -99,21 +99,25 @@ SpecGate 当前决策：暂不实现，作为后续轻量草案。
 
 ## 6. Mock LLM 的支撑作用
 
-当前不急于接入真实 LLM。Mock LLM 支撑的是 harness 机制本身：
+当前不要求接入真实 LLM。MockLLM/StubLLM 支撑的是 harness 机制本身：
 
 - Action JSON 协议是否严格；
 - 工具调用是否受 Tool Registry 和 policy 控制；
 - Gate 失败是否能反馈给下一轮；
 - trace、context pack 和 report 是否完整；
 - 安全边界是否可测试、可复现。
+- HITL 是否真正暂停并能幂等恢复；
+- `WebRuntimeCoordinator` 是否执行固定 worker、有界队列、取消、超时和恢复；
+- `runtime_config_json` 是否在首次执行、resume 和重启恢复时保持不变。
 
 真实 LLM 后续可以作为可选 provider，但不应替代 Mock LLM 的默认测试路径。真实 LLM 接入前应先完成 provider 设计，明确凭据管理、非确定性输出和失败重试边界。
 
 ## 7. 阶段判断
 
-本阶段选择：
+最终选择：
 
 - 做 Lab 10 Skill；
+- 保留已安装的 Lab 11 Hook sample，但不把它加入 runtime tool surface；
 - 做 Lab 9-12 对齐说明；
 - 继续保留 Mock LLM 作为默认路径；
 - 暂不扩大到 MCP、AgentPack 和真实 LLM；Hook 只提供可选 sample，不强制安装。

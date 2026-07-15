@@ -224,6 +224,21 @@ Task 7 验证结果：
 - `python -m specgate.cli benchmark examples/eval_cases --strategies baseline rag-select compressed-rag isolated-harness`：`strategies=4, cases=7`
 - `python -m unittest discover -s tests -v`：`Ran 190 tests ... OK`
 
+## 2026-07-15 最终材料审计与证据同步过程
+
+本阶段没有修改运行时行为，而是把 `main@f45e73a` 的当前事实同步到课程交付材料，并用文档契约测试防止最终提交再次退回旧描述。
+
+brainstorming 与人工决策形成四项明确结论：
+
+1. 材料审计发现 `.env fallback`、静态 WebUI-only 和“等待远端回填”等表述已不符合当前 `main`。
+2. 人工选择“权威证据矩阵 + 仓库内原始 Actions 截图”，没有只贴外部链接，也没有全面重写历史材料。
+3. 人工要求 `REFLECTION.md` 保持学生所有；Agent 只新增事实核对清单，不提供可直接替换的反思段落。
+4. 课程/PPT 中“目标定义、测试基础设施、PR 审查、文档同步”和“真实记录失败→修复”的 Harness 观念被落实为本阶段验收规则。
+
+实现采用 Superpowers `executing-plans` 和 TDD：先新增 `tests/test_final_evidence.py`，确认它因缺少矩阵、截图、README 章节及当前安全/运行时描述而 RED，再逐项同步材料至 GREEN。由于本阶段没有生产代码行为变化，测试对象是课程文档与证据之间的确定性契约，而不是新增运行时代码。
+
+远端证据链统一记录于 `docs/FINAL_EVIDENCE_MATRIX.md`：PR #11–#15 对应 Gate/HITL、安全凭据、Pages 热修复、Web Runtime 和 Runtime Config。PR #12 合并后的 Pages 失败与 PR #13 修复均被保留，避免用最终绿色状态覆盖真实工程过程。
+
 在规格确认后，使用 Superpowers `writing-plans` 将大工程拆分为 8 个可执行任务。计划保存到 `docs/superpowers/plans/2026-07-10-context-harness-deepening.md`，并同步在根目录 `PLAN.md` 追加摘要。
 
 计划设计原则：

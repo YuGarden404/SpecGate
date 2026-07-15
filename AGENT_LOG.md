@@ -733,7 +733,7 @@
   - Web 覆盖已有文件默认进入审批；approve/deny 强制携带 `expected_revision`，冲突返回结构化 409，前端刷新后要求重新确认。
   - 新增真实 Web approve/deny→resume 集成测试；扫描全部示例 Checklist，未发现需要迁移的 `unsupported_check` 或 `invalid_checklist_rule`。
 - Subagent：本轮未派发 subagent；当前协作策略未授权自动委派，所有实现与复核由主 Agent 完成。
-- 人工干预：用户要求 Git 指令和 PR 操作由其本人执行；因此本轮没有 commit hash，待用户提交后回填 `PLAN.md`。
+- 人工干预：用户执行 Git/PR；最终功能 commit `e17b8e5`，PR #11，merge `f2b4e88`。
 - 学到的教训：旧测试全部通过并不代表计划已完成；必须把计划中的并发、暂停和恢复不变量逐条映射到代码调用点，才能发现“基础类已实现但 Runner/Web 仍绕过 CAS”的缺口。
 
 ### 最终差异审查与验证
@@ -746,7 +746,7 @@
 - 上述修复均先增加会失败的回归测试，再实现最小修复并确认聚焦测试通过。
 - 最终本地全量回归：`python -m unittest discover -s tests`，结果为 `Ran 731 tests in 117.018s`、`OK (skipped=20)`；跳过项为既有 Windows 符号链接或平台权限场景。
 - 最终语法与差异检查：`python -m compileall -q src tests` 与 `git diff --check` 均通过；Git 仅提示工作区文件未来可能进行 LF/CRLF 转换，没有空白错误。
-- 未执行 `git add`、`git commit`、`git push` 或 PR 操作；GitHub Ubuntu CI 等待用户提交并 push 后运行。
+- Agent 未执行 `git add`、`git commit`、`git push` 或 PR 操作；用户随后提交功能 commit `e17b8e5`，PR #11，merge `f2b4e88`，远端结果已进入最终证据链。
 
 ## 2026-07-14 安全凭据存储
 
@@ -767,7 +767,7 @@
 - 最终审查修正：README 删除旧 `SPECGATE_WEB_SECRET` 启动示例，统一使用独立主密钥；CLI `credentials set --value` 帮助文本增加命令行历史泄漏风险提示，并完成 RED→GREEN 回归。
 - 最终本地全量测试：`python -m unittest discover -s tests`，结果为 `Ran 753 tests in 254.444s`、`OK (skipped=20)`；跳过项为既有 Windows 符号链接或平台权限场景。
 - 最终语法、差异和旧接口扫描均通过；旧 `--env-file` 仅保留在“应被 argparse 拒绝”的回归测试中，`hmac_sha256$legacy` 仅保留在数据库迁移测试中。
-- GitHub Ubuntu CI：等待用户提交并 push 后回填。
+- 远端结果：功能 commit `fecc5e3`，PR #12，merge `80be31b`；unit-test 与 docker-build 通过，Pages 在合并后因缺少项目依赖失败。
 - Agent 未执行任何 Git 写操作；commit、push、PR 和远端 CI 均由用户负责。
 
 ### GitHub Pages 合并后热修复
@@ -777,7 +777,7 @@
 - TDD RED：`tests.test_workflows` 明确失败，提示 Pages workflow 缺少 `python -m pip install -e .`。
 - GREEN：在 `Set up Python` 与 `Regenerate mock demo` 之间增加项目依赖安装步骤，聚焦 workflow 测试通过。
 - 本地全量回归：`python -m unittest discover -s tests`，结果为 `Ran 754 tests in 317.027s`、`OK (skipped=20)`。
-- Git 与远端 Pages 复验仍由用户执行。
+- 用户提交热修复 commit `20c0102`，PR #13，merge `73fbb34`；Pages 恢复通过。失败与修复顺序均保留为交付证据。
 
 ## 2026-07-14 Web 运行时并发与恢复加固
 
@@ -804,7 +804,7 @@
   - 高风险组合测试为 `Ran 247 tests in 74.289s`、`OK (skipped=1)`。
   - 最终全量测试为 `Ran 799 tests in 129.557s`、`OK (skipped=20)`；命令中的非法 `unsafe` profile argparse 输出来自预期拒绝测试，不是失败。
   - `python -m compileall -q src tests` 无输出且退出码为 0；`git diff --check` 退出码为 0，仅显示 Windows 工作区的 LF→CRLF 提示，没有空白错误。
-- 未执行 `git add`、`git commit`、`git push` 或 PR 操作；远端 GitHub Actions 等待用户提交并 push 后验证。
+- 未执行 `git add`、`git commit`、`git push` 或 PR 操作；用户提交功能 commit `e5fc981`，PR #14，merge `49f66a2`，远端 CI 与 Pages 通过。
 
 ## 2026-07-15 Runner 运行配置接线
 
@@ -826,4 +826,18 @@
 - 最终高风险聚焦测试：`Ran 282 tests in 91.153s`、`OK (skipped=1)`。
 - 最终全量测试：`Ran 822 tests in 131.279s`、`OK (skipped=20)`；命令中的非法 `unsafe` profile argparse 输出来自预期拒绝测试，不是失败。
 - `python -m compileall -q src tests` 与 `node --check src/specgate/web_static/app.js` 均无输出且退出码为 0；`git diff --check` 退出码为 0，仅有 Windows LF→CRLF 提示，没有空白错误。
-- 未执行 `git add`、`git commit`、`git push` 或 PR 操作；远端 GitHub Actions 等待用户提交并 push 后运行。
+- 未执行 `git add`、`git commit`、`git push` 或 PR 操作；用户提交功能 commit `a523137`，PR #15，merge `f45e73a`；合并后 main CI #43 与 Pages #26 通过。
+
+## 2026-07-15 最终交付材料与验证证据同步
+
+- 分支：`docs-final-evidence-sync`，基线 `main@f45e73a`。
+- Superpowers：`brainstorming`、`writing-plans`；执行阶段使用 `executing-plans`、`test-driven-development`，完成前使用 `requesting-code-review` 与 `verification-before-completion`。
+- 人工决策：采用“权威证据矩阵 + 仓库内 Actions 截图”；`REFLECTION.md` 不由 Agent 改写，只提供事实核对表；Git/PR 由用户执行。
+- 课程/PPT 对齐：目标定义、测试基础设施、PR/CI、持续文档同步和如实保留失败—修复历史共同构成 Harness 工程证据。
+- 范围：只修改文档、证据截图和文档一致性测试，不修改生产代码行为；所有复现继续使用 MockLLM/StubLLM。
+- RED 基线：功能基线 `Ran 822 tests in 133.849s`、`OK (skipped=20)`；新增文档契约最初因证据矩阵、截图、README 章节及过期描述缺失而按预期失败。
+- 远端链：Gate/HITL `e17b8e5` / PR #11 / `f2b4e88`；安全凭据 `fecc5e3` / PR #12 / `80be31b`；Pages 热修复 `20c0102` / PR #13 / `73fbb34`；Web Runtime `e5fc981` / PR #14 / `49f66a2`；Runtime Config `a523137` / PR #15 / `f45e73a`。
+- 核心机制复现：Guardrail 1 项、Gate 反馈 1 项、HITL 暂停/恢复 2 项、security/multi-strategy benchmark smoke 2 项全部通过。
+- 高风险聚焦套件：`Ran 181 tests in 7.758s`、`OK (skipped=5)`。
+- 最终全量回归：`Ran 829 tests in 133.150s`、`OK (skipped=20)`；非法 `unsafe` profile 的 argparse 输出来自预期拒绝测试。
+- 主线程最终审查发现并修正 1 个 Important 文档问题：Gate/HITL 阶段末尾仍称等待远端 CI，现已回填 `e17b8e5` / PR #11 / `f2b4e88`；其余旧术语扫描命中均为明确的历史或迁移说明。
