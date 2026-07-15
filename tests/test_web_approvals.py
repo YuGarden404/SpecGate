@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from specgate.approvals import ApprovalQueue, PendingApproval
+from specgate.runtime_config import RunRuntimeConfig
 from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
 from specgate.web_projects import create_manual_project, project_paths, web_run_paths
@@ -455,9 +456,8 @@ class WebApprovalsTests(unittest.TestCase):
             data_root=data_root,
         )
 
-        def fake_resume(paths, settings):
-            self.assertEqual(settings["governance_profile"], "review")
-            self.assertEqual(settings["context_strategy"], "injection-safe")
+        def fake_resume(paths, config, **_kwargs):
+            self.assertEqual(config, RunRuntimeConfig())
             queue = ApprovalQueue.read(paths.approval_queue)
             queue.resolve(queue.next_resume_candidate().id, "applied", "2026-07-11T10:02:00Z").write(
                 paths.approval_queue
@@ -480,6 +480,19 @@ class WebApprovalsTests(unittest.TestCase):
             needs_run["id"],
         )
         self.assertEqual(queued_resume["status"], "queued")
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                """
+                update user_settings
+                set governance_profile = 'strict', context_strategy = 'rag-select',
+                    max_steps = 8, context_budget_chars = 20000,
+                    retrieval_top_k = 5, retrieval_budget_chars = 8000,
+                    compression_max_tool_result_chars = 700
+                where user_id = ?
+                """,
+                (alice["id"],),
+            )
+            conn.commit()
 
         with patch("specgate.web_runs._run_resume_agent", side_effect=fake_resume) as runner:
             updated = resume_run_once(db_path, data_root, alice["id"], needs_run["id"])
@@ -546,6 +559,7 @@ class WebApprovalsTests(unittest.TestCase):
             for line in (run_paths.audit / "trace.jsonl").read_text(encoding="utf-8").splitlines()
         ]
         self.assertIn("approval_requested", trace_events)
+        self.assertIn("runtime_config_applied", trace_events)
         self.assertIn("resume_started", trace_events)
         self.assertIn("approval_applied", trace_events)
         self.assertIn("resume_finished", trace_events)

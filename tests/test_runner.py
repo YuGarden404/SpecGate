@@ -6,11 +6,13 @@ from pathlib import Path
 from unittest import mock
 
 from specgate.actions import ActionParseError, parse_action
+from specgate.context_lifecycle import CompressionConfig
 from specgate.gate import GateResult
 from specgate.llm import MockLLM
 from specgate.metrics import RunMetrics
 from specgate.policy import WorkspacePolicy
 from specgate.runner import AgentRunner
+from specgate.retrieval import RetrievalConfig
 from specgate.approvals import ActionRisk, ApprovalQueue, GovernanceConfig, PendingApproval, approval_queue_path
 from specgate.tools import ToolResult
 from specgate.workspace_fs import WorkspacePathError
@@ -2645,6 +2647,102 @@ class RunnerTests(unittest.TestCase):
 
 
 class RunnerContextStrategyTests(unittest.TestCase):
+    def test_runner_passes_explicit_budget_configs_to_context_builder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                "<title>Task</title></head><body>Task</body></html>",
+                encoding="utf-8",
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            retrieval = RetrievalConfig(top_k=2, budget_chars=700)
+            compression = CompressionConfig(max_tool_result_chars=150)
+
+            with mock.patch(
+                "specgate.runner.build_context_pack_with_metadata",
+                wraps=__import__(
+                    "specgate.context",
+                    fromlist=["build_context_pack_with_metadata"],
+                ).build_context_pack_with_metadata,
+            ) as builder:
+                AgentRunner(
+                    root,
+                    RecordingLLM(),
+                    policy,
+                    max_steps=1,
+                    context_strategy="compressed-rag",
+                    context_budget_chars=1400,
+                    retrieval_config=retrieval,
+                    compression_config=compression,
+                ).run()
+
+            self.assertEqual(builder.call_args.kwargs["context_budget_chars"], 1400)
+            self.assertIs(builder.call_args.kwargs["retrieval_config"], retrieval)
+            self.assertIs(builder.call_args.kwargs["compression_config"], compression)
+
+    def test_multi_agent_passes_explicit_budget_configs_to_role_builder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Keep valid HTML.", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                "<title>Task</title></head><body>Task</body></html>",
+                encoding="utf-8",
+            )
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            llm = ContextRecordingMockLLM(
+                [
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "done"}},
+                    {"schema_version": "1", "action": "finish", "args": {"summary": "review"}},
+                ]
+            )
+            retrieval = RetrievalConfig(top_k=2, budget_chars=700)
+            compression = CompressionConfig(max_tool_result_chars=150)
+
+            with mock.patch(
+                "specgate.runner.build_role_context_pack_with_metadata",
+                wraps=__import__(
+                    "specgate.context",
+                    fromlist=["build_role_context_pack_with_metadata"],
+                ).build_role_context_pack_with_metadata,
+            ) as builder:
+                AgentRunner(
+                    root,
+                    llm,
+                    policy,
+                    max_steps=5,
+                    context_strategy="multi-agent-isolated",
+                    context_budget_chars=1400,
+                    retrieval_config=retrieval,
+                    compression_config=compression,
+                ).run()
+
+            self.assertGreaterEqual(builder.call_count, 1)
+            self.assertTrue(
+                all(call.kwargs["context_budget_chars"] == 1400 for call in builder.call_args_list)
+            )
+            self.assertTrue(
+                all(call.kwargs["retrieval_config"] is retrieval for call in builder.call_args_list)
+            )
+            self.assertTrue(
+                all(call.kwargs["compression_config"] is compression for call in builder.call_args_list)
+            )
+
     def test_runner_passes_context_strategy_and_records_context_size(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

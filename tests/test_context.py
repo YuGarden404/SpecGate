@@ -2,12 +2,76 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from specgate.context import build_context_pack
+from specgate.context import (
+    build_context_pack,
+    build_context_pack_with_metadata,
+    build_role_context_pack_with_metadata,
+)
+from specgate.context_lifecycle import CompressionConfig
+from specgate.retrieval import RetrievalConfig
 from specgate.gate import GateCheck, GateIssue, GateResult
 from specgate.trace import TraceStore
 
 
 class ContextTests(unittest.TestCase):
+    def test_context_builders_apply_explicit_budget_retrieval_and_compression_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text(
+                "# Task\nBuild a runtime configuration dashboard.",
+                encoding="utf-8",
+            )
+            (root / "CHECKLIST.md").write_text(
+                "- Include runtime configuration evidence.",
+                encoding="utf-8",
+            )
+            for index in range(4):
+                (root / f"notes-{index}.md").write_text(
+                    ("runtime configuration evidence " * 80) + str(index),
+                    encoding="utf-8",
+                )
+            events = [
+                {
+                    "event_type": "tool_result",
+                    "action": "read_file",
+                    "data": "x" * 500,
+                }
+            ]
+            retrieval = RetrievalConfig(top_k=1, budget_chars=500)
+            compression = CompressionConfig(
+                max_tool_result_chars=100,
+                summary_budget_chars=500,
+            )
+
+            context, metadata = build_context_pack_with_metadata(
+                root,
+                None,
+                runtime_feedback=events,
+                strategy="compressed-rag",
+                context_budget_chars=1000,
+                retrieval_config=retrieval,
+                compression_config=compression,
+            )
+            _role_context, role_metadata = build_role_context_pack_with_metadata(
+                root,
+                "planner",
+                {},
+                None,
+                runtime_feedback=events,
+                context_budget_chars=1000,
+                retrieval_config=retrieval,
+                compression_config=compression,
+            )
+
+        self.assertIn("budget_chars: 1000", context)
+        self.assertIn("## Policy Boundary", context)
+        self.assertIn("## Latest Gate Feedback", context)
+        self.assertEqual(metadata["retrieval"]["budget_chars"], 500)
+        self.assertLessEqual(len(metadata["retrieval"]["selected_chunks"]), 1)
+        self.assertEqual(metadata["compression"]["cleared_tool_results"], 1)
+        self.assertEqual(role_metadata["retrieval"]["budget_chars"], 500)
+        self.assertEqual(role_metadata["compression"]["cleared_tool_results"], 1)
+
     def test_trace_redacts_secret_like_values(self):
         with tempfile.TemporaryDirectory() as tmp:
             trace = TraceStore(Path(tmp) / "trace.jsonl")

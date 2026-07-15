@@ -16,6 +16,19 @@ const state = {
   pollTimer: null,
 };
 
+const RUNTIME_SELECT_FIELDS = [
+  { key: "governance_profile", id: "governance-profile", label: "治理策略", options: ["strict", "demo", "review"] },
+  { key: "context_strategy", id: "context-strategy", label: "上下文策略", options: ["injection-safe", "rag-select", "compressed-rag"] },
+];
+
+const RUNTIME_NUMBER_FIELDS = [
+  { key: "max_steps", id: "max-steps", label: "最大步骤数", min: 1, max: 20 },
+  { key: "context_budget_chars", id: "context-budget-chars", label: "上下文预算（字符）", min: 1000, max: 100000 },
+  { key: "retrieval_top_k", id: "retrieval-top-k", label: "检索 Top-K", min: 1, max: 20 },
+  { key: "retrieval_budget_chars", id: "retrieval-budget-chars", label: "检索预算（字符）", min: 500, max: 50000 },
+  { key: "compression_max_tool_result_chars", id: "compression-max-tool-result-chars", label: "工具结果压缩阈值（字符）", min: 100, max: 10000 },
+];
+
 function byId(id) {
   return document.getElementById(id);
 }
@@ -1154,6 +1167,7 @@ function renderAuditDetail(content) {
     .then((debug) => {
       body.replaceChildren(
         renderAuditOverview(debug),
+        renderRuntimeConfig(debug),
         renderAuditMetrics(debug),
         renderAuditTimeline(debug),
         renderAuditEvidence(debug),
@@ -1189,11 +1203,7 @@ function renderAuditOverview(debug) {
     ["Evidence", evidenceState || "无"],
   ];
   wrapper.append(el("h3", {}, ["运行概览"]));
-  const dl = el("dl", { className: "detail-grid" });
-  for (const [label, value] of rows) {
-    dl.append(el("dt", {}, [label]), el("dd", {}, [value]));
-  }
-  wrapper.append(dl);
+  appendDefinitionRows(wrapper, rows);
 
   const links = el("div", { className: "audit-links" });
   for (const artifact of debug.artifacts || []) {
@@ -1216,7 +1226,48 @@ function renderAuditOverview(debug) {
   return wrapper;
 }
 
+function appendDefinitionRows(section, rows) {
+  const dl = el("dl", { className: "detail-grid" });
+  for (const [label, value] of rows) {
+    dl.append(el("dt", {}, [label]), el("dd", {}, [String(value)]));
+  }
+  section.append(dl);
+  return section;
+}
+
+function renderRuntimeConfig(debug) {
+  const section = el("section", { className: "audit-section" });
+  section.append(el("h3", {}, ["实际运行配置"]));
+  if (debug.runtime_config_error) {
+    section.append(el("p", { className: "message-line error" }, ["运行配置快照无效"]));
+    return section;
+  }
+  const config = debug.runtime_config;
+  if (!config) {
+    section.append(el("p", { className: "muted" }, ["暂无运行配置"]));
+    return section;
+  }
+  return appendDefinitionRows(section, [
+    ["来源", config.source],
+    ["Schema", config.schema_version],
+    ["治理策略", config.governance_profile],
+    ["上下文策略", config.context_strategy],
+    ["最大步骤", config.max_steps],
+    ["上下文预算", config.context_budget_chars],
+    ["检索 Top-K", config.retrieval_top_k],
+    ["检索预算", config.retrieval_budget_chars],
+    ["压缩阈值", config.compression_max_tool_result_chars],
+  ]);
+}
+
 function auditRunStrategy(debug) {
+  if (debug.runtime_config) {
+    return {
+      governanceProfile: debug.runtime_config.governance_profile,
+      contextStrategy: debug.runtime_config.context_strategy,
+      llmMode: "MockLLM",
+    };
+  }
   const events = (debug.trace && debug.trace.events) || [];
   let contextStrategy = "未知";
   let governanceProfile = "未知";
@@ -1355,6 +1406,7 @@ function translateTraceEvent(eventType) {
     permission_decision: "权限判定",
     tool_result: "工具执行",
     gate_result: "Gate 校验",
+    runtime_config_applied: "应用运行配置",
     run_summary: "运行总结",
   };
   return values[eventType] || "其他事件";
@@ -1377,6 +1429,9 @@ function describeTraceEvent(event) {
   }
   if (event.event_type === "gate_result") {
     return `${payload.passed ? "通过" : "未通过"}：${payload.summary || "无摘要"}`;
+  }
+  if (event.event_type === "runtime_config_applied") {
+    return `${payload.phase || "unknown"} 阶段使用不可变运行配置快照。`;
   }
   if (event.event_type === "run_summary") {
     const trust = payload.trust || {};
@@ -1439,17 +1494,40 @@ function renderSettingsDetail(content) {
   if (!settings) {
     card.append(el("p", { className: "muted" }, ["设置尚未加载。"]));
   } else {
-    const dl = el("dl", { className: "detail-grid" });
-    for (const [label, value] of [
-      ["治理策略", settings.governance_profile],
-      ["上下文策略", settings.context_strategy],
+    appendDefinitionRows(card, [
       ["LLM 模式", settings.llm_mode],
       ["API Key", credentialStateLabel(settings)],
       ["存储方式", settings.api_key_storage],
-    ]) {
-      dl.append(el("dt", {}, [label]), el("dd", {}, [value]));
+    ]);
+    const form = el("form", { id: "runtime-settings-form", className: "stack" });
+    for (const field of RUNTIME_SELECT_FIELDS) {
+      const select = el("select", { id: field.id });
+      for (const value of field.options) {
+        const option = el("option", {}, [value]);
+        option.value = value;
+        select.append(option);
+      }
+      select.value = settings[field.key];
+      const label = el("label", {}, [field.label]);
+      label.append(select);
+      form.append(label);
     }
-    card.append(dl);
+    for (const field of RUNTIME_NUMBER_FIELDS) {
+      const input = el("input", { id: field.id, type: "number" });
+      input.min = String(field.min);
+      input.max = String(field.max);
+      input.step = "1";
+      input.value = String(settings[field.key]);
+      const label = el("label", {}, [field.label]);
+      label.append(input);
+      form.append(label);
+    }
+    form.append(
+      el("p", { className: "muted" }, ["设置只影响之后创建的运行；已有运行继续使用创建时配置快照。"]),
+      el("button", { type: "submit" }, ["保存运行配置"]),
+    );
+    form.addEventListener("submit", updateSettings);
+    card.append(form);
   }
   content.append(card);
 }
@@ -1526,31 +1604,33 @@ async function resumeRun(runId = null) {
 async function loadSettings() {
   const payload = await apiJson("/api/settings");
   state.settings = payload.settings;
-  const governanceProfile = byId("governance-profile");
-  const contextStrategy = byId("context-strategy");
-  if (governanceProfile) {
-    governanceProfile.value = state.settings.governance_profile;
-  }
-  if (contextStrategy) {
-    contextStrategy.value = state.settings.context_strategy;
+  for (const field of [...RUNTIME_SELECT_FIELDS, ...RUNTIME_NUMBER_FIELDS]) {
+    const input = byId(field.id);
+    if (input) {
+      input.value = state.settings[field.key];
+    }
   }
   setText("settings-api-state", credentialStateLabel(state.settings));
 }
 
 async function updateSettings(event) {
   event.preventDefault();
-  const governanceProfile = byId("governance-profile");
-  const contextStrategy = byId("context-strategy");
-  if (!governanceProfile || !contextStrategy) {
+  const controls = [...RUNTIME_SELECT_FIELDS, ...RUNTIME_NUMBER_FIELDS].map(
+    (field) => [field, byId(field.id)],
+  );
+  if (controls.some(([_field, input]) => !input)) {
     return;
+  }
+  const body = {};
+  for (const [field, input] of controls) {
+    body[field.key] = RUNTIME_NUMBER_FIELDS.includes(field)
+      ? Number(input.value)
+      : input.value;
   }
   try {
     const payload = await apiJson("/api/settings", {
       method: "PUT",
-      body: {
-        governance_profile: governanceProfile.value,
-        context_strategy: contextStrategy.value,
-      },
+      body,
     });
     state.settings = payload.settings;
     await loadSettings();

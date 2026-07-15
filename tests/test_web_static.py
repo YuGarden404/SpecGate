@@ -271,6 +271,35 @@ class WebStaticTests(unittest.TestCase):
                 self.assertIn(text, app_js)
         self.assertIn("function auditRunStrategy", app_js)
 
+    def test_app_renders_complete_runtime_settings_and_audit_snapshot(self) -> None:
+        app_js = read_static("app.js")
+        expected_number_fields = {
+            "max_steps": (1, 20),
+            "context_budget_chars": (1000, 100000),
+            "retrieval_top_k": (1, 20),
+            "retrieval_budget_chars": (500, 50000),
+            "compression_max_tool_result_chars": (100, 10000),
+        }
+        for field, (minimum, maximum) in expected_number_fields.items():
+            with self.subTest(field=field):
+                self.assertRegex(
+                    app_js,
+                    rf'key: "{field}"[^\n]+min: {minimum}, max: {maximum}',
+                )
+        for snippet in (
+            'id: "governance-profile"',
+            'id: "context-strategy"',
+            'id: "runtime-settings-form"',
+            "设置只影响之后创建的运行；已有运行继续使用创建时配置快照。",
+            "实际运行配置",
+            "runtime_config_error",
+            "runtime_config_applied",
+            "function appendDefinitionRows",
+            "function renderRuntimeConfig",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, app_js)
+
     def test_app_contains_status_run_workspace_helpers(self) -> None:
         app_js = read_static("app.js")
         for function_name in (

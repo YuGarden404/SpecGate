@@ -7,6 +7,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from specgate.runtime_config import RunRuntimeConfig, RuntimeConfigError
 from specgate.trace import redact
 from specgate.web_db import connect_db
 from specgate.web_projects import RunPaths, project_paths, web_run_paths
@@ -84,6 +85,15 @@ def build_run_debug(
             (run_id,),
         ).fetchall()
 
+    try:
+        runtime_config = RunRuntimeConfig.from_json(
+            run["runtime_config_json"]
+        ).to_dict()
+        runtime_config_error = None
+    except RuntimeConfigError:
+        runtime_config = None
+        runtime_config_error = "invalid_runtime_config"
+
     paths = web_run_paths(
         project_paths(data_root, user_id, int(project["id"])),
         run_id,
@@ -105,6 +115,8 @@ def build_run_debug(
         "approvals": approval_payloads,
         "trace": trace,
         "evidence": evidence,
+        "runtime_config": runtime_config,
+        "runtime_config_error": runtime_config_error,
         "summary": {
             "status": run["status"],
             "trust_level": run["trust_level"],

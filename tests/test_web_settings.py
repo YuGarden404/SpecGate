@@ -7,6 +7,7 @@ import unittest
 from specgate.web_auth import create_user
 from specgate.web_credentials import InvalidCredential, WebCredentialService
 from specgate.web_db import connect_db, init_db
+from specgate.runtime_config import RuntimeConfigError
 from specgate.web_settings import (
     clear_api_key,
     get_runtime_settings,
@@ -39,6 +40,11 @@ class WebSettingsTests(unittest.TestCase):
             {
                 "governance_profile": "review",
                 "context_strategy": "injection-safe",
+                "max_steps": 5,
+                "context_budget_chars": 12000,
+                "retrieval_top_k": 6,
+                "retrieval_budget_chars": 9000,
+                "compression_max_tool_result_chars": 1200,
                 "api_key_configured": False,
                 "api_key_storage": "not_stored",
                 "api_key_requires_reentry": False,
@@ -57,6 +63,11 @@ class WebSettingsTests(unittest.TestCase):
             {
                 "governance_profile": "review",
                 "context_strategy": "injection-safe",
+                "max_steps": 5,
+                "context_budget_chars": 12000,
+                "retrieval_top_k": 6,
+                "retrieval_budget_chars": 9000,
+                "compression_max_tool_result_chars": 1200,
             },
         )
 
@@ -69,11 +80,18 @@ class WebSettingsTests(unittest.TestCase):
             user_id,
             governance_profile="strict",
             context_strategy="rag-select",
+            max_steps=8,
+            context_budget_chars=20000,
+            retrieval_top_k=5,
+            retrieval_budget_chars=8000,
+            compression_max_tool_result_chars=700,
             credentials=service,
         )
 
         self.assertEqual(updated["governance_profile"], "strict")
         self.assertEqual(updated["context_strategy"], "rag-select")
+        self.assertEqual(updated["max_steps"], 8)
+        self.assertEqual(updated["context_budget_chars"], 20000)
 
         with self.assertRaises(ValueError):
             update_settings(
@@ -81,6 +99,11 @@ class WebSettingsTests(unittest.TestCase):
                 user_id,
                 governance_profile="unsafe",
                 context_strategy="rag-select",
+                max_steps=8,
+                context_budget_chars=20000,
+                retrieval_top_k=5,
+                retrieval_budget_chars=8000,
+                compression_max_tool_result_chars=700,
                 credentials=service,
             )
         with self.assertRaises(ValueError):
@@ -89,8 +112,35 @@ class WebSettingsTests(unittest.TestCase):
                 user_id,
                 governance_profile="review",
                 context_strategy="unsafe-context",
+                max_steps=8,
+                context_budget_chars=20000,
+                retrieval_top_k=5,
+                retrieval_budget_chars=8000,
+                compression_max_tool_result_chars=700,
                 credentials=service,
             )
+
+    def test_invalid_runtime_setting_does_not_partially_update(self):
+        db_path, user_id = self.make_user()
+        service = WebCredentialService.from_key_value(db_path, TEST_KEY)
+        before = get_runtime_settings(db_path, user_id)
+
+        with self.assertRaises(RuntimeConfigError) as raised:
+            update_settings(
+                db_path,
+                user_id,
+                governance_profile="strict",
+                context_strategy="compressed-rag",
+                max_steps=0,
+                context_budget_chars=20000,
+                retrieval_top_k=5,
+                retrieval_budget_chars=8000,
+                compression_max_tool_result_chars=700,
+                credentials=service,
+            )
+
+        self.assertEqual(raised.exception.field, "max_steps")
+        self.assertEqual(get_runtime_settings(db_path, user_id), before)
 
     def test_settings_exposes_encrypted_credential_status(self):
         db_path, user_id = self.make_user()

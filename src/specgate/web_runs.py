@@ -13,6 +13,7 @@ from typing import Callable
 
 from specgate.approvals import ApprovalQueue, GovernanceConfig
 from specgate.config import ContextConfig, WorkspaceConfig
+from specgate.context_lifecycle import CompressionConfig
 from specgate.llm import MockLLM
 from specgate.policy import WorkspacePolicy
 from specgate.run_storage import (
@@ -29,12 +30,13 @@ from specgate.run_storage import (
     validate_run_storage_ownership,
 )
 from specgate.runner import AgentRunner, RunResult
+from specgate.retrieval import RetrievalConfig
+from specgate.runtime_config import RunRuntimeConfig, RuntimeConfigError
 from specgate.trace import redact
 from specgate.web_auth import utc_now
 from specgate.web_db import connect_db
 from specgate.web_projects import ProjectPaths, RunPaths, project_paths, web_run_paths
 from specgate.web_runtime import RunCancelled, RunTask, RunTimedOut
-from specgate.web_settings import get_runtime_settings
 from specgate.workspace_fs import (
     WorkspaceTreeRenameError,
     open_workspace_file,
@@ -259,13 +261,39 @@ def _reserve_initializing_run(
         quota_guard = run_quarantine_capacity_guard(paths)
         quota_guard.__enter__()
 
+        conn.execute(
+            "insert or ignore into user_settings (user_id) values (?)",
+            (user_id,),
+        )
+        settings = conn.execute(
+            """
+            select governance_profile, context_strategy, max_steps,
+                   context_budget_chars, retrieval_top_k, retrieval_budget_chars,
+                   compression_max_tool_result_chars
+            from user_settings where user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if settings is None:
+            raise ValueError("settings not found")
+        runtime_config = RunRuntimeConfig.from_settings(dict(settings))
+
         now = utc_now().isoformat()
         cursor = conn.execute(
             """
-            insert into runs (project_id, user_id, status, prompt, created_at)
-            values (?, ?, ?, ?, ?)
+            insert into runs (
+                project_id, user_id, status, prompt, created_at, runtime_config_json
+            )
+            values (?, ?, ?, ?, ?, ?)
             """,
-            (project_id, user_id, "initializing", run_prompt, now),
+            (
+                project_id,
+                user_id,
+                "initializing",
+                run_prompt,
+                now,
+                runtime_config.to_json(),
+            ),
         )
         run_id = int(cursor.lastrowid)
         initialization_lock = RunInitializationLock(paths, run_id)
@@ -526,18 +554,18 @@ def execute_run_once(
         project = _load_project(db_path, run["project_id"], run["user_id"])
         project_storage = project_paths(data_root, run["user_id"], project["id"])
         paths = web_run_paths(project_storage, run_id)
+        runtime_config = _parse_run_runtime_config(run)
         if not _mark_running(db_path, run_id, deadline_at=deadline_at):
             return
 
         checker()
         index_before = _index_signature(paths.workspace / "index.html")
-        settings = get_runtime_settings(db_path, int(run["user_id"]))
-        settings = {
-            **settings,
-            "review_existing_writes": review_existing_writes,
-            "_stop_check": checker,
-        }
-        result = _run_mock_agent(paths, settings)
+        result = _run_mock_agent(
+            paths,
+            runtime_config,
+            review_existing_writes=review_existing_writes,
+            stop_check=checker,
+        )
         checker()
         queue = ApprovalQueue.read(paths.approval_queue)
         index_path: Path | None = None
@@ -607,6 +635,16 @@ def execute_run_once(
             _mark_stopped(db_path, run_id, status="timed_out", error_message=str(exc))
             return
         raise
+    except RuntimeConfigError:
+        if run is not None:
+            _mark_failed(
+                db_path,
+                run_id,
+                "invalid_runtime_config",
+                expected_status="queued",
+            )
+            return
+        raise
     except Exception as exc:
         if run is not None:
             if publication_prepared and (
@@ -651,6 +689,18 @@ def resume_run_once(
         if run["status"] == "queued":
             return None
         raise ValueError("no approved or denied approval to resume")
+    try:
+        runtime_config = _parse_run_runtime_config(run)
+    except RuntimeConfigError:
+        if run["status"] == "queued":
+            _mark_failed(
+                db_path,
+                run_id,
+                "invalid_runtime_config",
+                expected_status="queued",
+            )
+            return get_run(db_path, user_id, run_id)
+        raise
 
     running_run: sqlite3.Row | None = None
     publication_prepared = False
@@ -667,13 +717,12 @@ def resume_run_once(
             return None
 
         index_before = _index_signature(paths.workspace / "index.html")
-        settings = get_runtime_settings(db_path, user_id)
-        settings = {
-            **settings,
-            "review_existing_writes": review_existing_writes,
-            "_stop_check": checker,
-        }
-        result = _run_resume_agent(paths, settings)
+        result = _run_resume_agent(
+            paths,
+            runtime_config,
+            review_existing_writes=review_existing_writes,
+            stop_check=checker,
+        )
         checker()
         queue = ApprovalQueue.read(paths.approval_queue)
         index_path: Path | None = None
@@ -854,6 +903,7 @@ def queue_run_resume(
     run = get_run(db_path, user_id, run_id)
     if run["status"] != "needs_approval":
         raise ValueError("run is not waiting for approval")
+    _parse_run_runtime_config(run)
     project = _load_project(db_path, int(run["project_id"]), user_id)
     paths = web_run_paths(
         project_paths(data_root, user_id, int(project["id"])),
@@ -908,10 +958,23 @@ def _require_current_gate_artifact(result: RunResult, paths: RunPaths) -> None:
         raise ValueError("stale_gate_result")
 
 
-def _run_mock_agent(paths: RunPaths, settings: dict) -> RunResult:
+def _parse_run_runtime_config(run: sqlite3.Row) -> RunRuntimeConfig:
+    raw = run["runtime_config_json"]
+    if not isinstance(raw, str):
+        raise RuntimeConfigError("runtime_config_json")
+    return RunRuntimeConfig.from_json(raw)
+
+
+def _run_mock_agent(
+    paths: RunPaths,
+    config: RunRuntimeConfig,
+    *,
+    review_existing_writes: bool = True,
+    stop_check: Callable[[], None] | None = None,
+) -> RunResult:
     governance = GovernanceConfig(
-        profile=settings["governance_profile"],
-        review_existing_writes=settings.get("review_existing_writes", True),
+        profile=config.governance_profile,
+        review_existing_writes=review_existing_writes,
     )
     policy = WorkspacePolicy(
         root=paths.workspace,
@@ -922,7 +985,10 @@ def _run_mock_agent(paths: RunPaths, settings: dict) -> RunResult:
     workspace_config = WorkspaceConfig(
         policy=policy,
         governance=governance,
-        context=ContextConfig(strategy=settings["context_strategy"]),
+        context=ContextConfig(
+            strategy=config.context_strategy,
+            budget_chars=config.context_budget_chars,
+        ),
     )
     llm = MockLLM(
         [
@@ -945,20 +1011,38 @@ def _run_mock_agent(paths: RunPaths, settings: dict) -> RunResult:
         paths.workspace,
         llm,
         workspace_config.policy,
-        max_steps=5,
+        max_steps=config.max_steps,
         context_strategy=workspace_config.context.strategy,
         governance_config=workspace_config.governance,
+        context_budget_chars=config.context_budget_chars,
+        retrieval_config=RetrievalConfig(
+            top_k=config.retrieval_top_k,
+            budget_chars=config.retrieval_budget_chars,
+        ),
+        compression_config=CompressionConfig(
+            max_tool_result_chars=config.compression_max_tool_result_chars,
+        ),
         audit_dir=paths.audit,
         approval_queue_file=paths.approval_queue,
-        stop_check=settings.get("_stop_check"),
+        stop_check=stop_check,
+    )
+    runner.trace.append(
+        "runtime_config_applied",
+        {"phase": "initial", "config": config.to_dict()},
     )
     return runner.run()
 
 
-def _run_resume_agent(paths: RunPaths, settings: dict) -> RunResult:
+def _run_resume_agent(
+    paths: RunPaths,
+    config: RunRuntimeConfig,
+    *,
+    review_existing_writes: bool = True,
+    stop_check: Callable[[], None] | None = None,
+) -> RunResult:
     governance = GovernanceConfig(
-        profile=settings["governance_profile"],
-        review_existing_writes=settings.get("review_existing_writes", True),
+        profile=config.governance_profile,
+        review_existing_writes=review_existing_writes,
     )
     policy = WorkspacePolicy(
         root=paths.workspace,
@@ -969,7 +1053,10 @@ def _run_resume_agent(paths: RunPaths, settings: dict) -> RunResult:
     workspace_config = WorkspaceConfig(
         policy=policy,
         governance=governance,
-        context=ContextConfig(strategy=settings["context_strategy"]),
+        context=ContextConfig(
+            strategy=config.context_strategy,
+            budget_chars=config.context_budget_chars,
+        ),
     )
     llm = MockLLM(
         [
@@ -984,13 +1071,25 @@ def _run_resume_agent(paths: RunPaths, settings: dict) -> RunResult:
         paths.workspace,
         llm,
         workspace_config.policy,
-        max_steps=5,
+        max_steps=config.max_steps,
         context_strategy=workspace_config.context.strategy,
         governance_config=workspace_config.governance,
+        context_budget_chars=config.context_budget_chars,
+        retrieval_config=RetrievalConfig(
+            top_k=config.retrieval_top_k,
+            budget_chars=config.retrieval_budget_chars,
+        ),
+        compression_config=CompressionConfig(
+            max_tool_result_chars=config.compression_max_tool_result_chars,
+        ),
         audit_dir=paths.audit,
         approval_queue_file=paths.approval_queue,
         reset_audit=False,
-        stop_check=settings.get("_stop_check"),
+        stop_check=stop_check,
+    )
+    runner.trace.append(
+        "runtime_config_applied",
+        {"phase": "resume", "config": config.to_dict()},
     )
     return runner.resume_from_approval()
 
@@ -1336,11 +1435,18 @@ def _read_publication_zip_index(path: Path) -> bytes:
         raise ValueError("publication zip is invalid") from exc
 
 
-def _mark_failed(db_path: Path, run_id: int, error_message: str) -> None:
+def _mark_failed(
+    db_path: Path,
+    run_id: int,
+    error_message: str,
+    *,
+    expected_status: str | None = None,
+) -> bool:
     now = utc_now().isoformat()
     conn = connect_db(db_path)
     try:
-        conn.execute(
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
             """
             update runs
             set status = ?,
@@ -1349,20 +1455,33 @@ def _mark_failed(db_path: Path, run_id: int, error_message: str) -> None:
                 zip_artifact_path = null,
                 error_message = ?,
                 finished_at = ?
-            where id = ?
+            where id = ? and (? is null or status = ?)
             """,
-            ("failed", "failed", error_message, now, run_id),
+            (
+                "failed",
+                "failed",
+                error_message,
+                now,
+                run_id,
+                expected_status,
+                expected_status,
+            ),
         )
-        conn.execute("delete from artifacts where run_id = ?", (run_id,))
-        conn.execute(
-            """
-            update projects
-            set last_run_status = ?, updated_at = ?
-            where id = (select project_id from runs where id = ?)
-            """,
-            ("failed", now, run_id),
-        )
+        if cursor.rowcount == 1:
+            conn.execute("delete from artifacts where run_id = ?", (run_id,))
+            conn.execute(
+                """
+                update projects
+                set last_run_status = ?, updated_at = ?
+                where id = (select project_id from runs where id = ?)
+                """,
+                ("failed", now, run_id),
+            )
         conn.commit()
+        return cursor.rowcount == 1
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

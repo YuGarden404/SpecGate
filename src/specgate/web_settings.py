@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from specgate.approvals import VALID_GOVERNANCE_PROFILES
-from specgate.config import VALID_CONTEXT_STRATEGIES
+from specgate.runtime_config import RunRuntimeConfig
 from specgate.web_credentials import WebCredentialService
 from specgate.web_db import connect_db
 
@@ -22,7 +21,9 @@ def get_runtime_settings(db_path: Path, user_id: int) -> dict:
         conn.commit()
         row = conn.execute(
             """
-            select governance_profile, context_strategy
+            select governance_profile, context_strategy, max_steps,
+                   context_budget_chars, retrieval_top_k, retrieval_budget_chars,
+                   compression_max_tool_result_chars
             from user_settings where user_id = ?
             """,
             (user_id,),
@@ -32,6 +33,13 @@ def get_runtime_settings(db_path: Path, user_id: int) -> dict:
         return {
             "governance_profile": row["governance_profile"],
             "context_strategy": row["context_strategy"],
+            "max_steps": row["max_steps"],
+            "context_budget_chars": row["context_budget_chars"],
+            "retrieval_top_k": row["retrieval_top_k"],
+            "retrieval_budget_chars": row["retrieval_budget_chars"],
+            "compression_max_tool_result_chars": row[
+                "compression_max_tool_result_chars"
+            ],
         }
     finally:
         conn.close()
@@ -78,22 +86,45 @@ def update_settings(
     user_id: int,
     governance_profile: str,
     context_strategy: str,
+    max_steps: int,
+    context_budget_chars: int,
+    retrieval_top_k: int,
+    retrieval_budget_chars: int,
+    compression_max_tool_result_chars: int,
     credentials: WebCredentialService,
 ) -> dict:
-    if governance_profile not in VALID_GOVERNANCE_PROFILES:
-        raise ValueError("invalid governance profile")
-    if context_strategy not in VALID_CONTEXT_STRATEGIES:
-        raise ValueError("invalid context strategy")
+    config = RunRuntimeConfig.from_settings(
+        {
+            "governance_profile": governance_profile,
+            "context_strategy": context_strategy,
+            "max_steps": max_steps,
+            "context_budget_chars": context_budget_chars,
+            "retrieval_top_k": retrieval_top_k,
+            "retrieval_budget_chars": retrieval_budget_chars,
+            "compression_max_tool_result_chars": compression_max_tool_result_chars,
+        }
+    )
     conn = connect_db(db_path)
     try:
         _ensure_settings(conn, user_id)
         conn.execute(
             """
             update user_settings
-            set governance_profile = ?, context_strategy = ?
+            set governance_profile = ?, context_strategy = ?,
+                max_steps = ?, context_budget_chars = ?, retrieval_top_k = ?,
+                retrieval_budget_chars = ?, compression_max_tool_result_chars = ?
             where user_id = ?
             """,
-            (governance_profile, context_strategy, user_id),
+            (
+                config.governance_profile,
+                config.context_strategy,
+                config.max_steps,
+                config.context_budget_chars,
+                config.retrieval_top_k,
+                config.retrieval_budget_chars,
+                config.compression_max_tool_result_chars,
+                user_id,
+            ),
         )
         conn.commit()
     finally:
