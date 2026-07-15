@@ -21,32 +21,16 @@ A 类项目关注的是 agent 工程机制，而不是具体业务页面。SpecG
 ## 3. 一次运行的数据流
 
 ```text
-TASK_SPEC.md + CHECKLIST.md + index.html
-        |
-        v
-Context Selector 选择上下文并生成 Context Manifest
-        |
-        v
-MockLLM 输出严格 JSON action
-        |
-        v
-Action Parser 校验 JSON 协议
-        |
-        v
-Tool Registry + WorkspacePolicy + Snapshot 检查
-        |
-        v
-ToolDispatcher 读写 allowlist 内文件
-        |
-        v
-HTML Gate 检查产物
-        |
-        v
-失败摘要回灌下一轮，或通过后 finish
-        |
-        v
-Trace JSONL + 静态 Web 报告
+Settings transaction → runtime_config_json snapshot
+→ Context Select/Compress/Isolate
+→ MockLLM → Action Parser
+→ WorkspacePolicy / ApprovalQueue revision-CAS
+→ Tool Dispatcher
+→ final Gate + artifact SHA-256
+→ Trace / Debug / Audit / artifacts
 ```
+
+Gate 失败会作为结构化 observation 回灌下一轮；需人工确认的写入先进入 HITL 队列，批准后仍须经过同一 WorkspacePolicy、快照保护和最终 Gate。
 
 ## 4. 主要模块
 
@@ -60,6 +44,10 @@ Trace JSONL + 静态 Web 报告
 | 工具执行 | `src/specgate/tools.py` | 执行 read/write/replace/list/finish。 |
 | 安全策略 | `src/specgate/policy.py`、`src/specgate/snapshot.py` | 限制路径、动作和外部修改覆盖。 |
 | Gate | `src/specgate/gate.py` | 检查静态 HTML 和 checklist。 |
+| HITL | `src/specgate/approvals.py`、`src/specgate/web_approvals.py` | revision/CAS、批准/拒绝和幂等 resume。 |
+| Web 运行时 | `src/specgate/web_runtime.py`、`src/specgate/web_runs.py` | 固定 worker、有界队列、取消、超时和重启恢复。 |
+| 运行配置 | `src/specgate/runtime_config.py`、`src/specgate/web_db.py` | 保存 schema v4 `runtime_config_json` 不可变快照。 |
+| 凭据治理 | `src/specgate/credentials.py`、`src/specgate/web_credentials.py` | OS keyring 与 Web AES-256-GCM，不回显明文。 |
 | Runner | `src/specgate/runner.py` | 串联 agent loop。 |
 | Trace | `src/specgate/trace.py` | 记录 JSONL 事件并脱敏。 |
 | Report | `src/specgate/report.py` | 生成静态 HTML 报告。 |
@@ -75,7 +63,7 @@ SpecGate 不把整个仓库塞给 LLM，而是扫描任务目录，优先选择 
 
 ### 安全性
 
-SpecGate 使用 `WorkspacePolicy` 阻止路径越界和 allowlist 外写入，使用 `FileSnapshot` 防止运行期间覆盖用户或外部进程刚改过的文件。凭据接口默认 fail-closed，Mock 模式不需要 key。
+SpecGate 使用 `WorkspacePolicy` 阻止路径越界、链接逃逸和 allowlist 外写入，使用 `FileSnapshot` 防止运行期间覆盖用户或外部进程刚改过的文件。CLI 凭据持久化进入操作系统 keyring，Web 凭据使用 AES-256-GCM；Mock 模式不需要 key。
 
 价值：危险动作不是靠 prompt 约束，而是在代码层被拦截。
 
@@ -112,13 +100,18 @@ python -m specgate.cli run-mock-demo examples/knowledge_nav
 
 5. 打开 `examples/knowledge_nav/index.html`，展示最终 HTML 页面。
 6. 打开 `examples/knowledge_nav/reports/latest/index.html`，展示 trace、actions、Gate、tools 和 final artifact。
-7. 运行：
+7. 运行三类核心机制测试：
 
 ```powershell
-python -m unittest discover -s tests -v
+$env:PYTHONPATH="src"
+python -m unittest tests.test_runner.RunnerTests.test_guardrail_block_is_recorded
+python -m unittest tests.test_runner.RunnerTests.test_gate_failure_feedback_changes_next_action
+python -m unittest tests.test_runner.RunnerTests.test_review_action_pauses_before_next_llm_call tests.test_runner.RunnerTests.test_resume_from_approved_approval_applies_payload_once_and_continues
+python -m unittest tests.test_cli.CliTests.test_repository_security_benchmark_smoke tests.test_cli.CliTests.test_repository_multi_strategy_benchmark_smoke
 ```
 
-8. 打开 `docs/AI4SE_Lab_9_12_Alignment.md`，说明 Lab 10 Skill 已接入，Lab 9/11/12 的取舍合理。
+8. 打开 `docs/FINAL_EVIDENCE_MATRIX.md`，核对实现、测试、PR、CI/Pages 和截图证据。
+9. 打开 `docs/AI4SE_Lab_9_12_Alignment.md`，说明 Lab 10 Skill 与 Lab 11 Hook sample 已接入，Lab 9/12 的取舍合理。
 
 ## 8. 公开展示地址
 
@@ -130,7 +123,6 @@ python -m unittest discover -s tests -v
 
 当前最终提交不需要继续扩张核心功能。合理后续方向是：
 
-- Lab 11 `hooks/pre-commit.sample`：做密钥和必要文件检查。
 - 真实 LLM provider 设计：只做可选 provider，不替代 Mock 默认路径。
 - AgentPack 草案：把权限和 max steps 写成可部署元数据。
 

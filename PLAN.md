@@ -2097,7 +2097,7 @@ SPEC 覆盖：
 - [x] Task 6：Web 默认覆盖审批与发布摘要绑定。
 - [x] Task 7：Web 审批 API、数据库协调与前端 revision。
 - [x] Task 8：真实 approve/deny Web 流程、示例扫描、中文文档与回归。
-- [ ] Git 提交哈希：等待用户按课程要求自行分批提交后回填。
+- [x] Git/PR/合并证据：功能 commit `e17b8e5`，PR [#11](https://github.com/YuGarden404/SpecGate/pull/11)，merge `f2b4e88`。
 
 本轮 Agent 不执行 `git add`、`git commit`、`git push` 或 PR 操作。所有新增行为均使用 mock/stub LLM 或纯确定性组件测试，不依赖真实 LLM 与网络。
 
@@ -2120,11 +2120,7 @@ SPEC 覆盖：
 - [x] Task 7：secret sentinel 回归和中文使用/部署文档。
 - [x] Task 8：全量验证与最终交付审查；本地 753 个测试通过，20 个既有平台权限场景跳过。
 
-待用户提交后回填：
-
-- Git commit：待填写。
-- PR URL：待填写。
-- GitHub Ubuntu CI：待填写。
+远端证据：功能 commit `fecc5e3`，PR [#12](https://github.com/YuGarden404/SpecGate/pull/12)，merge `80be31b`。合并后 unit-test 与 docker-build 通过，但 Pages 因依赖缺失失败；后续由独立热修复闭环处理。
 
 本轮仍以 MockLLM 和确定性单元测试作为验收主链路。Agent 不执行 `git add`、`git commit`、`git push` 或 PR 操作。
 
@@ -2133,7 +2129,7 @@ SPEC 覆盖：
 - 根因：Pages workflow 在全新 Ubuntu runner 中未安装 `pyproject.toml` 声明的依赖，导入 CLI 时缺少 `keyring`；同一提交的 unit-test 与 docker-build 均已通过。
 - 修复：在生成 mock demo 前执行 `python -m pip install -e .`，与 CI、Docker 安装方式保持一致。
 - 回归：新增 workflow 顺序测试，防止以后再次先运行 CLI、后安装依赖。
-- 远端验证：等待热修复合并到 `main` 后回填 Pages 结果。
+- 远端验证：热修复 commit `20c0102`，PR [#13](https://github.com/YuGarden404/SpecGate/pull/13)，merge `73fbb34`；合并后 Pages 恢复通过。
 
 # 2026-07-14 Web 运行时并发与恢复加固
 
@@ -2159,11 +2155,7 @@ SPEC 覆盖：
 
 验证结果：高风险组合 `Ran 247 tests ... OK (skipped=1)`；全量 `Ran 799 tests ... OK (skipped=20)`；`python -m compileall -q src tests` 与 `git diff --check` 均通过。所有运行与验收继续使用 MockLLM，不需要真实 LLM 或网络。
 
-待用户提交后回填：
-
-- Git commit：待填写。
-- PR URL：待填写。
-- GitHub Ubuntu CI：待填写。
+远端证据：功能 commit `e5fc981`，PR [#14](https://github.com/YuGarden404/SpecGate/pull/14)，merge `49f66a2`；CI 与 Pages 通过。
 
 Agent 未执行 `git add`、`git commit`、`git push` 或 PR 操作。
 
@@ -2190,3 +2182,18 @@ Agent 未执行 `git add`、`git commit`、`git push` 或 PR 操作。
 验证结果：高风险聚焦套件 `Ran 282 tests ... OK (skipped=1)`；主线程审查修复后 Web 恢复组合 `Ran 144 tests ... OK (skipped=1)`；最终全量 `Ran 822 tests ... OK (skipped=20)`。`python -m compileall -q src tests`、`node --check src/specgate/web_static/app.js` 和 `git diff --check` 均通过。
 
 本阶段继续只使用 `MockLLM` 和确定性单元测试，不访问真实 LLM 或网络。Git 暂存、提交、推送和 PR 仍由用户执行。
+
+远端证据：功能 commit `a523137`，PR [#15](https://github.com/YuGarden404/SpecGate/pull/15)，merge `f45e73a`；合并后 main CI #43 与 Pages #26 通过。
+
+# 2026-07-15 最终交付材料与验证证据同步
+
+- 分支：`docs-final-evidence-sync`，基线 `main@f45e73a`。
+- 权威入口：`docs/FINAL_EVIDENCE_MATRIX.md`，统一映射课程要求、实现、确定性测试、PR/commit、CI/Pages 与截图。
+- 事实同步：修正 `.env fallback`、旧 HMAC、静态 WebUI-only 和等待远端回填等过期描述；补齐 README 安装、目录结构和最终评审入口。
+- 学生边界：`REFLECTION.md` 正文不由 Agent 修改，只新增 `docs/REFLECTION_FACT_CHECK.md` 供学生本人核对。
+- 失败历史：PR #12 合并后的 Pages 失败与 PR #13 修复均如实保留，不把历史改写为“一直全绿”。
+- 本阶段不修改生产代码；自动验收继续只使用 MockLLM/StubLLM。
+- 机制复现：Guardrail 1 项、Gate 反馈 1 项、HITL 暂停/恢复 2 项、benchmark smoke 2 项全部通过；聚焦套件 `Ran 181 tests in 7.758s`、`OK (skipped=5)`。
+- 最终全量：`Ran 829 tests in 133.150s`、`OK (skipped=20)`。
+
+原始 MVP 与各阶段计划中的历史未完成复选框保留为过程记录。最终完成事实以较新的阶段完成摘要、Git/PR 链和 `docs/FINAL_EVIDENCE_MATRIX.md` 为准，不反向改写早期计划原文。
