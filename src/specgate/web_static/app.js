@@ -1467,14 +1467,16 @@ function renderApprovalsDetail(content) {
     if (approval.preview_json) {
       item.append(el("pre", { className: "source-view" }, [approval.preview_json]));
     }
+    const runIsWaitingForApproval = approval.run_status === "needs_approval";
     const actions = el("div", { className: "approval-actions" });
     const approve = el("button", { type: "button" }, ["通过"]);
-    approve.disabled = approval.status !== "pending";
+    approve.disabled = approval.status !== "pending" || !runIsWaitingForApproval;
     approve.addEventListener("click", () => approveApproval(approval));
     const deny = el("button", { type: "button", className: "secondary" }, ["拒绝"]);
-    deny.disabled = approval.status !== "pending";
+    deny.disabled = approval.status !== "pending" || !runIsWaitingForApproval;
     deny.addEventListener("click", () => denyApproval(approval));
     const resume = el("button", { type: "button", className: "secondary" }, ["恢复运行"]);
+    resume.disabled = !runIsWaitingForApproval;
     resume.addEventListener("click", () => resumeRun(approval.run_id));
     actions.append(approve, deny, resume);
     item.append(actions);

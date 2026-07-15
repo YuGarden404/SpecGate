@@ -593,18 +593,17 @@ def execute_run_once(
             and produced_index
             and not _gate_artifact_is_current(result, paths)
         )
-        if produced_index and not stale_gate_result:
-            index_path, zip_path = _publish_artifacts(
-                paths,
-                _gate_artifact_sha256(result),
-            )
-            checker()
-
         status = (
             "failed"
             if stale_gate_result
             else _status_for_result(result, queue, produced_index=produced_index)
         )
+        if status == "completed":
+            index_path, zip_path = _publish_artifacts(
+                paths,
+                _gate_artifact_sha256(result),
+            )
+            checker()
         error_message = (
             "stale_gate_result"
             if stale_gate_result
@@ -783,18 +782,17 @@ def resume_run_once(
             and produced_index
             and not gate_artifact_is_current
         )
-        if produced_index and not stale_gate_result:
-            index_path, zip_path = _publish_artifacts(
-                paths,
-                _gate_artifact_sha256(result),
-            )
-            checker()
-
         status = (
             "failed"
             if stale_gate_result
             else _status_for_result(result, queue, produced_index=produced_index)
         )
+        if status == "completed":
+            index_path, zip_path = _publish_artifacts(
+                paths,
+                _gate_artifact_sha256(result),
+            )
+            checker()
         error_message = (
             "stale_gate_result"
             if stale_gate_result
@@ -1132,8 +1130,10 @@ def _run_resume_agent(
             }
         ]
     factory = llm_factory or WebLLMFactory.mock_only(mock_factory=MockLLM)
+    resolved_llm_config = llm_config or LLMRunConfig.mock()
+    factory.preflight_resume(resolved_llm_config, user_id)
     llm = factory.build(
-        llm_config or LLMRunConfig.mock(),
+        resolved_llm_config,
         user_id,
         mock_responses=responses,
         stop_check=stop_check or (lambda: None),

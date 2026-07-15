@@ -225,6 +225,7 @@ class WebAppTests(unittest.TestCase):
         approvals = client.get("/api/approvals").json()["approvals"]
         self.assertEqual(len(approvals), 1)
         self.assertEqual(approvals[0]["queue_revision"], 1)
+        self.assertEqual(approvals[0]["run_status"], "needs_approval")
 
         response = client.post(
             f"/api/approvals/{approvals[0]['id']}/approve",
@@ -1126,6 +1127,36 @@ class WebAppTests(unittest.TestCase):
         )
 
         for response in responses:
+            self.assertEqual(response.status_code, 404, response.text)
+            self.assertEqual(response.json(), {"detail": "artifact not found"})
+
+    def test_failed_run_never_exposes_stale_artifacts(self):
+        client, app = self.make_client()
+        self.register(client)
+        project = self.create_project(client, index_html=None)
+        run = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build the result"},
+        ).json()["run"]
+        execute_run_once(app.state.db_path, app.state.data_root, run["id"])
+        with closing(connect_db(app.state.db_path)) as conn:
+            conn.execute(
+                "update runs set status = 'failed', trust_level = 'failed' where id = ?",
+                (run["id"],),
+            )
+            conn.commit()
+
+        fetched = client.get(f"/api/runs/{run['id']}")
+        index = client.get(f"/api/runs/{run['id']}/artifacts/index")
+        result_zip = client.get(f"/api/runs/{run['id']}/artifacts/zip")
+
+        self.assertEqual(fetched.status_code, 200, fetched.text)
+        payload = fetched.json()["run"]
+        self.assertFalse(payload["has_index_artifact"])
+        self.assertFalse(payload["has_zip_artifact"])
+        self.assertNotIn("index_artifact_url", payload)
+        self.assertNotIn("zip_artifact_url", payload)
+        for response in (index, result_zip):
             self.assertEqual(response.status_code, 404, response.text)
             self.assertEqual(response.json(), {"detail": "artifact not found"})
 

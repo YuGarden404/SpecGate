@@ -22,6 +22,7 @@ from specgate.run_storage import (
 )
 from specgate.runtime_config import RunRuntimeConfig, RuntimeConfigError
 from specgate.web_auth import create_user
+from specgate.web_approvals import approve_web_approval
 from specgate.web_db import connect_db, init_db
 from specgate.web_credentials import WebCredentialService
 from specgate.web_llm import WebLLMFactory
@@ -1582,6 +1583,241 @@ class WebRunsTests(unittest.TestCase):
             ],
         )
 
+    def test_resume_preflight_fails_before_approved_action_when_credential_was_cleared(self):
+        db_path, data_root, user, _first_project = self.make_context()
+        original_html = (
+            '<!doctype html><html><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>Old</title></head><body><main><h1>Old</h1></main></body></html>'
+        )
+        project = create_manual_project(
+            db_path,
+            data_root,
+            user["id"],
+            name="Credential Revocation Site",
+            spec_text="# Spec\nReplace the existing page.",
+            checklist_text=(
+                '- [ ] Page contains the published title\n'
+                '  <!-- specgate: text "SpecGate Result" -->'
+            ),
+            index_html=original_html,
+        )
+        credentials = WebCredentialService.from_key_value(
+            db_path,
+            WEB_CREDENTIAL_KEY,
+        )
+        credentials.put(user["id"], "SENTINEL-provider-key")
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                """
+                update user_settings
+                set llm_base_url = 'https://api.example.test/v1',
+                    llm_model = 'test-model'
+                where user_id = ?
+                """,
+                (user["id"],),
+            )
+            conn.commit()
+        transport = ScriptedChatTransport(
+            [
+                {
+                    "schema_version": "1",
+                    "action": "replace_file",
+                    "args": {
+                        "path": "index.html",
+                        "content": web_runs._default_result_html(),
+                    },
+                },
+                {
+                    "schema_version": "1",
+                    "action": "finish",
+                    "args": {"summary": "done"},
+                },
+            ]
+        )
+        factory = WebLLMFactory(
+            db_path,
+            credentials,
+            load_llm_network_config(
+                {"SPECGATE_LLM_ALLOWED_HOSTS": "api.example.test"}
+            ),
+            transport_factory=lambda max_attempts: transport,
+        )
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Replace the result",
+            data_root=data_root,
+            llm_config_resolver=factory.freeze_config,
+        )
+        execute_run_once(
+            db_path,
+            data_root,
+            run["id"],
+            llm_factory=factory,
+            remaining_seconds=lambda: 30.0,
+        )
+        pending = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(pending["status"], "needs_approval")
+        paths = web_run_paths(
+            project_paths(data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        original_index = (paths.workspace / "index.html").read_bytes()
+        queue = ApprovalQueue.read(paths.approval_queue)
+        with closing(connect_db(db_path)) as conn:
+            web_approval = conn.execute(
+                "select id from approvals where run_id = ?",
+                (run["id"],),
+            ).fetchone()
+        approved = approve_web_approval(
+            db_path,
+            data_root,
+            user["id"],
+            web_approval["id"],
+            expected_revision=queue.revision,
+        )
+        approved_revision = approved["queue_revision"]
+        frozen = LLMRunConfig.from_json(run["llm_config_json"])
+        credentials.clear(user["id"])
+
+        updated = resume_run_once(
+            db_path,
+            data_root,
+            user["id"],
+            run["id"],
+            llm_factory=factory,
+            remaining_seconds=lambda: 30.0,
+        )
+
+        self.assertEqual(updated["status"], "failed")
+        self.assertEqual(updated["error_message"], "credential_missing")
+        self.assertEqual((paths.workspace / "index.html").read_bytes(), original_index)
+        queue_after = ApprovalQueue.read(paths.approval_queue)
+        self.assertEqual(queue_after.revision, approved_revision)
+        self.assertEqual(queue_after.approvals[0].status, "approved")
+        self.assertEqual(len(transport.contexts), 1)
+        self.assertIsNone(updated["index_artifact_path"])
+        self.assertIsNone(updated["zip_artifact_path"])
+        self.assertFalse(paths.index_artifact.exists())
+        self.assertFalse(paths.zip_artifact.exists())
+        trace_text = (paths.audit / "trace.jsonl").read_text(encoding="utf-8")
+        self.assertNotIn("approval_claimed", trace_text)
+        self.assertNotIn("approval_applied", trace_text)
+        self.assertNotIn("SENTINEL-provider-key", trace_text)
+        self.assertNotIn(frozen.credential_fingerprint, trace_text)
+        with closing(connect_db(db_path)) as conn:
+            artifact_count = conn.execute(
+                "select count(*) from artifacts where run_id = ?",
+                (run["id"],),
+            ).fetchone()[0]
+            stored_approval = conn.execute(
+                "select status from approvals where run_id = ?",
+                (run["id"],),
+            ).fetchone()
+        self.assertEqual(artifact_count, 0)
+        self.assertEqual(stored_approval["status"], "approved")
+
+    def test_resume_gate_failure_does_not_publish_artifacts(self):
+        db_path, data_root, user, _project = self.make_context()
+        project = create_manual_project(
+            db_path,
+            data_root,
+            user["id"],
+            name="Subjective approval",
+            spec_text="# Subjective design\nReplace the existing page.",
+            checklist_text=(
+                "- [ ] The page feels premium and technological.\n"
+                "- [ ] The information hierarchy has a natural rhythm."
+            ),
+            index_html=(
+                "<!doctype html><html lang=\"en\"><head>"
+                "<meta charset=\"utf-8\"><title>Old</title>"
+                "</head><body><main><h1>Old</h1></main></body></html>"
+            ),
+        )
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                "update user_settings set max_steps = 2 where user_id = ?",
+                (user["id"],),
+            )
+            conn.commit()
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Replace the result",
+            data_root=data_root,
+        )
+
+        class ApprovalThenFinishLLM:
+            calls = 0
+
+            def __init__(self, responses):
+                del responses
+
+            def complete(self, context):
+                del context
+                type(self).calls += 1
+                if type(self).calls == 1:
+                    return json.dumps(
+                        {
+                            "schema_version": "1",
+                            "action": "replace_file",
+                            "args": {
+                                "path": "index.html",
+                                "content": (
+                                    "<!doctype html><html lang=\"en\"><head>"
+                                    "<meta charset=\"utf-8\"><title>New</title>"
+                                    "</head><body><main><h1>New</h1></main></body></html>"
+                                ),
+                            },
+                        }
+                    )
+                return json.dumps(
+                    {
+                        "schema_version": "1",
+                        "action": "finish",
+                        "args": {"summary": "done"},
+                    }
+                )
+
+        with patch("specgate.web_runs.MockLLM", ApprovalThenFinishLLM):
+            execute_run_once(db_path, data_root, run["id"])
+        pending = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(pending["status"], "needs_approval")
+        run_paths = web_run_paths(
+            project_paths(data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        queue = ApprovalQueue.read(run_paths.approval_queue)
+        queue.approve(
+            queue.approvals[0].id,
+            "2026-07-15T00:00:00+00:00",
+        ).write(run_paths.approval_queue)
+
+        with patch("specgate.web_runs.MockLLM", ApprovalThenFinishLLM):
+            updated = resume_run_once(
+                db_path,
+                data_root,
+                user["id"],
+                run["id"],
+            )
+
+        self.assertEqual(updated["status"], "failed")
+        self.assertEqual(updated["error_message"], "Gate did not pass")
+        self.assertIsNone(updated["index_artifact_path"])
+        self.assertIsNone(updated["zip_artifact_path"])
+        self.assertFalse(run_paths.index_artifact.exists())
+        self.assertFalse(run_paths.zip_artifact.exists())
+        with closing(connect_db(db_path)) as conn:
+            artifact_count = conn.execute(
+                "select count(*) from artifacts where run_id = ?",
+                (run["id"],),
+            ).fetchone()[0]
+        self.assertEqual(artifact_count, 0)
+
     def test_execute_run_records_deadline_and_timeout_terminal_state(self):
         db_path, data_root, user, project = self.make_context()
         run = create_run(
@@ -1949,6 +2185,87 @@ class WebRunsTests(unittest.TestCase):
         self.assertEqual(updated["error_message"], "Run did not produce index.html")
         self.assertIsNone(updated["index_artifact_path"])
         self.assertFalse(run_paths.index_artifact.exists())
+
+    def test_execute_run_once_gate_failure_does_not_publish_artifacts(self):
+        db_path, data_root, user, _project = self.make_context()
+        project = create_manual_project(
+            db_path,
+            data_root,
+            user["id"],
+            name="Subjective checklist",
+            spec_text="# Subjective design\nBuild an offline product page.",
+            checklist_text=(
+                "- [ ] The page feels premium and technological.\n"
+                "- [ ] The information hierarchy has a natural rhythm."
+            ),
+            index_html=None,
+        )
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                "update user_settings set max_steps = 2 where user_id = ?",
+                (user["id"],),
+            )
+            conn.commit()
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build the result",
+            data_root=data_root,
+        )
+
+        class SubjectiveChecklistLLM:
+            def __init__(self, responses):
+                del responses
+                self.calls = 0
+
+            def complete(self, context):
+                del context
+                self.calls += 1
+                if self.calls == 1:
+                    return json.dumps(
+                        {
+                            "schema_version": "1",
+                            "action": "write_file",
+                            "args": {
+                                "path": "index.html",
+                                "content": (
+                                    "<!doctype html><html lang=\"en\"><head>"
+                                    "<meta charset=\"utf-8\"><title>Result</title>"
+                                    "</head><body><main><h1>Result</h1></main></body></html>"
+                                ),
+                            },
+                        }
+                    )
+                return json.dumps(
+                    {
+                        "schema_version": "1",
+                        "action": "finish",
+                        "args": {"summary": "done"},
+                    }
+                )
+
+        with patch("specgate.web_runs.MockLLM", SubjectiveChecklistLLM):
+            execute_run_once(db_path, data_root, run["id"])
+
+        updated = get_run(db_path, user["id"], run["id"])
+        run_paths = web_run_paths(
+            project_paths(data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        self.assertEqual(updated["status"], "failed")
+        self.assertEqual(updated["error_message"], "Gate did not pass")
+        self.assertTrue((run_paths.workspace / "index.html").is_file())
+        self.assertIsNone(updated["index_artifact_path"])
+        self.assertIsNone(updated["zip_artifact_path"])
+        self.assertFalse(run_paths.index_artifact.exists())
+        self.assertFalse(run_paths.zip_artifact.exists())
+        with closing(connect_db(db_path)) as conn:
+            artifact_count = conn.execute(
+                "select count(*) from artifacts where run_id = ?",
+                (run["id"],),
+            ).fetchone()[0]
+        self.assertEqual(artifact_count, 0)
 
     def test_execute_run_once_does_not_publish_stale_index_from_previous_state(self):
         db_path, data_root, user, project = self.make_context()

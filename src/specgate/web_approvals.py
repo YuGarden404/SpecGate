@@ -22,7 +22,7 @@ def list_web_approvals(
     try:
         rows = conn.execute(
             """
-            select approvals.*
+            select approvals.*, runs.status as run_status
             from approvals
             join runs on runs.id = approvals.run_id
             where runs.user_id = ?
@@ -92,6 +92,8 @@ def _decide_web_approval(
     conn = connect_db(db_path)
     try:
         row = _load_web_approval(conn, user_id, web_approval_id)
+        if row["run_status"] != "needs_approval":
+            raise ValueError("run is not waiting for approval")
         if row["status"] != "pending":
             raise ValueError("approval is not pending")
 
@@ -133,7 +135,11 @@ def _decide_web_approval(
             "select * from approvals where id = ?",
             (web_approval_id,),
         ).fetchone()
-        return {**dict(updated), "queue_revision": updated_queue.revision}
+        return {
+            **dict(updated),
+            "run_status": row["run_status"],
+            "queue_revision": updated_queue.revision,
+        }
     finally:
         conn.close()
 
@@ -145,7 +151,7 @@ def _load_web_approval(
 ) -> sqlite3.Row:
     row = conn.execute(
         """
-        select approvals.*
+        select approvals.*, runs.status as run_status
         from approvals
         join runs on runs.id = approvals.run_id
         join projects on projects.id = runs.project_id

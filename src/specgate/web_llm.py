@@ -31,6 +31,24 @@ class WebLLMError(RuntimeError):
         super().__init__(code)
 
 
+def _get_matching_api_key(
+    credentials: WebCredentialService,
+    user_id: int,
+    fingerprint: str,
+) -> str:
+    try:
+        return credentials.get_matching(user_id, fingerprint)
+    except WebCredentialError as exc:
+        code = exc.code
+        if code in {
+            "credential_store_unavailable",
+            "invalid_credential_key",
+            "credential_decryption_failed",
+        }:
+            code = "credential_unavailable"
+        raise WebLLMError(code) from exc
+
+
 def validate_llm_model(raw: object) -> str:
     if not isinstance(raw, str):
         raise WebLLMError("llm_configuration_required")
@@ -115,17 +133,11 @@ class CredentialBoundLLM:
         model = self.config.model
         if fingerprint is None or model is None:
             raise WebLLMError("invalid_llm_config")
-        try:
-            api_key = self.credentials.get_matching(self.user_id, fingerprint)
-        except WebCredentialError as exc:
-            code = exc.code
-            if code in {
-                "credential_store_unavailable",
-                "invalid_credential_key",
-                "credential_decryption_failed",
-            }:
-                code = "credential_unavailable"
-            raise WebLLMError(code) from exc
+        api_key = _get_matching_api_key(
+            self.credentials,
+            self.user_id,
+            fingerprint,
+        )
         try:
             client = OpenAICompatibleLLM(
                 self.endpoint.base_url,
@@ -213,6 +225,17 @@ class WebLLMFactory:
             model,
             snapshot.fingerprint,
         )
+
+    def preflight_resume(self, config: LLMRunConfig, user_id: int) -> None:
+        if config.mode == "mock":
+            return
+        if self.credentials is None:
+            raise WebLLMError("llm_configuration_required")
+        fingerprint = config.credential_fingerprint
+        if fingerprint is None:
+            raise WebLLMError("invalid_llm_config")
+        api_key = _get_matching_api_key(self.credentials, user_id, fingerprint)
+        del api_key
 
     def build(
         self,
