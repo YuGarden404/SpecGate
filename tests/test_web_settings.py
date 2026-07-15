@@ -8,6 +8,7 @@ from specgate.web_auth import create_user
 from specgate.web_credentials import InvalidCredential, WebCredentialService
 from specgate.web_db import connect_db, init_db
 from specgate.runtime_config import RuntimeConfigError
+from specgate.llm_transport import LLMEndpointPolicy
 from specgate.web_settings import (
     clear_api_key,
     get_runtime_settings,
@@ -50,6 +51,9 @@ class WebSettingsTests(unittest.TestCase):
                 "api_key_requires_reentry": False,
                 "credential_store_available": True,
                 "llm_mode": "mock",
+                "llm_base_url": None,
+                "llm_model": None,
+                "llm_configuration_complete": True,
             },
         )
 
@@ -86,12 +90,17 @@ class WebSettingsTests(unittest.TestCase):
             retrieval_budget_chars=8000,
             compression_max_tool_result_chars=700,
             credentials=service,
+            llm_base_url="https://api.example.test/v1/",
+            llm_model=" test-model ",
+            endpoint_policy=LLMEndpointPolicy.from_csv("api.example.test"),
         )
 
         self.assertEqual(updated["governance_profile"], "strict")
         self.assertEqual(updated["context_strategy"], "rag-select")
         self.assertEqual(updated["max_steps"], 8)
         self.assertEqual(updated["context_budget_chars"], 20000)
+        self.assertEqual(updated["llm_base_url"], "https://api.example.test/v1")
+        self.assertEqual(updated["llm_model"], "test-model")
 
         with self.assertRaises(ValueError):
             update_settings(
@@ -157,7 +166,8 @@ class WebSettingsTests(unittest.TestCase):
         self.assertEqual(settings["api_key_storage"], "encrypted")
         self.assertFalse(settings["api_key_requires_reentry"])
         self.assertTrue(settings["credential_store_available"])
-        self.assertEqual(settings["llm_mode"], "mock")
+        self.assertEqual(settings["llm_mode"], "configuration_required")
+        self.assertFalse(settings["llm_configuration_complete"])
         self.assertNotIn("secret-value", repr(settings))
 
         cleared = clear_api_key(db_path, user_id, service)
@@ -184,6 +194,31 @@ class WebSettingsTests(unittest.TestCase):
         self.assertFalse(settings["api_key_configured"])
         self.assertEqual(settings["api_key_storage"], "requires_reentry")
         self.assertTrue(settings["api_key_requires_reentry"])
+        self.assertEqual(settings["llm_mode"], "configuration_required")
+
+    def test_invalid_llm_setting_does_not_partially_update_runtime_fields(self):
+        db_path, user_id = self.make_user()
+        service = WebCredentialService.from_key_value(db_path, TEST_KEY)
+        before = get_runtime_settings(db_path, user_id)
+
+        with self.assertRaises(ValueError):
+            update_settings(
+                db_path,
+                user_id,
+                governance_profile="strict",
+                context_strategy="compressed-rag",
+                max_steps=8,
+                context_budget_chars=20000,
+                retrieval_top_k=5,
+                retrieval_budget_chars=8000,
+                compression_max_tool_result_chars=700,
+                credentials=service,
+                llm_base_url="https://not-allowed.example/v1",
+                llm_model="test-model",
+                endpoint_policy=LLMEndpointPolicy.from_csv("api.example.test"),
+            )
+
+        self.assertEqual(get_runtime_settings(db_path, user_id), before)
 
     def test_upsert_api_key_rejects_empty_key(self):
         db_path, user_id = self.make_user()

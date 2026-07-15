@@ -259,3 +259,18 @@ brainstorming 与人工决策形成四项明确结论：
 - 单元测试：`python -m unittest discover -s tests -v`
 - Harness benchmark：`python -m specgate.cli benchmark examples/eval_cases --strategies baseline rag-select compressed-rag isolated-harness`
 - Git 状态：确认只剩 `.env`、`eval-runs/`、缓存等 ignored 本地文件。
+
+## 2026-07-15 Web 真实 LLM 接入决策记录
+
+本轮 brainstorming 保持课程项目的 Harness 主线不变：默认路径和自动验收继续使用 MockLLM/Fake/Stub；真实模型只替换 Action 决策源，不实现 WorkspacePolicy、HITL、Gate 或发布机制。用户确认 API key、Base URL、Model 完整后才让新 run 使用 OpenAI-compatible Chat Completions，任何配置、凭据或 Provider 失败都 fail closed，不降级到 Mock。
+
+关键选择如下：
+
+- 新建 `index.html` 可直接写入，覆盖已有文件继续进入 HITL；审批恢复仍使用 run 冻结的模型配置。
+- `runtime_config_json` 与 `llm_config_json` 在创建 run 的同一事务中冻结；后续 Settings 变化不影响旧 run。
+- 凭据只在调用前按 fingerprint 重新核对并临时解密；重存、更新、清除或主密钥变化让旧真实 run 失败关闭。
+- Base URL 只允许精确白名单中的公网 HTTPS 主机；DNS 全结果校验后固定 IP，保留原始 SNI/Host，禁止重定向和系统代理。
+- DNS worker/待处理容量、请求次数、deadline、响应体与连接测试并发全部有界。
+- 自动测试不得访问真实 DNS、socket 或 Provider；使用 Fake Resolver、Fake Transport 和脚本化 Action 验证安全与恢复语义。
+
+设计和实施计划分别记录于 `docs/superpowers/specs/2026-07-15-real-llm-web-integration-design.md` 与 `docs/superpowers/plans/2026-07-15-real-llm-web-integration.md`。用户选择 Superpowers Inline Execution，因此按任务顺序在当前功能分支执行，不派发 subagent；Git 暂存、提交、推送和 PR 继续由用户完成。

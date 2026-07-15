@@ -2208,3 +2208,16 @@ Agent 未执行 `git add`、`git commit`、`git push` 或 PR 操作。
 - [x] Task 6：同步设计、实施计划、README、部署与最终证据材料。
 
 TDD 定向安全回归：`Ran 422 tests in 153.419s`、`OK (skipped=17)`。第一次全量回归在 `845` 项中发现 1 个 Web debug 空 evidence 兼容性问题；根因是安全重置的 `{}` 被当成真实 evidence，修复为 API 边界规范化 `null` 后，`tests.test_web_debug` 共 20 项通过。主线程审查再补 1 项远端 reason 哨兵测试，最终全量回归为 `Ran 846 tests in 216.617s`、`OK (skipped=27)`。课程自动验收仍使用 MockLLM/StubLLM，不访问真实 LLM 或网络；真实 LLM Web 接入留给下一独立分支。
+
+# 2026-07-15 Web 真实 LLM 接入
+
+- [x] Task 1–2：严格 `LLMRunConfig`、凭据 fingerprint、schema v5 与历史 Mock 快照迁移。
+- [x] Task 3–5：精确 URL 白名单、公网 DNS、固定 IP TLS、禁止重定向、有界重试/响应与 Chat Completions 解析。
+- [x] Task 6–9：`WebLLMFactory`、模式冻结、凭据复核、连接测试、创建/执行/审批恢复 API 接线。
+- [x] Task 10：设置页模型服务表单、模式提示、连接测试和 run 冻结模式展示。
+- [x] Task 11：canary 脱敏、无真实网络、取消/重试/恢复组合及 DNS 待处理容量加固。
+- [x] Task 12：课程材料、部署说明、证据矩阵与事实契约同步完成。
+
+执行方式：Superpowers Inline Execution；所有生产行为先有失败测试，Git 写操作由用户执行。Task 10 静态前端测试 `Ran 33 tests ... OK`，Node 语法检查退出码 0；Task 11 高风险组合 `Ran 318 tests in 115.002s`、`OK (skipped=3)`，自动测试没有访问真实 Provider。
+
+最终全量回归：`Ran 896 tests in 216.620s`、`OK (skipped=27)`。`python -m compileall -q src tests`、`node --check src/specgate/web_static/app.js`、材料/工作流契约 9 项和 `git diff --check` 均以退出码 0 完成；空白检查只有 Git 在 Windows 工作副本的 LF→CRLF 提示，没有 whitespace error。

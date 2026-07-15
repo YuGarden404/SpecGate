@@ -20,7 +20,7 @@ MVP 范围：
 - 不开放 shell。
 - 不做 Playwright。
 - 不做复杂前端。
-- 不默认接入真实 LLM。
+- 不把真实 LLM 设为默认或自动验收前提；完整配置后才作为可选决策源。
 - 不使用现成 agent framework 作为 harness core。
 
 ## 2. 课程交付物对照
@@ -35,6 +35,7 @@ MVP 范围：
 | 源代码 | 已完成 | `src/specgate/` |
 | 单元测试 | 已完成 | `tests/` |
 | Mock LLM 测试路径 | 已完成 | `src/specgate/llm.py`、`tests/test_runner.py`、`tests/test_cli.py` |
+| 可选真实模型路径 | 已完成 | `src/specgate/llm_config.py`、`src/specgate/llm_transport.py`、`src/specgate/web_llm.py` |
 | GitLab CI 文件 | 已完成 | `.gitlab-ci.yml` 包含 `unit-test` job |
 | GitHub Actions | 已完成 | `.github/workflows/ci.yml`、`.github/workflows/pages.yml` |
 | 最终证据矩阵 | 已完成 | `docs/FINAL_EVIDENCE_MATRIX.md` |
@@ -56,7 +57,8 @@ MVP 范围：
 | Gate 闭环 | `src/specgate/gate.py`、`src/specgate/runner.py` | Gate 失败摘要回灌给下一轮，驱动 MockLLM 生成修复动作。 |
 | HITL 正确性 | `src/specgate/approvals.py`、`src/specgate/web_approvals.py` | revision/CAS、`applying` claim、resume 幂等和最终 Gate。 |
 | Web 运行时 | `src/specgate/web_runtime.py`、`src/specgate/web_runs.py` | `WebRuntimeCoordinator` 固定 worker、有界队列、取消、超时与重启恢复。 |
-| 运行配置 | `src/specgate/runtime_config.py`、`src/specgate/web_db.py` | schema v4 `runtime_config_json` 不可变配置快照。 |
+| 运行配置 | `src/specgate/runtime_config.py`、`src/specgate/llm_config.py`、`src/specgate/web_db.py` | schema v5 `runtime_config_json` / `llm_config_json` 不可变配置快照。 |
+| 真实模型边界 | `src/specgate/llm_transport.py`、`src/specgate/web_llm.py` | 默认 Mock；完整配置后使用真实模型；精确主机白名单、公网固定 IP TLS、失败不降级。 |
 | trace 与报告 | `src/specgate/trace.py`、`src/specgate/report.py` | 记录运行事件并生成静态报告。 |
 | 凭据边界 | `src/specgate/credentials.py`、`src/specgate/web_credentials.py` | CLI 使用环境变量只读优先和 OS keyring 持久化；Web 使用独立主密钥与 AES-256-GCM；旧 HMAC 迁移为 `requires_reentry`。 |
 | 提交前防线示例 | `hooks/pre-commit.sample` | 可选 Hook sample，用于疑似密钥扫描、必要文件检查和测试提示。 |
@@ -132,4 +134,4 @@ docker run --rm specgate:local
 - 有上下文、安全、工具三条工程主线。
 - 有 Lab 10 Skill 与 Lab 9-12 取舍说明。
 
-后续可选增强只保留真实 LLM Web 接入和 AgentPack 草案；Lab 11 Hook sample 已实现并通过测试，`REFLECTION.md` 已由学生本人确认。
+后续可选增强是更多 Provider 的人工兼容性验证和 AgentPack 草案；真实 LLM Web 接入已经完成，但课程自动验收仍使用 Mock/Fake/Stub，`REFLECTION.md` 继续由学生本人维护。

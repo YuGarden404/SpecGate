@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Respon
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from starlette.concurrency import run_in_threadpool
 
 from specgate.web_approvals import approve_web_approval, deny_web_approval, list_web_approvals
@@ -33,6 +33,15 @@ from specgate.web_projects import (
     web_run_paths,
 )
 from specgate.runtime_config import RuntimeConfigError
+from specgate.llm_config import LLMConfigError, LLMRunConfig
+from specgate.llm import LLMProviderError
+from specgate.llm_transport import LLMNetworkConfig, load_llm_network_config
+from specgate.web_llm import (
+    LLMConnectionTestLimiter,
+    LLMConnectionTestService,
+    WebLLMError,
+    WebLLMFactory,
+)
 from specgate.web_runs import (
     ActiveRunConflict,
     RunCancellationConflict,
@@ -101,10 +110,16 @@ class SettingsRequest(BaseModel):
     retrieval_top_k: StrictInt = Field(ge=1, le=20)
     retrieval_budget_chars: StrictInt = Field(ge=500, le=50000)
     compression_max_tool_result_chars: StrictInt = Field(ge=100, le=10000)
+    llm_base_url: str | None = None
+    llm_model: str | None = None
 
 
 class ApiKeyRequest(BaseModel):
     api_key: str
+
+
+class LLMConnectionTestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -121,6 +136,8 @@ def create_app(
     secure_cookies: bool | None = None,
     credential_key: str | None = None,
     runtime_config: WebRuntimeConfig | None = None,
+    llm_network_config: LLMNetworkConfig | None = None,
+    llm_transport_factory=None,
 ) -> FastAPI:
     resolved_data_root = Path(
         data_root
@@ -144,6 +161,26 @@ def create_app(
         else secure_cookies
     )
     resolved_runtime_config = runtime_config or load_web_runtime_config()
+    resolved_llm_network_config = llm_network_config or load_llm_network_config()
+    raw_credential_key = (
+        credential_key
+        if credential_key is not None
+        else os.environ.get("SPECGATE_WEB_CREDENTIAL_KEY")
+    )
+    web_credentials = WebCredentialService.from_key_value(
+        resolved_db_path,
+        raw_credential_key,
+    )
+    web_llm_factory = WebLLMFactory(
+        resolved_db_path,
+        web_credentials,
+        resolved_llm_network_config,
+        transport_factory=llm_transport_factory,
+    )
+    llm_connection_tests = LLMConnectionTestService(
+        web_llm_factory,
+        LLMConnectionTestLimiter(),
+    )
 
     def execute_runtime_task(task: RunTask, control: RunControl) -> None:
         if task.resume:
@@ -154,6 +191,8 @@ def create_app(
                 task.run_id,
                 stop_check=control.check,
                 deadline_at=control.deadline_at,
+                llm_factory=web_llm_factory,
+                remaining_seconds=control.remaining_seconds,
             )
         else:
             execute_run_once(
@@ -162,6 +201,8 @@ def create_app(
                 task.run_id,
                 stop_check=control.check,
                 deadline_at=control.deadline_at,
+                llm_factory=web_llm_factory,
+                remaining_seconds=control.remaining_seconds,
             )
 
     runtime = WebRuntimeCoordinator(resolved_runtime_config, execute_runtime_task)
@@ -185,6 +226,7 @@ def create_app(
         for run_id in snapshot.running_run_ids:
             request_running_cancel_for_shutdown(app.state.db_path, run_id)
         app.state.runtime.join(RUN_THREAD_SHUTDOWN_TIMEOUT_SECONDS)
+        app.state.web_llm_factory.shutdown()
 
     app = FastAPI(title="SpecGate Web", lifespan=lifespan)
 
@@ -217,15 +259,10 @@ def create_app(
     app.state.db_path = resolved_db_path
     app.state.runtime_config = resolved_runtime_config
     app.state.runtime = runtime
-    raw_credential_key = (
-        credential_key
-        if credential_key is not None
-        else os.environ.get("SPECGATE_WEB_CREDENTIAL_KEY")
-    )
-    app.state.web_credentials = WebCredentialService.from_key_value(
-        resolved_db_path,
-        raw_credential_key,
-    )
+    app.state.llm_network_config = resolved_llm_network_config
+    app.state.web_credentials = web_credentials
+    app.state.web_llm_factory = web_llm_factory
+    app.state.llm_connection_tests = llm_connection_tests
     @app.post("/api/auth/register")
     def register(payload: AuthRequest, response: Response) -> dict[str, Any]:
         try:
@@ -422,6 +459,7 @@ def create_app(
                     app.state.runtime_config.max_active_runs_per_user
                 ),
                 on_reserved_run=reservation.bind,
+                llm_config_resolver=app.state.web_llm_factory.freeze_config,
             )
             app.state.runtime.submit(
                 reservation,
@@ -433,6 +471,9 @@ def create_app(
                 status_code=429,
                 detail={"code": exc.code, "scope": exc.scope, "message": str(exc)},
             ) from exc
+        except WebLLMError as exc:
+            reservation.release()
+            raise _http_error_for_llm_error(exc) from exc
         except sqlite3.OperationalError as exc:
             reservation.release()
             if _is_sqlite_lock_error(exc):
@@ -606,6 +647,7 @@ def create_app(
                 app.state.db_path,
                 int(user["id"]),
                 app.state.web_credentials,
+                app.state.llm_network_config.endpoint_policy,
             )
         }
 
@@ -623,6 +665,9 @@ def create_app(
                 payload.retrieval_budget_chars,
                 payload.compression_max_tool_result_chars,
                 app.state.web_credentials,
+                llm_base_url=payload.llm_base_url,
+                llm_model=payload.llm_model,
+                endpoint_policy=app.state.llm_network_config.endpoint_policy,
             )
         except RuntimeConfigError as exc:
             raise HTTPException(
@@ -645,6 +690,7 @@ def create_app(
                 int(user["id"]),
                 payload.api_key,
                 app.state.web_credentials,
+                app.state.llm_network_config.endpoint_policy,
             )
         except WebCredentialError as exc:
             raise _http_error_for_credential_error(exc) from exc
@@ -657,10 +703,22 @@ def create_app(
                 app.state.db_path,
                 int(user["id"]),
                 app.state.web_credentials,
+                app.state.llm_network_config.endpoint_policy,
             )
         except WebCredentialError as exc:
             raise _http_error_for_credential_error(exc) from exc
         return {"settings": settings}
+
+    @app.post("/api/settings/llm/test")
+    def test_llm_connection(
+        payload: LLMConnectionTestRequest = LLMConnectionTestRequest(),
+        user=Depends(current_user),
+    ) -> dict[str, Any]:
+        del payload
+        try:
+            return app.state.llm_connection_tests.test(int(user["id"]))
+        except (WebLLMError, LLMProviderError) as exc:
+            raise _http_error_for_llm_error(exc) from exc
 
     static_dir = Path(__file__).with_name("web_static")
     if static_dir.is_dir():
@@ -777,6 +835,42 @@ def _http_error_for_credential_error(
     )
 
 
+def _http_error_for_llm_error(exc) -> HTTPException:
+    code = getattr(exc, "code", "llm_provider_unavailable")
+    if code in {
+        "llm_configuration_required",
+        "credential_missing",
+        "credential_changed",
+        "credential_requires_reentry",
+        "credential_unavailable",
+    }:
+        status_code = 409
+    elif code in {"llm_url_invalid", "llm_host_not_allowed"}:
+        status_code = 400
+    elif code == "llm_test_rate_limited":
+        status_code = 429
+    elif code == "llm_request_timeout":
+        status_code = 504
+    else:
+        status_code = 502
+    messages = {
+        "llm_configuration_required": "模型配置未完成 / LLM configuration is incomplete",
+        "llm_test_rate_limited": "连接测试过于频繁 / Connection tests are rate limited",
+        "llm_authentication_failed": "模型服务认证失败 / LLM authentication failed",
+        "llm_request_timeout": "模型服务请求超时 / LLM request timed out",
+    }
+    return HTTPException(
+        status_code=status_code,
+        detail={
+            "code": code,
+            "message": messages.get(
+                code,
+                "模型服务不可用 / LLM provider is unavailable",
+            ),
+        },
+    )
+
+
 def _row_dict(row) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
 
@@ -820,6 +914,14 @@ def _run_dict(row) -> dict[str, Any]:
         "has_index_artifact": bool(data["index_artifact_path"]),
         "has_zip_artifact": bool(data["zip_artifact_path"]),
     }
+    try:
+        llm_config = LLMRunConfig.from_json(data["llm_config_json"])
+    except (LLMConfigError, KeyError):
+        run["llm_mode"] = "invalid"
+        run["llm_model"] = None
+    else:
+        run["llm_mode"] = llm_config.mode
+        run["llm_model"] = llm_config.model
     if data["index_artifact_path"]:
         run["index_artifact_url"] = f"/api/runs/{data['id']}/artifacts/index"
     if data["zip_artifact_path"]:

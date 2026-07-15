@@ -9,6 +9,7 @@ from importlib import import_module
 from pathlib import Path
 from unittest.mock import patch
 
+from specgate.llm_config import LLMRunConfig
 from specgate.runtime_config import RunRuntimeConfig, RuntimeConfigError
 from specgate.web_db import connect_db, init_db
 
@@ -102,6 +103,49 @@ class WebDbTests(unittest.TestCase):
             )
         return db_path
 
+    def create_version_four_database(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        db_path = Path(tmp.name) / "web.sqlite3"
+        runtime_config = RunRuntimeConfig().to_json().replace("'", "''")
+        with closing(sqlite3.connect(db_path)) as conn:
+            conn.executescript(
+                f"""
+                create table users (
+                    id integer primary key,
+                    username text not null,
+                    password_hash text not null
+                );
+                create table user_settings (
+                    user_id integer primary key,
+                    governance_profile text not null default 'review',
+                    context_strategy text not null default 'injection-safe',
+                    api_key_configured integer not null default 0,
+                    api_key_ciphertext text,
+                    max_steps integer not null default 5,
+                    context_budget_chars integer not null default 12000,
+                    retrieval_top_k integer not null default 6,
+                    retrieval_budget_chars integer not null default 9000,
+                    compression_max_tool_result_chars integer not null default 1200
+                );
+                create table runs (
+                    id integer primary key,
+                    project_id integer not null,
+                    user_id integer not null,
+                    status text not null,
+                    prompt text not null,
+                    runtime_config_json text
+                );
+                insert into users values (1, 'alice', 'hash');
+                insert into user_settings (user_id) values (1);
+                insert into runs values (
+                    7, 3, 1, 'completed', 'legacy', '{runtime_config}'
+                );
+                pragma user_version = 4;
+                """
+            )
+        return db_path
+
     def test_init_db_creates_runtime_tables(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "web.sqlite3"
@@ -128,9 +172,9 @@ class WebDbTests(unittest.TestCase):
                     "artifacts",
                 },
             )
-            self.assertEqual(user_version, 4)
+            self.assertEqual(user_version, 5)
 
-    def test_new_database_uses_schema_version_four_and_credentials_table(self):
+    def test_new_database_uses_schema_version_five_and_credentials_table(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "web.sqlite3"
 
@@ -140,7 +184,7 @@ class WebDbTests(unittest.TestCase):
                 version = conn.execute("pragma user_version").fetchone()[0]
                 columns = self.table_columns(conn, "user_credentials")
 
-            self.assertEqual(version, 4)
+            self.assertEqual(version, 5)
             self.assertGreaterEqual(
                 set(columns),
                 {
@@ -155,14 +199,14 @@ class WebDbTests(unittest.TestCase):
                 },
             )
 
-    def test_new_database_uses_schema_version_four_and_runtime_columns(self):
+    def test_new_database_uses_schema_version_five_and_runtime_columns(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "web.sqlite3"
 
             init_db(db_path)
 
             with closing(connect_db(db_path)) as conn:
-                self.assertEqual(conn.execute("pragma user_version").fetchone()[0], 4)
+                self.assertEqual(conn.execute("pragma user_version").fetchone()[0], 5)
                 columns = {
                     row["name"]
                     for row in conn.execute("pragma table_info(runs)").fetchall()
@@ -170,6 +214,7 @@ class WebDbTests(unittest.TestCase):
             self.assertIn("cancel_requested_at", columns)
             self.assertIn("deadline_at", columns)
             self.assertIn("runtime_config_json", columns)
+            self.assertIn("llm_config_json", columns)
 
     def test_new_database_has_complete_runtime_settings_columns(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -190,8 +235,24 @@ class WebDbTests(unittest.TestCase):
                     "retrieval_top_k",
                     "retrieval_budget_chars",
                     "compression_max_tool_result_chars",
+                    "llm_base_url",
+                    "llm_model",
                 },
             )
+
+    def test_version_four_backfills_historical_runs_as_mock(self):
+        db_path = self.create_version_four_database()
+
+        init_db(db_path)
+
+        with closing(connect_db(db_path)) as conn:
+            version = conn.execute("pragma user_version").fetchone()[0]
+            row = conn.execute("select * from runs where id = 7").fetchone()
+        config = LLMRunConfig.from_json(row["llm_config_json"])
+        self.assertEqual(version, 5)
+        self.assertEqual(config.mode, "mock")
+        self.assertEqual(config.source, "migration-v5")
+        self.assertEqual(row["prompt"], "legacy")
 
     def test_connect_db_enables_runtime_concurrency_pragmas(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -241,7 +302,7 @@ class WebDbTests(unittest.TestCase):
 
             with closing(connect_db(db_path)) as conn:
                 row = conn.execute("select * from runs where id = 7").fetchone()
-                self.assertEqual(conn.execute("pragma user_version").fetchone()[0], 4)
+                self.assertEqual(conn.execute("pragma user_version").fetchone()[0], 5)
             self.assertEqual(row["prompt"], "legacy")
             self.assertIsNone(row["cancel_requested_at"])
             self.assertIsNone(row["deadline_at"])
@@ -275,7 +336,7 @@ class WebDbTests(unittest.TestCase):
             ).fetchone()
             version = conn.execute("pragma user_version").fetchone()[0]
         config = RunRuntimeConfig.from_json(row["runtime_config_json"])
-        self.assertEqual(version, 4)
+        self.assertEqual(version, 5)
         self.assertEqual(config.source, "migration")
         self.assertEqual(config.governance_profile, "strict")
         self.assertEqual(config.context_strategy, "compressed-rag")
@@ -363,7 +424,7 @@ class WebDbTests(unittest.TestCase):
             ).fetchone()
             version = conn.execute("pragma user_version").fetchone()[0]
 
-        self.assertEqual(version, 4)
+        self.assertEqual(version, 5)
         self.assertEqual(credential[2], "requires_reentry")
         self.assertIsNone(credential[3])
         self.assertEqual(legacy, (0, None))
@@ -388,7 +449,7 @@ class WebDbTests(unittest.TestCase):
             count = conn.execute(
                 "select count(*) from user_credentials"
             ).fetchone()[0]
-        self.assertEqual(version, 4)
+        self.assertEqual(version, 5)
         self.assertEqual(count, 1)
 
     def test_version_one_migration_rolls_back_on_schema_error(self):

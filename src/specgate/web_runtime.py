@@ -95,6 +95,9 @@ class RunControl:
         if self.monotonic_clock() >= self.deadline_monotonic:
             raise RunTimedOut("运行已超时")
 
+    def remaining_seconds(self) -> float:
+        return max(0.0, self.deadline_monotonic - self.monotonic_clock())
+
 
 @dataclass(frozen=True)
 class RuntimeShutdownSnapshot:

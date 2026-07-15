@@ -76,6 +76,19 @@ class WebRuntimeConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "max_active_runs_per_user"):
             WebRuntimeConfig(1, 1, 3, 60)
 
+    def test_run_control_reports_non_negative_remaining_seconds(self):
+        now = [10.0]
+        control = RunControl(
+            threading.Event(),
+            "deadline",
+            15.0,
+            lambda: now[0],
+        )
+
+        self.assertEqual(control.remaining_seconds(), 5.0)
+        now[0] = 16.0
+        self.assertEqual(control.remaining_seconds(), 0.0)
+
 
 class WebRuntimeCoordinatorTests(unittest.TestCase):
     def make_blocked_runtime(self, release, *, workers, queue_capacity):

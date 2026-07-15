@@ -195,6 +195,27 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("安全存储不可用", app_js)
         self.assertIn("已加密存储", app_js)
 
+    def test_settings_contains_real_llm_controls_and_connection_test(self) -> None:
+        app_js = read_static("app.js")
+
+        for snippet in (
+            "llm_base_url",
+            "llm_model",
+            "llm_configuration_complete",
+            "模型服务",
+            "保存模型设置",
+            "测试连接",
+            "/api/settings/llm/test",
+            "async function testLLMConnection",
+            "将使用 MockLLM",
+            "将使用真实模型",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, app_js)
+        self.assertIn('apiKeyInput.value = ""', app_js)
+        self.assertNotIn("settings.api_key_value", app_js)
+        self.assertNotIn("credential_fingerprint", app_js)
+
     def test_approval_requests_carry_revision_and_refresh_after_conflict(self) -> None:
         app_js = read_static("app.js")
 
