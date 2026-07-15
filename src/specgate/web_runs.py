@@ -13,7 +13,8 @@ from typing import Callable
 from specgate.approvals import ApprovalQueue, GovernanceConfig
 from specgate.config import ContextConfig, WorkspaceConfig
 from specgate.context_lifecycle import CompressionConfig
-from specgate.llm import MockLLM
+from specgate.llm import LLMClient, MockLLM
+from specgate.llm_config import LLMConfigError, LLMRunConfig
 from specgate.policy import WorkspacePolicy
 from specgate.run_storage import (
     RunInitializationLock,
@@ -36,6 +37,7 @@ from specgate.web_auth import utc_now
 from specgate.web_db import connect_db
 from specgate.web_projects import ProjectPaths, RunPaths, project_paths, web_run_paths
 from specgate.web_runtime import RunCancelled, RunTask, RunTimedOut
+from specgate.web_llm import WebLLMFactory
 from specgate.workspace_fs import (
     WorkspaceTreeRenameError,
     open_workspace_file,
@@ -163,6 +165,10 @@ def create_run(
     data_root: Path,
     max_active_runs_per_user: int = 4,
     on_reserved_run: Callable[[int], None] | None = None,
+    llm_config_resolver: Callable[
+        [sqlite3.Connection, int], LLMRunConfig
+    ]
+    | None = None,
 ) -> sqlite3.Row:
     run_prompt = _require_text(prompt, "prompt")
     run_id, paths, created_at, initialization_lock, quota_guard = _reserve_initializing_run(
@@ -172,6 +178,7 @@ def create_run(
         user_id,
         run_prompt,
         max_active_runs_per_user,
+        llm_config_resolver,
     )
     storage_initialized = False
     try:
@@ -210,6 +217,10 @@ def _reserve_initializing_run(
     user_id: int,
     run_prompt: str,
     max_active_runs_per_user: int,
+    llm_config_resolver: Callable[
+        [sqlite3.Connection, int], LLMRunConfig
+    ]
+    | None,
 ) -> tuple[
     int,
     ProjectPaths,
@@ -276,14 +287,20 @@ def _reserve_initializing_run(
         if settings is None:
             raise ValueError("settings not found")
         runtime_config = RunRuntimeConfig.from_settings(dict(settings))
+        llm_config = (
+            llm_config_resolver(conn, user_id)
+            if llm_config_resolver is not None
+            else LLMRunConfig.mock()
+        )
 
         now = utc_now().isoformat()
         cursor = conn.execute(
             """
             insert into runs (
-                project_id, user_id, status, prompt, created_at, runtime_config_json
+                project_id, user_id, status, prompt, created_at,
+                runtime_config_json, llm_config_json
             )
-            values (?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project_id,
@@ -292,6 +309,7 @@ def _reserve_initializing_run(
                 run_prompt,
                 now,
                 runtime_config.to_json(),
+                llm_config.to_json(),
             ),
         )
         run_id = int(cursor.lastrowid)
@@ -532,8 +550,12 @@ def execute_run_once(
     review_existing_writes: bool = True,
     stop_check: Callable[[], None] | None = None,
     deadline_at: str | None = None,
+    llm_factory: WebLLMFactory | None = None,
+    remaining_seconds: Callable[[], float] | None = None,
 ) -> None:
     checker = stop_check or (lambda: None)
+    remaining = remaining_seconds or (lambda: 60.0)
+    factory = llm_factory or WebLLMFactory.mock_only(mock_factory=MockLLM)
     run: sqlite3.Row | None = None
     publication_prepared = False
     workspace_promoted = False
@@ -544,6 +566,7 @@ def execute_run_once(
         project_storage = project_paths(data_root, run["user_id"], project["id"])
         paths = web_run_paths(project_storage, run_id)
         runtime_config = _parse_run_runtime_config(run)
+        llm_config = _parse_run_llm_config(run)
         if not _mark_running(db_path, run_id, deadline_at=deadline_at):
             return
 
@@ -552,8 +575,12 @@ def execute_run_once(
         result = _run_mock_agent(
             paths,
             runtime_config,
+            llm_config=llm_config,
+            user_id=int(run["user_id"]),
+            llm_factory=factory,
             review_existing_writes=review_existing_writes,
             stop_check=checker,
+            remaining_seconds=remaining,
         )
         checker()
         queue = ApprovalQueue.read(paths.approval_queue)
@@ -634,6 +661,16 @@ def execute_run_once(
             )
             return
         raise
+    except LLMConfigError:
+        if run is not None:
+            _mark_failed(
+                db_path,
+                run_id,
+                "invalid_llm_config",
+                expected_status="queued",
+            )
+            return
+        raise
     except Exception as exc:
         if run is not None:
             if publication_prepared and (
@@ -664,8 +701,12 @@ def resume_run_once(
     review_existing_writes: bool = True,
     stop_check: Callable[[], None] | None = None,
     deadline_at: str | None = None,
+    llm_factory: WebLLMFactory | None = None,
+    remaining_seconds: Callable[[], float] | None = None,
 ) -> sqlite3.Row | None:
     checker = stop_check or (lambda: None)
+    remaining = remaining_seconds or (lambda: 60.0)
+    factory = llm_factory or WebLLMFactory.mock_only(mock_factory=MockLLM)
     run = get_run(db_path, user_id, run_id)
     if run["status"] not in {"queued", "needs_approval"}:
         return None
@@ -680,12 +721,23 @@ def resume_run_once(
         raise ValueError("no approved or denied approval to resume")
     try:
         runtime_config = _parse_run_runtime_config(run)
+        llm_config = _parse_run_llm_config(run)
     except RuntimeConfigError:
         if run["status"] == "queued":
             _mark_failed(
                 db_path,
                 run_id,
                 "invalid_runtime_config",
+                expected_status="queued",
+            )
+            return get_run(db_path, user_id, run_id)
+        raise
+    except LLMConfigError:
+        if run["status"] == "queued":
+            _mark_failed(
+                db_path,
+                run_id,
+                "invalid_llm_config",
                 expected_status="queued",
             )
             return get_run(db_path, user_id, run_id)
@@ -709,8 +761,12 @@ def resume_run_once(
         result = _run_resume_agent(
             paths,
             runtime_config,
+            llm_config=llm_config,
+            user_id=user_id,
+            llm_factory=factory,
             review_existing_writes=review_existing_writes,
             stop_check=checker,
+            remaining_seconds=remaining,
         )
         checker()
         queue = ApprovalQueue.read(paths.approval_queue)
@@ -954,12 +1010,23 @@ def _parse_run_runtime_config(run: sqlite3.Row) -> RunRuntimeConfig:
     return RunRuntimeConfig.from_json(raw)
 
 
+def _parse_run_llm_config(run: sqlite3.Row) -> LLMRunConfig:
+    raw = run["llm_config_json"]
+    if not isinstance(raw, str):
+        raise LLMConfigError("llm_config_json")
+    return LLMRunConfig.from_json(raw)
+
+
 def _run_mock_agent(
     paths: RunPaths,
     config: RunRuntimeConfig,
     *,
+    llm_config: LLMRunConfig | None = None,
+    user_id: int = 0,
+    llm_factory: WebLLMFactory | None = None,
     review_existing_writes: bool = True,
     stop_check: Callable[[], None] | None = None,
+    remaining_seconds: Callable[[], float] | None = None,
 ) -> RunResult:
     governance = GovernanceConfig(
         profile=config.governance_profile,
@@ -979,8 +1046,7 @@ def _run_mock_agent(
             budget_chars=config.context_budget_chars,
         ),
     )
-    llm = MockLLM(
-        [
+    responses = [
             {
                 "schema_version": "1",
                 "action": "write_file",
@@ -995,6 +1061,13 @@ def _run_mock_agent(
                 "args": {"summary": "SpecGate Result generated"},
             },
         ]
+    factory = llm_factory or WebLLMFactory.mock_only(mock_factory=MockLLM)
+    llm = factory.build(
+        llm_config or LLMRunConfig.mock(),
+        user_id,
+        mock_responses=responses,
+        stop_check=stop_check or (lambda: None),
+        remaining_seconds=remaining_seconds or (lambda: 60.0),
     )
     runner = AgentRunner(
         paths.workspace,
@@ -1026,8 +1099,12 @@ def _run_resume_agent(
     paths: RunPaths,
     config: RunRuntimeConfig,
     *,
+    llm_config: LLMRunConfig | None = None,
+    user_id: int = 0,
+    llm_factory: WebLLMFactory | None = None,
     review_existing_writes: bool = True,
     stop_check: Callable[[], None] | None = None,
+    remaining_seconds: Callable[[], float] | None = None,
 ) -> RunResult:
     governance = GovernanceConfig(
         profile=config.governance_profile,
@@ -1047,14 +1124,20 @@ def _run_resume_agent(
             budget_chars=config.context_budget_chars,
         ),
     )
-    llm = MockLLM(
-        [
+    responses = [
             {
                 "schema_version": "1",
                 "action": "finish",
                 "args": {"summary": "SpecGate approval resume completed"},
             }
         ]
+    factory = llm_factory or WebLLMFactory.mock_only(mock_factory=MockLLM)
+    llm = factory.build(
+        llm_config or LLMRunConfig.mock(),
+        user_id,
+        mock_responses=responses,
+        stop_check=stop_check or (lambda: None),
+        remaining_seconds=remaining_seconds or (lambda: 60.0),
     )
     runner = AgentRunner(
         paths.workspace,

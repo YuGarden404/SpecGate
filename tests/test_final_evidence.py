@@ -24,11 +24,17 @@ KEY_EVIDENCE_PATHS = (
     "src/specgate/web_credentials.py",
     "src/specgate/web_runtime.py",
     "src/specgate/runtime_config.py",
+    "src/specgate/llm_config.py",
+    "src/specgate/llm_transport.py",
+    "src/specgate/web_llm.py",
     "tests/test_runner.py",
     "tests/test_gate.py",
     "tests/test_approvals.py",
     "tests/test_web_runtime.py",
     "tests/test_runtime_config.py",
+    "tests/test_llm_config.py",
+    "tests/test_llm_transport.py",
+    "tests/test_web_llm.py",
     ".gitlab-ci.yml",
     ".github/workflows/ci.yml",
     ".github/workflows/pages.yml",
@@ -96,9 +102,12 @@ class FinalEvidenceTests(unittest.TestCase):
             "AES-256-GCM",
             "固定 worker",
             "有界队列",
-            "schema v4",
+            "schema v5",
             "runtime_config_json",
+            "llm_config_json",
             "不可变配置快照",
+            "Chat Completions",
+            "fail closed",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, spec)
@@ -125,10 +134,38 @@ class FinalEvidenceTests(unittest.TestCase):
             "runtime_config_json",
             "HITL",
             "MockLLM",
+            "真实模型",
+            "llm_config_json",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, combined)
         self.assertNotIn("支持 `.env` fallback", combined)
+
+    def test_real_llm_delivery_facts_are_current_and_do_not_require_network(self):
+        readme = read_text("README.md")
+        deployment = read_text("docs/DEPLOYMENT.md")
+        matrix = read_text("docs/FINAL_EVIDENCE_MATRIX.md")
+        combined = "\n".join((readme, deployment, matrix))
+
+        for phrase in (
+            "默认使用 MockLLM",
+            "失败不会降级",
+            "SPECGATE_LLM_ALLOWED_HOSTS",
+            "SPECGATE_LLM_MAX_OUTPUT_TOKENS",
+            "SPECGATE_LLM_REQUEST_TIMEOUT_SECONDS",
+            "Fake/Stub",
+            "GitHub Pages",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, combined)
+        for stale in (
+            "当前 WebUI 仍只运行 MockLLM",
+            "保存 API key 不会启用或调用真实模型",
+            "保存凭据不会启用或调用真实 LLM",
+            "课程验收和 Web 运行仍只使用 `MockLLM`",
+        ):
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, combined)
 
     def test_matrix_references_existing_implementation_and_test_paths(self):
         matrix = MATRIX.read_text(encoding="utf-8")

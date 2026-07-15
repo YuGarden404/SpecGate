@@ -1,10 +1,11 @@
 import sqlite3
 from pathlib import Path
 
+from specgate.llm_config import LLMRunConfig
 from specgate.runtime_config import RunRuntimeConfig
 
 
-LATEST_SCHEMA_VERSION = 4
+LATEST_SCHEMA_VERSION = 5
 
 USER_CREDENTIALS_SCHEMA = """
 create table if not exists user_credentials (
@@ -47,6 +48,8 @@ create table if not exists user_settings (
     retrieval_top_k integer not null default 6,
     retrieval_budget_chars integer not null default 9000,
     compression_max_tool_result_chars integer not null default 1200,
+    llm_base_url text,
+    llm_model text,
     api_key_configured integer not null default 0,
     api_key_ciphertext text
 );
@@ -89,7 +92,8 @@ create table if not exists runs (
     finished_at text,
     cancel_requested_at text,
     deadline_at text,
-    runtime_config_json text
+    runtime_config_json text,
+    llm_config_json text
 );
 
 create table if not exists approvals (
@@ -114,7 +118,7 @@ create table if not exists artifacts (
     created_at text not null default current_timestamp
 );
 
-pragma user_version = 4;
+pragma user_version = 5;
 """
 
 
@@ -240,6 +244,29 @@ def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
         raise
 
 
+def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+    conn.execute("begin immediate")
+    try:
+        conn.execute("alter table user_settings add column llm_base_url text")
+        conn.execute("alter table user_settings add column llm_model text")
+        conn.execute("alter table runs add column llm_config_json text")
+        migrated = LLMRunConfig.mock(source="migration-v5").to_json()
+        conn.execute(
+            "update runs set llm_config_json = ? where llm_config_json is null",
+            (migrated,),
+        )
+        missing = conn.execute(
+            "select count(*) from runs where llm_config_json is null"
+        ).fetchone()[0]
+        if missing:
+            raise RuntimeError("LLM config migration left empty snapshots")
+        conn.execute("pragma user_version = 5")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = connect_db(db_path)
@@ -257,6 +284,9 @@ def init_db(db_path: Path) -> None:
         if version == 3:
             _migrate_v3_to_v4(conn)
             version = 4
+        if version == 4:
+            _migrate_v4_to_v5(conn)
+            version = 5
         if version == LATEST_SCHEMA_VERSION:
             conn.execute(USER_CREDENTIALS_SCHEMA)
             conn.commit()

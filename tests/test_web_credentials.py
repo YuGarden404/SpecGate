@@ -7,7 +7,9 @@ import unittest
 from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
 from specgate.web_credentials import (
+    CredentialChanged,
     CredentialDecryptionFailed,
+    CredentialMissing,
     CredentialRequiresReentry,
     CredentialStoreUnavailable,
     InvalidCredentialKey,
@@ -129,6 +131,40 @@ class WebCredentialCipherTests(unittest.TestCase):
         status = unavailable.status(user_id)
         self.assertEqual(status.storage, "not_stored")
         self.assertFalse(status.store_available)
+
+    def test_fingerprint_changes_on_reentry_and_matching_get_fails_closed(self):
+        db_path, user_id = self.make_database_user()
+        service = WebCredentialService.from_key_value(db_path, TEST_KEY)
+        service.put(user_id, "SENTINEL_secret")
+        first = service.snapshot(user_id)
+
+        self.assertTrue(first.exists)
+        self.assertTrue(first.configured)
+        self.assertEqual(len(first.fingerprint), 64)
+        self.assertEqual(
+            service.get_matching(user_id, first.fingerprint),
+            "SENTINEL_secret",
+        )
+
+        service.put(user_id, "SENTINEL_secret")
+        second = service.snapshot(user_id)
+
+        self.assertNotEqual(first.fingerprint, second.fingerprint)
+        with self.assertRaises(CredentialChanged) as raised:
+            service.get_matching(user_id, first.fingerprint)
+        self.assertNotIn("SENTINEL_secret", str(raised.exception))
+
+    def test_missing_credential_has_no_fingerprint_and_matching_get_fails(self):
+        db_path, user_id = self.make_database_user()
+        service = WebCredentialService.from_key_value(db_path, TEST_KEY)
+
+        snapshot = service.snapshot(user_id)
+
+        self.assertFalse(snapshot.exists)
+        self.assertFalse(snapshot.configured)
+        self.assertIsNone(snapshot.fingerprint)
+        with self.assertRaises(CredentialMissing):
+            service.get_matching(user_id, "a" * 64)
 
 
 if __name__ == "__main__":

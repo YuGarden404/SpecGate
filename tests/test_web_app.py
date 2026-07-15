@@ -23,6 +23,9 @@ from fastapi.testclient import TestClient
 import specgate.workspace_fs as workspace_fs
 import specgate.web_runs as web_runs
 from specgate.approvals import ApprovalQueue, PendingApproval
+from specgate.llm_config import LLMRunConfig
+from specgate.llm_transport import load_llm_network_config
+from specgate.llm_transport import LLMTransportError
 from specgate.web_app import create_app
 from specgate.web_credentials import WebCredentialService
 from specgate.web_db import connect_db
@@ -33,6 +36,18 @@ from specgate.workspace_fs import WorkspacePathError, read_workspace_bytes
 
 
 TEST_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode("ascii")
+
+
+class ConnectionTestTransport:
+    def __init__(self, *, error_code=None):
+        self.error_code = error_code
+        self.calls = 0
+
+    def post_json(self, endpoint, headers, body, *, stop_check, remaining_seconds):
+        self.calls += 1
+        if self.error_code is not None:
+            raise LLMTransportError(self.error_code)
+        return b'{"choices":[{"message":{"content":"SENTINEL_PROVIDER_CONTENT"}}]}'
 
 
 def patch_is_junction(predicate, *, path_type=Path):
@@ -103,6 +118,43 @@ class WebAppTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["project"]
+
+    def test_create_run_api_freezes_configured_real_llm_mode(self):
+        client, app = self.make_client(
+            credential_key=TEST_KEY,
+            llm_network_config=load_llm_network_config(
+                {"SPECGATE_LLM_ALLOWED_HOSTS": "api.example.test"}
+            ),
+            llm_transport_factory=lambda max_attempts: object(),
+        )
+        self.register(client)
+        key_response = client.put(
+            "/api/settings/api-key",
+            json={"api_key": "SENTINEL-provider-key"},
+        )
+        self.assertEqual(key_response.status_code, 200, key_response.text)
+        with closing(connect_db(app.state.db_path)) as conn:
+            conn.execute(
+                """
+                update user_settings
+                set llm_base_url = 'https://api.example.test/v1',
+                    llm_model = 'test-model'
+                where user_id = 1
+                """
+            )
+            conn.commit()
+        project = self.create_project(client, index_html=None)
+
+        response = client.post(
+            f"/api/projects/{project['id']}/runs",
+            json={"prompt": "Build with the configured model"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        run_payload = response.json()["run"]
+        self.assertEqual(run_payload["llm_mode"], "openai-compatible")
+        self.assertEqual(run_payload["llm_model"], "test-model")
+        self.assertNotIn("credential_fingerprint", repr(run_payload))
 
     def make_approved_run(self, client, app, project):
         run = create_run(
@@ -747,6 +799,151 @@ class WebAppTests(unittest.TestCase):
         cleared = client.delete("/api/settings/api-key")
         self.assertEqual(cleared.status_code, 200, cleared.text)
         self.assertFalse(cleared.json()["settings"]["api_key_configured"])
+
+    def test_settings_save_llm_fields_locally_and_reject_disallowed_host_atomically(self):
+        transport_calls = []
+        client, _app = self.make_client(
+            credential_key=TEST_KEY,
+            llm_network_config=load_llm_network_config(
+                {"SPECGATE_LLM_ALLOWED_HOSTS": "api.example.test"}
+            ),
+            llm_transport_factory=lambda max_attempts: transport_calls.append(
+                max_attempts
+            ),
+        )
+        self.register(client)
+        runtime = {
+            "governance_profile": "strict",
+            "context_strategy": "rag-select",
+            "max_steps": 8,
+            "context_budget_chars": 20000,
+            "retrieval_top_k": 5,
+            "retrieval_budget_chars": 8000,
+            "compression_max_tool_result_chars": 700,
+        }
+
+        saved = client.put(
+            "/api/settings",
+            json={
+                **runtime,
+                "llm_base_url": "https://API.EXAMPLE.TEST/v1/",
+                "llm_model": " test-model ",
+            },
+        )
+
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(
+            saved.json()["settings"]["llm_base_url"],
+            "https://api.example.test/v1",
+        )
+        self.assertEqual(saved.json()["settings"]["llm_model"], "test-model")
+        self.assertEqual(transport_calls, [])
+
+        rejected = client.put(
+            "/api/settings",
+            json={
+                **runtime,
+                "governance_profile": "review",
+                "llm_base_url": "https://not-allowed.example/v1",
+                "llm_model": "other-model",
+            },
+        )
+        self.assertEqual(rejected.status_code, 400, rejected.text)
+        stored = client.get("/api/settings").json()["settings"]
+        self.assertEqual(stored["governance_profile"], "strict")
+        self.assertEqual(stored["llm_base_url"], "https://api.example.test/v1")
+
+    def test_llm_connection_test_uses_saved_config_without_creating_run(self):
+        transport = ConnectionTestTransport()
+        attempts = []
+        client, app = self.make_client(
+            credential_key=TEST_KEY,
+            llm_network_config=load_llm_network_config(
+                {"SPECGATE_LLM_ALLOWED_HOSTS": "api.example.test"}
+            ),
+            llm_transport_factory=lambda max_attempts: (
+                attempts.append(max_attempts) or transport
+            ),
+        )
+        self.register(client)
+        settings = {
+            "governance_profile": "review",
+            "context_strategy": "injection-safe",
+            "max_steps": 5,
+            "context_budget_chars": 12000,
+            "retrieval_top_k": 6,
+            "retrieval_budget_chars": 9000,
+            "compression_max_tool_result_chars": 1200,
+            "llm_base_url": "https://api.example.test/v1",
+            "llm_model": "test-model",
+        }
+        self.assertEqual(client.put("/api/settings", json=settings).status_code, 200)
+        self.assertEqual(
+            client.put(
+                "/api/settings/api-key",
+                json={"api_key": "SENTINEL-provider-key"},
+            ).status_code,
+            200,
+        )
+
+        response = client.post("/api/settings/llm/test")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["ok"], True)
+        self.assertEqual(attempts, [1])
+        self.assertNotIn("SENTINEL_PROVIDER_CONTENT", response.text)
+        with closing(connect_db(app.state.db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
+
+        extra = client.post(
+            "/api/settings/llm/test",
+            json={"api_key": "must-not-be-accepted"},
+        )
+        self.assertEqual(extra.status_code, 400, extra.text)
+
+    def test_llm_connection_test_maps_configuration_and_provider_errors(self):
+        client, _app = self.make_client(credential_key=TEST_KEY)
+        self.register(client)
+        missing = client.post("/api/settings/llm/test")
+        self.assertEqual(missing.status_code, 409, missing.text)
+        self.assertEqual(
+            missing.json()["detail"]["code"],
+            "llm_configuration_required",
+        )
+
+        transport = ConnectionTestTransport(error_code="llm_authentication_failed")
+        client, _app = self.make_client(
+            credential_key=TEST_KEY,
+            llm_network_config=load_llm_network_config(
+                {"SPECGATE_LLM_ALLOWED_HOSTS": "api.example.test"}
+            ),
+            llm_transport_factory=lambda max_attempts: transport,
+        )
+        self.register(client)
+        payload = {
+            "governance_profile": "review",
+            "context_strategy": "injection-safe",
+            "max_steps": 5,
+            "context_budget_chars": 12000,
+            "retrieval_top_k": 6,
+            "retrieval_budget_chars": 9000,
+            "compression_max_tool_result_chars": 1200,
+            "llm_base_url": "https://api.example.test/v1",
+            "llm_model": "test-model",
+        }
+        client.put("/api/settings", json=payload)
+        client.put(
+            "/api/settings/api-key",
+            json={"api_key": "SENTINEL-provider-key"},
+        )
+
+        failed = client.post("/api/settings/llm/test")
+
+        self.assertEqual(failed.status_code, 502, failed.text)
+        self.assertEqual(
+            failed.json()["detail"]["code"],
+            "llm_authentication_failed",
+        )
 
     def test_settings_reject_strict_integer_errors_without_changing_values(self):
         client, _app = self.make_client(credential_key=TEST_KEY)

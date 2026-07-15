@@ -221,6 +221,7 @@ function renderWorkspaceView() {
   if (runForm) {
     runForm.hidden = showingDetail;
   }
+  renderRunModeHint();
   if (showingDetail) {
     renderDetail();
   } else {
@@ -772,6 +773,11 @@ async function startRun(event) {
     setMessage("请先选择一个项目再开始运行。", true);
     return;
   }
+  if (state.settings && !state.settings.llm_configuration_complete) {
+    setMessage("模型配置未完成，请先到设置页补全或清除 API Key 使用 MockLLM。", true);
+    pushView("detail-settings");
+    return;
+  }
   const promptInput = byId("run-prompt");
   const prompt = promptInput ? promptInput.value.trim() : "";
   if (!prompt) {
@@ -942,6 +948,7 @@ function renderBasicRunRows(run) {
     ["运行", run ? `#${run.id}` : "暂无运行"],
     ["状态", run ? translateRunStatus(run.status) : translateRunStatus(state.selectedProject?.last_run_status || "idle")],
     ["信任", run ? translateTrustLevel(run.trust_level || "pending") : "不适用"],
+    ["模型模式", run ? frozenLLMModeLabel(run) : "不适用"],
     ["错误", run ? run.error_message || "无" : "无"],
     ["创建时间", run ? run.created_at || "不适用" : "不适用"],
     ["开始时间", run ? run.started_at || "不适用" : "不适用"],
@@ -1261,11 +1268,13 @@ function renderRuntimeConfig(debug) {
 }
 
 function auditRunStrategy(debug) {
+  const run = debug.run || state.currentRun || {};
+  const llmMode = frozenLLMModeLabel(run);
   if (debug.runtime_config) {
     return {
       governanceProfile: debug.runtime_config.governance_profile,
       contextStrategy: debug.runtime_config.context_strategy,
-      llmMode: "MockLLM",
+      llmMode,
     };
   }
   const events = (debug.trace && debug.trace.events) || [];
@@ -1279,7 +1288,7 @@ function auditRunStrategy(debug) {
       governanceProfile = event.payload.profile;
     }
   }
-  return { governanceProfile, contextStrategy, llmMode: "MockLLM" };
+  return { governanceProfile, contextStrategy, llmMode };
 }
 
 function renderAuditMetrics(debug) {
@@ -1487,6 +1496,70 @@ function credentialStateLabel(settings) {
   return "API Key：未配置";
 }
 
+function llmModeLabel(settings) {
+  if (!settings.credential_store_available) {
+    return "安全凭据存储不可用";
+  }
+  if (settings.api_key_requires_reentry) {
+    return "API Key 需要重新录入";
+  }
+  if (!settings.llm_configuration_complete || settings.llm_mode === "configuration_required") {
+    return "配置未完成：请补全 Base URL 和 Model";
+  }
+  if (settings.llm_mode === "openai-compatible") {
+    return `真实模型：${settings.llm_model}`;
+  }
+  return "Mock 模式：未配置 API Key";
+}
+
+function frozenLLMModeLabel(run) {
+  if (run.llm_mode === "openai-compatible") {
+    return run.llm_model ? `真实模型：${run.llm_model}` : "真实模型";
+  }
+  if (run.llm_mode === "invalid") {
+    return "模型配置快照无效";
+  }
+  return "MockLLM";
+}
+
+function renderRunModeHint() {
+  const form = byId("run-form");
+  if (!form) {
+    return;
+  }
+  let hint = form.querySelector(".run-mode-hint");
+  if (!hint) {
+    hint = el("p", { className: "run-mode-hint muted" });
+    form.prepend(hint);
+  }
+  const settings = state.settings;
+  const submitButton = form.querySelector('button[type="submit"]');
+  if (!settings) {
+    hint.textContent = "正在加载模型配置...";
+    if (submitButton) {
+      submitButton.disabled = true;
+    }
+    return;
+  }
+  if (!settings.llm_configuration_complete) {
+    hint.replaceChildren(
+      document.createTextNode(`${llmModeLabel(settings)}。`),
+      el("button", { type: "button", className: "link-button" }, ["前往设置"]),
+    );
+    hint.querySelector("button").addEventListener("click", () => pushView("detail-settings"));
+    if (submitButton) {
+      submitButton.disabled = true;
+    }
+    return;
+  }
+  hint.textContent = settings.llm_mode === "openai-compatible"
+    ? `将使用真实模型：${settings.llm_model}`
+    : "将使用 MockLLM";
+  if (submitButton) {
+    submitButton.disabled = false;
+  }
+}
+
 function renderSettingsDetail(content) {
   const card = el("section", { className: "detail-card stack" });
   card.append(el("h2", {}, ["设置"]));
@@ -1495,10 +1568,11 @@ function renderSettingsDetail(content) {
     card.append(el("p", { className: "muted" }, ["设置尚未加载。"]));
   } else {
     appendDefinitionRows(card, [
-      ["LLM 模式", settings.llm_mode],
+      ["LLM 模式", llmModeLabel(settings)],
       ["API Key", credentialStateLabel(settings)],
       ["存储方式", settings.api_key_storage],
     ]);
+    card.append(el("h3", {}, ["运行配置"]));
     const form = el("form", { id: "runtime-settings-form", className: "stack" });
     for (const field of RUNTIME_SELECT_FIELDS) {
       const select = el("select", { id: field.id });
@@ -1528,6 +1602,62 @@ function renderSettingsDetail(content) {
     );
     form.addEventListener("submit", updateSettings);
     card.append(form);
+
+    card.append(el("h3", {}, ["模型服务"]));
+    const llmForm = el("form", { id: "llm-settings-form", className: "stack" });
+    const baseUrlInput = el("input", {
+      id: "llm-base-url",
+      type: "url",
+      placeholder: "https://api.example.com/v1",
+      autocomplete: "url",
+    });
+    baseUrlInput.value = settings.llm_base_url || "";
+    const baseUrlLabel = el("label", {}, ["Base URL"]);
+    baseUrlLabel.append(baseUrlInput);
+    const modelInput = el("input", {
+      id: "llm-model",
+      type: "text",
+      placeholder: "模型名称",
+      autocomplete: "off",
+    });
+    modelInput.value = settings.llm_model || "";
+    const modelLabel = el("label", {}, ["Model"]);
+    modelLabel.append(modelInput);
+    llmForm.append(
+      baseUrlLabel,
+      modelLabel,
+      el("p", { className: "muted" }, ["Base URL 必须使用部署白名单允许的公网 HTTPS 主机。"]),
+      el("button", { type: "submit" }, ["保存模型设置"]),
+    );
+    llmForm.addEventListener("submit", saveLLMSettings);
+    card.append(llmForm);
+
+    const apiKeyForm = el("form", { id: "api-key-form", className: "stack" });
+    const apiKeyInput = el("input", {
+      id: "api-key-input",
+      type: "password",
+      placeholder: "输入新的 API Key",
+      autocomplete: "new-password",
+    });
+    const apiKeyLabel = el("label", {}, ["API Key"]);
+    apiKeyLabel.append(apiKeyInput);
+    const keyActions = el("div", { className: "button-row" });
+    keyActions.append(
+      el("button", { type: "submit" }, ["保存 API Key"]),
+      el("button", { id: "clear-api-key-button", type: "button", className: "secondary" }, ["清除 API Key"]),
+      el("button", { id: "test-llm-button", type: "button", className: "secondary" }, ["测试连接"]),
+    );
+    apiKeyForm.append(
+      apiKeyLabel,
+      el("p", { className: "muted" }, ["API Key 只写入服务端加密存储，保存后立即清空输入框。"]),
+      keyActions,
+    );
+    apiKeyForm.addEventListener("submit", saveApiKey);
+    keyActions.querySelector("#clear-api-key-button").addEventListener("click", clearApiKey);
+    const testButton = keyActions.querySelector("#test-llm-button");
+    testButton.disabled = !settings.llm_configuration_complete || settings.llm_mode !== "openai-compatible";
+    testButton.addEventListener("click", () => testLLMConnection(testButton));
+    card.append(apiKeyForm);
   }
   content.append(card);
 }
@@ -1611,6 +1741,18 @@ async function loadSettings() {
     }
   }
   setText("settings-api-state", credentialStateLabel(state.settings));
+  renderRunModeHint();
+}
+
+function runtimeSettingsBody() {
+  const body = {};
+  for (const field of [...RUNTIME_SELECT_FIELDS, ...RUNTIME_NUMBER_FIELDS]) {
+    const input = byId(field.id);
+    const fallback = state.settings ? state.settings[field.key] : null;
+    const value = input ? input.value : fallback;
+    body[field.key] = RUNTIME_NUMBER_FIELDS.includes(field) ? Number(value) : value;
+  }
+  return body;
 }
 
 async function updateSettings(event) {
@@ -1621,12 +1763,11 @@ async function updateSettings(event) {
   if (controls.some(([_field, input]) => !input)) {
     return;
   }
-  const body = {};
-  for (const [field, input] of controls) {
-    body[field.key] = RUNTIME_NUMBER_FIELDS.includes(field)
-      ? Number(input.value)
-      : input.value;
-  }
+  const body = {
+    ...runtimeSettingsBody(),
+    llm_base_url: state.settings.llm_base_url,
+    llm_model: state.settings.llm_model,
+  };
   try {
     const payload = await apiJson("/api/settings", {
       method: "PUT",
@@ -1638,6 +1779,43 @@ async function updateSettings(event) {
     setMessage("设置已保存。");
   } catch (error) {
     setMessage(error.message, true);
+  }
+}
+
+async function saveLLMSettings(event) {
+  event.preventDefault();
+  const baseUrlInput = byId("llm-base-url");
+  const modelInput = byId("llm-model");
+  if (!baseUrlInput || !modelInput) {
+    return;
+  }
+  try {
+    const payload = await apiJson("/api/settings", {
+      method: "PUT",
+      body: {
+        ...runtimeSettingsBody(),
+        llm_base_url: baseUrlInput.value.trim() || null,
+        llm_model: modelInput.value.trim() || null,
+      },
+    });
+    state.settings = payload.settings;
+    await loadSettings();
+    renderDetail();
+    setMessage("模型设置已保存。设置只影响之后创建的运行。");
+  } catch (error) {
+    setMessage(error.message, true);
+  }
+}
+
+async function testLLMConnection(button) {
+  button.disabled = true;
+  try {
+    await apiJson("/api/settings/llm/test", { method: "POST" });
+    setMessage("模型服务连接测试通过。");
+  } catch (error) {
+    setMessage(error.message, true);
+  } finally {
+    button.disabled = false;
   }
 }
 

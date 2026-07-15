@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import sqlite3
@@ -14,6 +15,7 @@ import specgate.web_runs as web_runs
 import specgate.run_storage as run_storage
 import specgate.workspace_fs as workspace_fs
 from specgate.approvals import ApprovalQueue, PendingApproval
+from specgate.llm_config import LLMRunConfig
 from specgate.run_storage import (
     initialize_run_storage as initialize_run_storage_real,
     promote_run_workspace as promote_run_workspace_real,
@@ -21,10 +23,55 @@ from specgate.run_storage import (
 from specgate.runtime_config import RunRuntimeConfig, RuntimeConfigError
 from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
+from specgate.web_credentials import WebCredentialService
+from specgate.web_llm import WebLLMFactory
+from specgate.llm_transport import LLMTransportError, load_llm_network_config
 from specgate.web_projects import create_manual_project, project_paths, web_run_paths
 from specgate.web_runtime import RunCancelled, RunTask, RunTimedOut
-from specgate.web_runs import ActiveRunConflict, create_run, execute_run_once, get_run
+from specgate.web_llm import WebLLMError
+from specgate.web_runs import (
+    ActiveRunConflict,
+    create_run,
+    execute_run_once,
+    get_run,
+    resume_run_once,
+)
 from specgate.workspace_fs import WorkspacePathError
+
+
+WEB_CREDENTIAL_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode("ascii")
+
+
+class ScriptedChatTransport:
+    def __init__(self, actions):
+        self.actions = list(actions)
+        self.contexts = []
+        self.endpoints = []
+
+    def post_json(
+        self,
+        endpoint,
+        headers,
+        body,
+        *,
+        stop_check,
+        remaining_seconds,
+    ):
+        stop_check()
+        request = json.loads(body.decode("utf-8"))
+        self.contexts.append(request["messages"][1]["content"])
+        self.endpoints.append(endpoint.base_url)
+        action = self.actions.pop(0)
+        payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(action, ensure_ascii=False),
+                    }
+                }
+            ]
+        }
+        return json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
 
 class WebRunsTests(unittest.TestCase):
@@ -430,6 +477,65 @@ class WebRunsTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             create_run(db_path, project["id"], user["id"], "   ", data_root=data_root)
+
+    def test_create_run_freezes_mock_and_explicit_real_llm_snapshots(self):
+        db_path, data_root, user, project = self.make_context()
+
+        mock_run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build the result",
+            data_root=data_root,
+        )
+        mock_config = LLMRunConfig.from_json(mock_run["llm_config_json"])
+        self.assertEqual(mock_config, LLMRunConfig.mock())
+
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                "update runs set status = 'completed' where id = ?",
+                (mock_run["id"],),
+            )
+            conn.commit()
+        real_config = LLMRunConfig.real(
+            "https://api.example.test/v1",
+            "test-model",
+            "a" * 64,
+        )
+        real_run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build with real model",
+            data_root=data_root,
+            llm_config_resolver=lambda conn, user_id: real_config,
+        )
+
+        self.assertEqual(
+            LLMRunConfig.from_json(real_run["llm_config_json"]),
+            real_config,
+        )
+
+    def test_llm_configuration_failure_leaves_no_run_or_storage(self):
+        db_path, data_root, user, project = self.make_context()
+
+        def fail_configuration(conn, user_id):
+            raise WebLLMError("llm_configuration_required")
+
+        with self.assertRaises(WebLLMError):
+            create_run(
+                db_path,
+                project["id"],
+                user["id"],
+                "Blocked result",
+                data_root=data_root,
+                llm_config_resolver=fail_configuration,
+            )
+
+        with closing(connect_db(db_path)) as conn:
+            self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
+        runs_root = project_paths(data_root, user["id"], project["id"]).runs
+        self.assertFalse(any(path.name.isdecimal() for path in runs_root.iterdir()))
 
     def test_create_run_freezes_complete_nondefault_runtime_config(self):
         db_path, data_root, user, project = self.make_context()
@@ -1220,6 +1326,260 @@ class WebRunsTests(unittest.TestCase):
         self.assertEqual(
             [(row["kind"], row["path"]) for row in artifacts],
             [("index", str(latest_index)), ("zip", str(result_zip))],
+        )
+
+    def test_execute_run_uses_frozen_real_llm_and_existing_harness(self):
+        db_path, data_root, user, project = self.make_context()
+        credentials = WebCredentialService.from_key_value(
+            db_path,
+            WEB_CREDENTIAL_KEY,
+        )
+        credentials.put(user["id"], "SENTINEL-provider-key")
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                """
+                update user_settings
+                set llm_base_url = 'https://api.example.test/v1',
+                    llm_model = 'test-model'
+                where user_id = ?
+                """,
+                (user["id"],),
+            )
+            conn.commit()
+        transport = ScriptedChatTransport(
+            [
+                {
+                    "schema_version": "1",
+                    "action": "write_file",
+                    "args": {
+                        "path": "index.html",
+                        "content": web_runs._default_result_html(),
+                    },
+                },
+                {
+                    "schema_version": "1",
+                    "action": "finish",
+                    "args": {"summary": "真实模型完成页面"},
+                },
+            ]
+        )
+        factory = WebLLMFactory(
+            db_path,
+            credentials,
+            load_llm_network_config(
+                {"SPECGATE_LLM_ALLOWED_HOSTS": "api.example.test"}
+            ),
+            transport_factory=lambda max_attempts: transport,
+        )
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build the result",
+            data_root=data_root,
+            llm_config_resolver=factory.freeze_config,
+        )
+
+        execute_run_once(
+            db_path,
+            data_root,
+            run["id"],
+            llm_factory=factory,
+            remaining_seconds=lambda: 30.0,
+        )
+
+        updated = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(updated["status"], "completed")
+        self.assertGreaterEqual(len(transport.contexts), 2)
+        self.assertIn("TASK_SPEC.md", transport.contexts[0])
+        self.assertIn("CHECKLIST.md", transport.contexts[0])
+        paths = web_run_paths(
+            project_paths(data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        self.assertTrue(paths.index_artifact.is_file())
+
+    def test_real_provider_failure_is_fail_closed_and_canary_is_not_persisted(self):
+        canary = "REAL_LLM_CANARY_7c92"
+        db_path, data_root, user, project = self.make_context()
+        credentials = WebCredentialService.from_key_value(
+            db_path,
+            WEB_CREDENTIAL_KEY,
+        )
+        credentials.put(user["id"], canary)
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                """
+                update user_settings
+                set llm_base_url = 'https://api.example.test/v1',
+                    llm_model = 'test-model'
+                where user_id = ?
+                """,
+                (user["id"],),
+            )
+            conn.commit()
+
+        class FailingTransport:
+            def post_json(self, *args, **kwargs):
+                del args, kwargs
+                error = LLMTransportError("llm_authentication_failed")
+                error.__cause__ = OSError(canary)
+                raise error
+
+        factory = WebLLMFactory(
+            db_path,
+            credentials,
+            load_llm_network_config(
+                {"SPECGATE_LLM_ALLOWED_HOSTS": "api.example.test"}
+            ),
+            transport_factory=lambda max_attempts: FailingTransport(),
+        )
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Build without falling back",
+            data_root=data_root,
+            llm_config_resolver=factory.freeze_config,
+        )
+
+        execute_run_once(
+            db_path,
+            data_root,
+            run["id"],
+            llm_factory=factory,
+            remaining_seconds=lambda: 30.0,
+        )
+
+        updated = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(updated["status"], "failed")
+        self.assertEqual(updated["error_message"], "llm_authentication_failed")
+        paths = web_run_paths(
+            project_paths(data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        self.assertFalse((paths.workspace / "index.html").exists())
+        self.assertFalse(paths.index_artifact.exists())
+        self.assertFalse(paths.zip_artifact.exists())
+        persisted_text = repr(updated)
+        for path in paths.root.rglob("*"):
+            if path.is_file():
+                try:
+                    persisted_text += path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue
+        self.assertNotIn(canary, persisted_text)
+
+    def test_real_llm_approval_resume_uses_frozen_endpoint(self):
+        db_path, data_root, user, first_project = self.make_context()
+        project = create_manual_project(
+            db_path,
+            data_root,
+            user["id"],
+            name="Existing Site",
+            spec_text="# Spec\nReplace the existing page.",
+            checklist_text="- Ship a complete offline HTML page.",
+            index_html="<!doctype html><html><head><title>Old</title></head><body><h1>Old</h1></body></html>",
+        )
+        credentials = WebCredentialService.from_key_value(
+            db_path,
+            WEB_CREDENTIAL_KEY,
+        )
+        credentials.put(user["id"], "SENTINEL-provider-key")
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                """
+                update user_settings
+                set llm_base_url = 'https://api.example.test/v1',
+                    llm_model = 'test-model'
+                where user_id = ?
+                """,
+                (user["id"],),
+            )
+            conn.commit()
+        transport = ScriptedChatTransport(
+            [
+                {
+                    "schema_version": "1",
+                    "action": "replace_file",
+                    "args": {
+                        "path": "index.html",
+                        "content": web_runs._default_result_html(),
+                    },
+                },
+                {
+                    "schema_version": "1",
+                    "action": "finish",
+                    "args": {"summary": "审批后完成"},
+                },
+            ]
+        )
+        factory = WebLLMFactory(
+            db_path,
+            credentials,
+            load_llm_network_config(
+                {
+                    "SPECGATE_LLM_ALLOWED_HOSTS": (
+                        "api.example.test,other.example.test"
+                    )
+                }
+            ),
+            transport_factory=lambda max_attempts: transport,
+        )
+        run = create_run(
+            db_path,
+            project["id"],
+            user["id"],
+            "Replace the result",
+            data_root=data_root,
+            llm_config_resolver=factory.freeze_config,
+        )
+        execute_run_once(
+            db_path,
+            data_root,
+            run["id"],
+            llm_factory=factory,
+            remaining_seconds=lambda: 30.0,
+        )
+        pending = get_run(db_path, user["id"], run["id"])
+        self.assertEqual(pending["status"], "needs_approval")
+        paths = web_run_paths(
+            project_paths(data_root, user["id"], project["id"]),
+            run["id"],
+        )
+        queue = ApprovalQueue.read(paths.approval_queue)
+        approval = queue.approvals[0]
+        queue.approve(approval.id, "2026-07-15T00:00:00+00:00").write(
+            paths.approval_queue
+        )
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                """
+                update user_settings
+                set llm_base_url = 'https://other.example.test/v1',
+                    llm_model = 'other-model'
+                where user_id = ?
+                """,
+                (user["id"],),
+            )
+            conn.commit()
+
+        updated = resume_run_once(
+            db_path,
+            data_root,
+            user["id"],
+            run["id"],
+            llm_factory=factory,
+            remaining_seconds=lambda: 30.0,
+        )
+
+        self.assertEqual(updated["status"], "completed")
+        self.assertEqual(
+            transport.endpoints,
+            [
+                "https://api.example.test/v1",
+                "https://api.example.test/v1",
+            ],
         )
 
     def test_execute_run_records_deadline_and_timeout_terminal_state(self):

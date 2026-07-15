@@ -4,6 +4,7 @@ import base64
 import binascii
 from dataclasses import dataclass, replace
 import hashlib
+import hmac
 import os
 from pathlib import Path
 
@@ -40,6 +41,14 @@ class CredentialDecryptionFailed(WebCredentialError):
 
 class CredentialRequiresReentry(WebCredentialError):
     code = "credential_requires_reentry"
+
+
+class CredentialMissing(WebCredentialError):
+    code = "credential_missing"
+
+
+class CredentialChanged(WebCredentialError):
+    code = "credential_changed"
 
 
 @dataclass(frozen=True)
@@ -153,6 +162,48 @@ class WebCredentialStatus:
     store_available: bool
 
 
+@dataclass(frozen=True)
+class CredentialSnapshot:
+    exists: bool
+    configured: bool
+    requires_reentry: bool
+    store_available: bool
+    fingerprint: str | None
+
+
+_FINGERPRINT_FIELDS = (
+    "provider",
+    "status",
+    "ciphertext",
+    "nonce",
+    "key_version",
+    "key_id",
+    "updated_at",
+)
+
+
+def _credential_fingerprint(row) -> str:
+    digest = hashlib.sha256(b"specgate:web-credential-fingerprint:v1")
+    for field in _FINGERPRINT_FIELDS:
+        value = row[field]
+        if value is None:
+            kind = b"n"
+            encoded = b""
+        elif isinstance(value, bytes):
+            kind = b"b"
+            encoded = value
+        else:
+            kind = b"s"
+            encoded = str(value).encode("utf-8")
+        name = field.encode("ascii")
+        digest.update(len(name).to_bytes(2, "big"))
+        digest.update(name)
+        digest.update(kind)
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return digest.hexdigest()
+
+
 class WebCredentialService:
     def __init__(
         self,
@@ -187,6 +238,9 @@ class WebCredentialService:
                 False,
                 self.cipher is not None,
             )
+        return self._status_from_row(row)
+
+    def _status_from_row(self, row) -> WebCredentialStatus:
         if row["status"] == "requires_reentry":
             return WebCredentialStatus(
                 False,
@@ -207,6 +261,31 @@ class WebCredentialService:
                 )
             return WebCredentialStatus(True, "encrypted", False, True)
         return WebCredentialStatus(False, "unavailable", False, False)
+
+    def snapshot(self, user_id: int, *, conn=None) -> CredentialSnapshot:
+        owned_connection = conn is None
+        active_connection = connect_db(self.db_path) if owned_connection else conn
+        try:
+            row = self._load_from_connection(active_connection, user_id)
+            if row is None:
+                return CredentialSnapshot(
+                    False,
+                    False,
+                    False,
+                    self.cipher is not None,
+                    None,
+                )
+            status = self._status_from_row(row)
+            return CredentialSnapshot(
+                True,
+                status.configured,
+                status.requires_reentry,
+                status.store_available,
+                _credential_fingerprint(row),
+            )
+        finally:
+            if owned_connection:
+                active_connection.close()
 
     def _require_cipher(self) -> WebCredentialCipher:
         if self.cipher is not None:
@@ -253,6 +332,18 @@ class WebCredentialService:
         row = self._load(user_id)
         if row is None:
             return None
+        return self._decrypt_row(user_id, row)
+
+    def get_matching(self, user_id: int, expected_fingerprint: str) -> str:
+        row = self._load(user_id)
+        if row is None:
+            raise CredentialMissing("credential is missing")
+        actual_fingerprint = _credential_fingerprint(row)
+        if not hmac.compare_digest(actual_fingerprint, expected_fingerprint):
+            raise CredentialChanged("credential has changed")
+        return self._decrypt_row(user_id, row)
+
+    def _decrypt_row(self, user_id: int, row) -> str:
         if row["status"] == "requires_reentry":
             raise CredentialRequiresReentry("credential requires re-entry")
         cipher = self._require_cipher()
@@ -269,16 +360,19 @@ class WebCredentialService:
         )
         return cipher.decrypt(user_id, WEB_PROVIDER, encrypted)
 
+    def _load_from_connection(self, conn, user_id: int):
+        return conn.execute(
+            """
+            select * from user_credentials
+            where user_id = ? and provider = ?
+            """,
+            (user_id, WEB_PROVIDER),
+        ).fetchone()
+
     def _load(self, user_id: int):
         conn = connect_db(self.db_path)
         try:
-            return conn.execute(
-                """
-                select * from user_credentials
-                where user_id = ? and provider = ?
-                """,
-                (user_id, WEB_PROVIDER),
-            ).fetchone()
+            return self._load_from_connection(conn, user_id)
         finally:
             conn.close()
 

@@ -857,3 +857,15 @@
 - 定向安全回归：`Ran 422 tests in 153.419s`、`OK (skipped=17)`。
 - 主线程审查补充远端控制 HTTP reason 与 `fp=None` 场景，测试先回显 reason 哨兵，再改为标准库状态原因并安全关闭可选响应流；最终全量回归：`Ran 846 tests in 216.617s`、`OK (skipped=27)`。新增跳过项均为 Windows 当前无符号链接权限的真实攻击测试，另有既有平台跳过。
 - 本阶段未访问真实 LLM 或外部模型网络，也未执行任何 Git 写操作。
+
+## 2026-07-15 Web 真实 LLM 接入
+
+- 分支：`feat-real-llm-web-integration`，基线 `main@8d30ca5`；用户负责 Git、commit、push 与 PR。
+- 产品决策：默认 MockLLM；完整 API key、Base URL、Model 只影响新 run；真实模式失败不降级。真实模型只生成严格 JSON Action，Harness 继续负责路径策略、HITL、Gate 与发布 SHA-256。
+- 安全边界：schema v5 冻结 `llm_config_json`；每次调用重查凭据 fingerprint；精确公网 HTTPS 白名单、DNS 固定 IP、TLS SNI/Host、禁止重定向/代理、有界重试和响应。
+- TDD：前端模型设置契约先因缺少字段、按钮、模式提示与连接测试函数而 RED；实现后 `tests.test_web_static` 33 项通过，Node 语法检查通过。
+- TDD：DNS 饱和测试先因 `PublicDNSResolver` 缺少 `max_pending` 而 RED；新增固定待处理容量后 `tests.test_llm_transport` 通过。resolver canary 首先出现在格式化异常链中；抑制底层 cause 后回归通过。
+- 安全回归：新增无真实 DNS/socket 守卫、响应读取中取消、真实 Provider 认证失败不降级且不落盘 canary。高风险组合 `Ran 318 tests in 115.002s`、`OK (skipped=3)`。
+- Task 12：材料契约首次出现 20 个预期失败，定位 schema v4、Web 仅 Mock、真实模型安全链和证据路径等过期事实；同步 SPEC、README、部署、walkthrough、证据矩阵与事实核对后，材料/工作流契约 9 项通过。
+- 最终验证：全量 `Ran 896 tests in 216.620s`、`OK (skipped=27)`；compileall、Node 语法、材料契约与 `git diff --check` 退出码均为 0。凭据扫描命中均为测试哨兵、攻击 fixture、历史计划示例或主密钥占位符。
+- 当前状态：Task 1–12 完成。全程未访问真实 Provider，也未执行 Git 写操作；远端 commit、PR、CI 与部署证据等待用户实际操作后补充。

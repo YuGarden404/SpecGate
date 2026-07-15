@@ -1,9 +1,10 @@
 import json
 from io import BytesIO
 import unittest
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 from specgate.llm import LLMProviderError, OpenAICompatibleLLM
+from specgate.llm_transport import LLMEndpointPolicy, LLMTransportError
 
 
 class FakeResponse:
@@ -30,7 +31,97 @@ class CapturingOpener:
         return FakeResponse({"choices": [{"message": {"content": '{"action":"finish"}'}}]})
 
 
+class FakeChatTransport:
+    def __init__(self, payload: bytes):
+        self.payload = payload
+        self.calls = []
+
+    def post_json(
+        self,
+        endpoint,
+        headers,
+        body,
+        *,
+        stop_check,
+        remaining_seconds,
+    ):
+        stop_check()
+        self.calls.append(
+            (endpoint, headers, json.loads(body.decode("utf-8")), remaining_seconds())
+        )
+        return self.payload
+
+
 class OpenAICompatibleLLMTests(unittest.TestCase):
+    def test_safe_transport_receives_strict_chat_completions_request(self):
+        endpoint = LLMEndpointPolicy.from_csv("api.example.test").normalize(
+            "https://api.example.test/v1"
+        )
+        transport = FakeChatTransport(
+            b'{"choices":[{"message":{"content":"{\\"action\\":\\"finish\\"}"}}]}'
+        )
+        llm = OpenAICompatibleLLM(
+            endpoint.base_url,
+            "SENTINEL-api-key",
+            "test-model",
+            endpoint=endpoint,
+            transport=transport,
+            stop_check=lambda: None,
+            remaining_seconds=lambda: 12.0,
+        )
+
+        text = llm.complete("context pack")
+
+        self.assertEqual(text, '{"action":"finish"}')
+        called_endpoint, headers, body, remaining = transport.calls[0]
+        self.assertEqual(called_endpoint, endpoint)
+        self.assertEqual(headers["Authorization"], "Bearer SENTINEL-api-key")
+        self.assertEqual(body["model"], "test-model")
+        self.assertEqual(body["temperature"], 0)
+        self.assertEqual(body["max_tokens"], 4096)
+        self.assertEqual(body["messages"][1], {"role": "user", "content": "context pack"})
+        self.assertEqual(remaining, 12.0)
+        self.assertNotIn("SENTINEL-api-key", repr(llm))
+
+    def test_safe_transport_and_invalid_envelopes_use_stable_errors(self):
+        endpoint = LLMEndpointPolicy.from_csv("api.example.test").normalize(
+            "https://api.example.test/v1"
+        )
+        invalid_payloads = (
+            b"\xff",
+            b"not-json",
+            b"{}",
+            b'{"choices":[]}',
+            b'{"choices":[{"message":{"content":7}}]}',
+        )
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                llm = OpenAICompatibleLLM(
+                    endpoint.base_url,
+                    "SENTINEL-api-key",
+                    "test-model",
+                    endpoint=endpoint,
+                    transport=FakeChatTransport(payload),
+                )
+                with self.assertRaises(LLMProviderError) as raised:
+                    llm.complete("context")
+                self.assertEqual(raised.exception.code, "llm_response_invalid")
+                self.assertNotIn("SENTINEL-api-key", str(raised.exception))
+
+        class FailingTransport:
+            def post_json(self, *args, **kwargs):
+                raise LLMTransportError("llm_rate_limited", retryable=True)
+
+        llm = OpenAICompatibleLLM(
+            endpoint.base_url,
+            "SENTINEL-api-key",
+            "test-model",
+            endpoint=endpoint,
+            transport=FailingTransport(),
+        )
+        with self.assertRaises(LLMProviderError) as raised:
+            llm.complete("context")
+        self.assertEqual(raised.exception.code, "llm_rate_limited")
     def test_sends_context_to_chat_completions_and_returns_message_content(self):
         opener = CapturingOpener()
         llm = OpenAICompatibleLLM(
@@ -126,6 +217,23 @@ class OpenAICompatibleLLMTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("timed out", message)
         self.assertNotIn("sk-test-secret", message)
+
+    def test_legacy_network_reason_is_not_reflected(self):
+        def unavailable(request, timeout):
+            raise URLError("REFLECTED_NETWORK_SECRET_5d31")
+
+        llm = OpenAICompatibleLLM(
+            base_url="https://api.example.test/v1",
+            api_key="sk-test-secret",
+            model="test-model",
+            opener=unavailable,
+        )
+
+        with self.assertRaises(LLMProviderError) as raised:
+            llm.complete("context pack")
+
+        self.assertEqual(raised.exception.code, "llm_provider_unavailable")
+        self.assertNotIn("REFLECTED_NETWORK_SECRET_5d31", str(raised.exception))
 
 
 if __name__ == "__main__":
