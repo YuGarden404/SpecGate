@@ -635,11 +635,11 @@ git add -- docs/FINAL_EVIDENCE_MATRIX.md docs/FINAL_SUBMISSION_CHECKLIST.md PLAN
 git commit -m "docs: freeze verified final compliance snapshot"
 ```
 
-- [ ] **步骤 10：执行两阶段审查**
+- [x] **步骤 10：执行两阶段审查**
 
 先运行规格合规审查，逐项对照设计文档第 2、3、5 至 13 节；再运行文档质量审查，检查事实冲突、模糊状态、失效链接、格式和敏感信息。严重（Critical）或重要（Important）问题必须修复并重新执行相关测试。
 
-- [ ] **步骤 11：确认分支工作区干净**
+- [x] **步骤 11：确认分支工作区干净**
 
 ```powershell
 git status --short
