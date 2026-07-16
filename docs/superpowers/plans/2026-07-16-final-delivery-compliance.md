@@ -24,15 +24,22 @@
 - `README.md`：第三方许可证表、静态 Pages 与交互式 Web 后端边界。
 - `docs/evidence/github-actions-pr20-final.png`：由用户提供的 PR #20 合并后 CI/Pages 截图。
 
+## 执行环境前提
+
+- 任务 1 至任务 7 必须在本地独立 worktree 中执行，并具备文件系统、shell、Python、Node.js 与 Git 能力。
+- Gemini Web 只用于隔离上下文后的计划审查和补丁草案验证，不能被视为已修改文件、已运行测试或已完成提交。
+- 为保持冷启动边界，不再向 Gemini Web 上传计划指定范围之外的仓库文件；它所缺少的当前文件上下文本身就是本次验证结果的一部分。
+- 实际文件修改、TDD 红绿验证、提交和审查由本地 Subagent 在实现 worktree 中完成。
+
 ## 执行前门禁：全新 Gemini Web 冷启动
 
 此门禁必须在任务 1 以外的材料实现开始前完成。它是最终合规阶段的补充验证，不追溯性替代 2026-07-08 的早期计划审查。
 
-- [ ] **步骤 1：调用 worktree Skill**
+- [x] **步骤 1：调用 worktree Skill**
 
 调用 `superpowers:using-git-worktrees`，从包含本计划的 commit 创建独立冷启动 worktree。冷启动 worktree 不导入当前对话、memory 或未提交改动。
 
-- [ ] **步骤 2：启动完全独立的 Gemini Web 会话**
+- [x] **步骤 2：启动完全独立的 Gemini Web 会话**
 
 Claude Code 因无官方账号且无法连接 Anthropic 服务而退出；OpenCode 官方 Windows x64 二进制在本机无法加载；Gemini CLI 因用户账户没有 Gemini Code Assist 权限而认证失败。用户确认改用全新 Gemini Web 会话，并且只上传以下两个文件：
 
@@ -61,13 +68,13 @@ docs/superpowers/plans/2026-07-16-final-delivery-compliance.md。
 不要执行 git push、创建 PR 或修改远端状态。
 ```
 
-- [ ] **步骤 3：保留未经改写的结果**
+- [x] **步骤 3：保留未经改写的结果**
 
 用户把 Gemini Web 的问题、最终报告、补丁草案、阻塞说明和耗时原样提供给主线程。主线程不得先行润色或把失败改写为成功。Claude Code、OpenCode 和 Gemini CLI 的环境阻塞也作为 Agent 选择过程如实记录。
 
-- [ ] **步骤 4：判断计划是否需要修订**
+- [x] **步骤 4：判断计划是否需要修订**
 
-若 Gemini Web 因计划歧义暂停，先修订本计划并提交该修订，再开始任务 1。若 Gemini Web 可以输出补丁草案，也要记录它无法直接修改 worktree 和运行测试的能力边界，以及其与预期不同的理解和产出差异。
+Gemini Web 在任务 2 的步骤 1/3 与任务 3 的步骤 1/4 暂停，原因是缺少七个目标文件的当前完整内容。它明确列出缺失文件，给出基于计划的骨架补丁，并声明没有修改文件或运行测试；总耗时约 3 分钟。该结果表明计划原先没有明确区分 Web-only 审查环境与本地实现环境，因此本次修订增加“执行环境前提”，保留不再上传额外文件的隔离边界，并将实际实现交给本地 Subagent。
 
 ### 任务 1：记录补充冷启动证据
 
@@ -75,8 +82,10 @@ docs/superpowers/plans/2026-07-16-final-delivery-compliance.md。
 - 新建：`docs/superpowers/audits/2026-07-16-final-compliance-cold-start.md`
 - 修改：`tests/test_final_evidence.py`
 - 修改：`SPEC_PROCESS.md`
+- 修改：`SPEC.md`
 - 修改：`PLAN.md`
 - 修改：`AGENT_LOG.md`
+- 修改：`docs/superpowers/plans/2026-07-16-final-delivery-compliance.md`
 
 - [ ] **步骤 1：编写失败的证据契约测试**
 
