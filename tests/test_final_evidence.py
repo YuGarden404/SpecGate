@@ -69,8 +69,32 @@ class FinalEvidenceTests(unittest.TestCase):
         ):
             with self.subTest(heading=heading):
                 self.assertIn(heading, audit)
-        self.assertIn("最终合规阶段的补充冷启动验证", audit)
-        self.assertIn("不替代 2026-07-08", audit)
+        for phrase in (
+            "最终合规阶段的补充冷启动验证",
+            "不替代 2026-07-08",
+            "Gemini Web",
+            "任务 2",
+            "任务 3",
+            "任务 2 的步骤 1 和步骤 3",
+            "任务 3 的步骤 1 和步骤 4",
+            "没有修改任何文件",
+            "没有运行任何测试",
+            "执行环境前提",
+            "约 3 分钟",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, audit)
+        for requested_file in (
+            "tests/test_final_evidence.py",
+            "docs/FINAL_EVIDENCE_MATRIX.md",
+            "docs/FINAL_SUBMISSION_CHECKLIST.md",
+            "docs/REFLECTION_FACT_CHECK.md",
+            "PLAN.md",
+            "AGENT_LOG.md",
+            "README.md",
+        ):
+            with self.subTest(requested_file=requested_file):
+                self.assertIn(f"`{requested_file}`", audit)
 
     def test_required_evidence_artifacts_exist_and_pngs_are_readable(self):
         self.assertTrue(MATRIX.is_file())
