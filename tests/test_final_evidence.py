@@ -458,6 +458,21 @@ class FinalEvidenceTests(unittest.TestCase):
                 self.assertIn(phrase, combined)
         self.assertNotIn("支持 `.env` fallback", combined)
 
+    def test_submission_docs_do_not_claim_public_backend_or_registry(self):
+        checklist = read_text("docs/FINAL_SUBMISSION_CHECKLIST.md")
+        matrix = read_text("docs/FINAL_EVIDENCE_MATRIX.md")
+        combined = "\n".join((checklist, matrix))
+
+        for phrase in (
+            "公开静态评审入口",
+            "公网交互式 Web 后端",
+            "公开容器 registry",
+            "待完成",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, combined)
+        self.assertNotIn("| 公开 WebUI URL | 已完成 |", checklist)
+
     def test_real_llm_delivery_facts_are_current_and_do_not_require_network(self):
         readme = read_text("README.md")
         deployment = read_text("docs/DEPLOYMENT.md")

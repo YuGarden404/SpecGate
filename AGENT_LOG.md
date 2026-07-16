@@ -901,3 +901,12 @@
 - 决策同步：当前 WebUI 早期实现使用项目自定义的轻量界面样式，未采用 Open Design 设计系统或 skill；原因是交互式 Web 产品面在最初 CLI 与静态报告范围之后加入，当时没有重新执行前端设计系统选型。项目如实记录课程推荐流程偏离，不追溯性声称已经采用 Open Design。
 - 变更边界：本任务只同步测试与事实材料，不借最终材料修复重做 UI，未修改 `src/specgate/`、任何 UI 生产实现、产品功能规范或部署状态。
 - 人工确认范围：仅核对跨文档措辞是否一致、是否如实保留历史偏离以及是否没有生产代码变化；本任务不把该核对表述为重新完成前端选型、UI 重构或视觉验收。后续若重构 UI，将先选择并记录设计系统与 skill。
+
+## 2026-07-16 最终交付合规修复：任务 5 交付状态边界
+
+- Agent 与工作区：由本地 Codex Subagent 在独立 worktree `final-delivery-implementation` 实施，起点为 `63804102d9c11448941ed967756d724263dcf89f`；未修改主工作区或 `src/specgate/`。
+- TDD RED：先新增 `test_submission_docs_do_not_claim_public_backend_or_registry`，指定聚焦测试结果为 `Ran 1 test in 0.006s`、`FAILED (failures=5)`；失败原因是提交材料缺少公开静态入口、公网交互后端、公开 registry 与待完成状态的拆分，且仍包含 `公开 WebUI URL | 已完成`。
+- TDD GREEN：最小修正文档边界后，最新聚焦测试结果为 `Ran 1 test in 0.001s`、`OK`；完整 `tests.test_final_evidence` 结果为 `Ran 16 tests in 0.014s`、`OK`，`git diff --check` 退出码为 0，只有 Windows LF→CRLF 提示，没有 whitespace error。
+- 状态拆分：公开静态评审入口、本地交互式 WebUI、Docker 本地与 CI 构建标记为已完成；公网交互式 Web 后端和公开容器 registry 标记为待完成。README 与 SPEC 明确发布镜像不等于部署服务。
+- 部署与发布边界：本任务未部署公网服务、未发布容器镜像，也未把 `Dockerfile`、CI smoke 或 GitHub Pages 当作相关完成证据。
+- 人工确认范围：PR #20 合并后的当前远端 CI、Pages 与新截图继续保留给任务 6 人工门禁；本任务只核对本地材料的状态一致性，不声称已完成远端核验。

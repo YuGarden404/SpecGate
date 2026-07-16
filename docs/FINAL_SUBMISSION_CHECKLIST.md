@@ -42,9 +42,11 @@ MVP 范围：
 | GitHub Actions | 已完成 | `.github/workflows/ci.yml`、`.github/workflows/pages.yml` |
 | 最终证据矩阵 | 已完成 | `docs/FINAL_EVIDENCE_MATRIX.md` |
 | CI / Pages 截图 | 已完成 | `docs/evidence/` |
-| Docker 分发 | 已完成 | `Dockerfile` |
-| 静态 Web 报告 | 已完成 | `examples/knowledge_nav/reports/latest/index.html` |
-| 公开 WebUI URL | 已完成 | `https://yugarden404.github.io/SpecGate/` |
+| 公开静态评审入口 | 已完成 | GitHub Pages 首页、demo、报告 |
+| 本地交互式 WebUI | 已完成 | Docker/本地启动与确定性测试 |
+| 公网交互式 Web 后端 | 待完成 | 后续独立部署阶段 |
+| Docker 本地与 CI 构建 | 已完成 | `Dockerfile` 与 CI smoke |
+| 公开容器 registry | 待完成 | 后续 GHCR 分发阶段 |
 | AgentOS / Superpowers 对齐 | 已完成 | `skills/specgate-static-html-harness/SKILL.md`、`docs/AI4SE_Lab_9_12_Alignment.md` |
 | Lab 11 Hook sample | 已完成 | `hooks/pre-commit.sample`、`tests/test_hook_sample.py` |
 
@@ -71,7 +73,7 @@ MVP 范围：
 2. 阅读 `SPEC.md` 前 5 节，确认项目定位和 MVP 边界。
 3. 阅读 `docs/PROJECT_WALKTHROUGH.md`，按演示脚本理解一次完整运行。
 4. 打开公开页面：
-   - WebUI 首页：`https://yugarden404.github.io/SpecGate/`
+   - 静态评审首页：`https://yugarden404.github.io/SpecGate/`
    - demo 页面：`https://yugarden404.github.io/SpecGate/demo/`
    - 运行报告：`https://yugarden404.github.io/SpecGate/report/`
 5. 查看测试与 CI：
@@ -133,10 +135,10 @@ docker run --rm specgate:local
 - 有可运行的 harness。
 - 有可复现的 mock LLM 闭环。
 - 有单元测试和 CI。
-- 有 Dockerfile。
-- 有交互式 Web 产品壳、静态 Pages 评审入口和公开 URL。
+- 有 Dockerfile、本地交互式 WebUI 和确定性测试；这只证明本地与 CI 构建路径已完成。
+- 有公开静态 Pages 评审入口；公网交互式 Web 后端与公开容器 registry 待后续独立阶段完成。
 - 有过程文档、计划、反思和日志。
 - 有上下文、安全、工具三条工程主线。
 - 有 Lab 10 Skill 与 Lab 9-12 取舍说明。
 
-后续可选增强是更多 Provider 的人工兼容性验证和 AgentPack 草案；真实 LLM Web 接入已经完成，但课程自动验收仍使用 Mock/Fake/Stub，`REFLECTION.md` 继续由学生本人维护。
+后续阶段包括公网交互式 Web 后端部署、GHCR 镜像分发、更多 Provider 的人工兼容性验证和 AgentPack 草案；发布镜像不等于部署服务。当前合规阶段不部署、不发布，PR #20 合并后的 CI/Pages 与新截图仍保留任务 6 人工门禁；真实 LLM Web 接入代码已经完成，但课程自动验收仍使用 Mock/Fake/Stub，`REFLECTION.md` 继续由学生本人维护。

@@ -425,7 +425,7 @@ git commit -m "docs: record Open Design process deviation"
 - 修改：`README.md`
 - 修改：`SPEC.md`
 
-- [ ] **步骤 1：编写失败的边界测试**
+- [x] **步骤 1：编写失败的边界测试**
 
 ```python
 def test_submission_docs_do_not_claim_public_backend_or_registry(self):
@@ -439,7 +439,7 @@ def test_submission_docs_do_not_claim_public_backend_or_registry(self):
     self.assertNotIn("| 公开 WebUI URL | 已完成 |", checklist)
 ```
 
-- [ ] **步骤 2：运行测试并确认红灯**
+- [x] **步骤 2：运行测试并确认红灯**
 
 运行：
 
@@ -450,7 +450,7 @@ python -m unittest tests.test_final_evidence.FinalEvidenceTests.test_submission_
 
 预期：测试失败，因为当前清单把静态 Pages URL 标记为已完成的公开 WebUI，并把 Dockerfile 标记为已完成的分发。
 
-- [ ] **步骤 3：修正状态模型**
+- [x] **步骤 3：修正状态模型**
 
 在证据矩阵和提交清单中拆分：
 
@@ -464,7 +464,7 @@ python -m unittest tests.test_final_evidence.FinalEvidenceTests.test_submission_
 
 README 和 SPEC 保留已有静态/交互式边界，并明确“发布镜像不等于部署服务”。
 
-- [ ] **步骤 4：运行聚焦测试并确认绿灯**
+- [x] **步骤 4：运行聚焦测试并确认绿灯**
 
 运行：
 
@@ -475,7 +475,7 @@ python -m unittest tests.test_final_evidence
 
 预期：测试通过。
 
-- [ ] **步骤 5：提交修正后的交付状态**
+- [x] **步骤 5：提交修正后的交付状态**
 
 ```powershell
 git add -- tests/test_final_evidence.py docs/FINAL_EVIDENCE_MATRIX.md docs/FINAL_SUBMISSION_CHECKLIST.md README.md SPEC.md
