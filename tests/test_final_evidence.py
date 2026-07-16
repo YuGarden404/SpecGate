@@ -55,6 +55,41 @@ def read_text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def markdown_table_in_section(relative: str, heading: str) -> tuple[tuple[str, ...], ...]:
+    text = read_text(relative)
+    heading_matches = list(re.finditer(rf"^{re.escape(heading)}\s*$", text, re.MULTILINE))
+    if len(heading_matches) != 1:
+        raise AssertionError(
+            f"expected one {heading!r} section in {relative}, found {len(heading_matches)}"
+        )
+
+    section_tail = text[heading_matches[0].end() :]
+    next_heading = re.search(r"^##\s+", section_tail, re.MULTILINE)
+    section = section_tail[: next_heading.start()] if next_heading else section_tail
+
+    table_blocks: list[list[str]] = []
+    current_block: list[str] = []
+    for raw_line in section.splitlines():
+        line = raw_line.strip()
+        if line.startswith("|") and line.endswith("|"):
+            current_block.append(line)
+        elif current_block:
+            table_blocks.append(current_block)
+            current_block = []
+    if current_block:
+        table_blocks.append(current_block)
+    if len(table_blocks) != 1:
+        raise AssertionError(
+            f"expected one Markdown table in {relative} {heading!r}, "
+            f"found {len(table_blocks)}"
+        )
+
+    return tuple(
+        tuple(cell.strip() for cell in line[1:-1].split("|"))
+        for line in table_blocks[0]
+    )
+
+
 def requirement_name(requirement: str) -> str:
     name = re.split(r"[<>=!~\[; ]", requirement, maxsplit=1)[0]
     return re.sub(r"[-_.]+", "-", name).lower()
@@ -459,19 +494,64 @@ class FinalEvidenceTests(unittest.TestCase):
         self.assertNotIn("支持 `.env` fallback", combined)
 
     def test_submission_docs_do_not_claim_public_backend_or_registry(self):
-        checklist = read_text("docs/FINAL_SUBMISSION_CHECKLIST.md")
-        matrix = read_text("docs/FINAL_EVIDENCE_MATRIX.md")
-        combined = "\n".join((checklist, matrix))
+        expected_delivery_statuses = {
+            "公开静态评审入口": "已完成",
+            "本地交互式 WebUI": "已完成",
+            "公网交互式 Web 后端": "待完成",
+            "Docker 本地与 CI 构建": "已完成",
+            "公开容器 registry": "待完成",
+        }
+        tables = {
+            "checklist": (
+                markdown_table_in_section(
+                    "docs/FINAL_SUBMISSION_CHECKLIST.md",
+                    "## 2. 课程交付物对照",
+                ),
+                ("要求", "状态", "对应文件或证据"),
+            ),
+            "matrix": (
+                markdown_table_in_section(
+                    "docs/FINAL_EVIDENCE_MATRIX.md",
+                    "## 3. 课程交付物",
+                ),
+                ("要求", "状态", "仓库证据", "复现方式"),
+            ),
+        }
 
-        for phrase in (
-            "公开静态评审入口",
-            "公网交互式 Web 后端",
-            "公开容器 registry",
-            "待完成",
-        ):
-            with self.subTest(phrase=phrase):
-                self.assertIn(phrase, combined)
-        self.assertNotIn("| 公开 WebUI URL | 已完成 |", checklist)
+        parsed_rows = {}
+        for document, (table, expected_header) in tables.items():
+            with self.subTest(document=document, boundary="header"):
+                self.assertEqual(table[0], expected_header)
+            with self.subTest(document=document, boundary="separator"):
+                self.assertEqual(len(table[1]), len(expected_header))
+                self.assertTrue(all(re.fullmatch(r":?-{3,}:?", cell) for cell in table[1]))
+
+            rows = table[2:]
+            for row_number, row in enumerate(rows, start=1):
+                with self.subTest(
+                    document=document,
+                    boundary="column_count",
+                    row=row_number,
+                ):
+                    self.assertEqual(len(row), len(expected_header))
+
+            names = [row[0] for row in rows]
+            for name, expected_status in expected_delivery_statuses.items():
+                with self.subTest(document=document, requirement=name):
+                    self.assertEqual(names.count(name), 1)
+                    self.assertEqual(next(row[1] for row in rows if row[0] == name), expected_status)
+            for stale_name in ("公开 WebUI URL", "Docker 分发"):
+                with self.subTest(document=document, stale_name=stale_name):
+                    self.assertNotIn(stale_name, names)
+            parsed_rows[document] = {row[0]: row[1] for row in rows}
+
+        expected_screenshot_statuses = {
+            "历史 CI/Pages 截图（截至 PR #15/#17）": "已完成",
+            "PR #20 后 CI/Pages 与新截图": "待核验",
+        }
+        for name, expected_status in expected_screenshot_statuses.items():
+            with self.subTest(document="checklist", screenshot=name):
+                self.assertEqual(parsed_rows["checklist"].get(name), expected_status)
 
     def test_real_llm_delivery_facts_are_current_and_do_not_require_network(self):
         readme = read_text("README.md")

@@ -41,7 +41,8 @@ MVP 范围：
 | GitLab CI 文件 | 已完成 | `.gitlab-ci.yml` 包含 `unit-test` job |
 | GitHub Actions | 已完成 | `.github/workflows/ci.yml`、`.github/workflows/pages.yml` |
 | 最终证据矩阵 | 已完成 | `docs/FINAL_EVIDENCE_MATRIX.md` |
-| CI / Pages 截图 | 已完成 | `docs/evidence/` |
+| 历史 CI/Pages 截图（截至 PR #15/#17） | 已完成 | `docs/evidence/` 中的历史截图与第 5 节记录 |
+| PR #20 后 CI/Pages 与新截图 | 待核验 | 任务 6 人工远端核对与新截图 |
 | 公开静态评审入口 | 已完成 | GitHub Pages 首页、demo、报告 |
 | 本地交互式 WebUI | 已完成 | Docker/本地启动与确定性测试 |
 | 公网交互式 Web 后端 | 待完成 | 后续独立部署阶段 |
