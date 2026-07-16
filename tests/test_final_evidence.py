@@ -55,13 +55,29 @@ def read_text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def requirement_name(requirement: str) -> str:
+    name = re.split(r"[<>=!~\[; ]", requirement, maxsplit=1)[0]
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
 def direct_dependency_names() -> set[str]:
     data = tomllib.loads(read_text("pyproject.toml"))
-    names = set()
+    return {
+        requirement_name(requirement)
+        for requirement in data["project"]["dependencies"]
+    }
+
+
+def direct_dependency_versions() -> dict[str, str]:
+    data = tomllib.loads(read_text("pyproject.toml"))
+    versions = {}
     for requirement in data["project"]["dependencies"]:
-        name = re.split(r"[<>=!~\[; ]", requirement, maxsplit=1)[0]
-        names.add(name.lower().replace("_", "-"))
-    return names
+        raw_name = re.split(r"[<>=!~\[; ]", requirement, maxsplit=1)[0]
+        constraint = requirement[len(raw_name) :].split(";", maxsplit=1)[0].strip()
+        if constraint.startswith("["):
+            constraint = constraint.split("]", maxsplit=1)[1].strip()
+        versions[requirement_name(requirement)] = constraint
+    return versions
 
 
 class FinalEvidenceTests(unittest.TestCase):
@@ -299,12 +315,96 @@ class FinalEvidenceTests(unittest.TestCase):
                 self.assertIn(heading, readme)
         self.assertIn("docs/FINAL_EVIDENCE_MATRIX.md", readme)
 
+    def test_requirement_name_normalizes_supported_requirement_forms(self):
+        cases = (
+            (
+                "Demo.Pkg[crypto]>=1; python_version >= '3.11'",
+                "demo-pkg",
+            ),
+            ("Demo_Pkg @ https://example.invalid/demo_pkg-1.whl", "demo-pkg"),
+            ("Demo__Pkg---Extra>=1", "demo-pkg-extra"),
+        )
+        for requirement, expected in cases:
+            with self.subTest(requirement=requirement):
+                self.assertEqual(requirement_name(requirement), expected)
+
     def test_readme_lists_every_direct_dependency_license(self):
         readme = read_text("README.md")
-        self.assertIn("## 第三方依赖与许可证", readme)
-        for dependency in direct_dependency_names():
-            with self.subTest(dependency=dependency):
-                self.assertIn(f"| `{dependency}` |", readme)
+        heading = "## 第三方依赖与许可证"
+        self.assertIn(heading, readme)
+        section = readme.split(heading, maxsplit=1)[1].split("\n## ", maxsplit=1)[0]
+        table_lines = [
+            line.strip()
+            for line in section.splitlines()
+            if line.strip().startswith("|")
+        ]
+        self.assertGreaterEqual(len(table_lines), 2)
+
+        def cells(line: str) -> tuple[str, ...]:
+            return tuple(cell.strip() for cell in line.strip("|").split("|"))
+
+        self.assertEqual(
+            cells(table_lines[0]),
+            ("依赖", "版本范围", "用途", "许可证", "官方项目"),
+        )
+        self.assertEqual(cells(table_lines[1]), ("---",) * 5)
+
+        rows = []
+        for line in table_lines[2:]:
+            row = cells(line)
+            with self.subTest(line=line, boundary="table shape"):
+                self.assertEqual(len(row), 5)
+                self.assertTrue(all(row), "dependency table cells must be non-empty")
+            if len(row) == 5 and all(row):
+                rows.append(row)
+
+        parsed_rows = [
+            (
+                requirement_name(dependency.strip("`")),
+                version.strip("`"),
+                purpose,
+                license_name,
+                url,
+            )
+            for dependency, version, purpose, license_name, url in rows
+        ]
+        dependency_names = [row[0] for row in parsed_rows]
+        self.assertEqual(
+            len(dependency_names),
+            len(set(dependency_names)),
+            "dependency table contains duplicate names",
+        )
+
+        expected_names = direct_dependency_names()
+        expected_versions = direct_dependency_versions()
+        self.assertEqual(set(expected_versions), expected_names)
+        self.assertEqual(set(dependency_names), expected_names)
+        rows_by_dependency = {row[0]: row[1:] for row in parsed_rows}
+        expected_metadata = {
+            "cryptography": (
+                "Apache-2.0 OR BSD-3-Clause",
+                "https://github.com/pyca/cryptography",
+            ),
+            "fastapi": ("MIT", "https://github.com/fastapi/fastapi"),
+            "httpx": ("BSD-3-Clause", "https://github.com/encode/httpx"),
+            "keyring": ("MIT", "https://github.com/jaraco/keyring"),
+            "python-multipart": (
+                "Apache-2.0",
+                "https://github.com/Kludex/python-multipart",
+            ),
+            "uvicorn": (
+                "BSD-3-Clause",
+                "https://github.com/Kludex/uvicorn",
+            ),
+        }
+        self.assertEqual(set(expected_metadata), set(expected_versions))
+        for dependency, expected_version in expected_versions.items():
+            with self.subTest(dependency=dependency, boundary="metadata"):
+                version, purpose, license_name, url = rows_by_dependency[dependency]
+                self.assertEqual(version, expected_version)
+                self.assertTrue(purpose)
+                self.assertEqual(license_name, expected_metadata[dependency][0])
+                self.assertEqual(url, expected_metadata[dependency][1])
 
     def test_spec_describes_current_credentials_runtime_and_config(self):
         spec = read_text("SPEC.md")
