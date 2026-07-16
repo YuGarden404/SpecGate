@@ -406,6 +406,12 @@ class FinalEvidenceTests(unittest.TestCase):
                 self.assertEqual(license_name, expected_metadata[dependency][0])
                 self.assertEqual(url, expected_metadata[dependency][1])
 
+    def test_spec_records_the_actual_open_design_decision(self):
+        spec = read_text("SPEC.md")
+        self.assertIn("Open Design", spec)
+        self.assertIn("未采用", spec)
+        self.assertIn("不追溯性声称", spec)
+
     def test_spec_describes_current_credentials_runtime_and_config(self):
         spec = read_text("SPEC.md")
         for phrase in (

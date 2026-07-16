@@ -361,7 +361,7 @@ git commit -m "docs: document third-party dependency licenses"
 - 修改：`README.md`
 - 修改：`AGENT_LOG.md`
 
-- [ ] **步骤 1：编写失败的 Open Design 契约测试**
+- [x] **步骤 1：编写失败的 Open Design 契约测试**
 
 ```python
 def test_spec_records_the_actual_open_design_decision(self):
@@ -371,7 +371,7 @@ def test_spec_records_the_actual_open_design_decision(self):
     self.assertIn("不追溯性声称", spec)
 ```
 
-- [ ] **步骤 2：运行测试并确认红灯**
+- [x] **步骤 2：运行测试并确认红灯**
 
 运行：
 
@@ -382,7 +382,7 @@ python -m unittest tests.test_final_evidence.FinalEvidenceTests.test_spec_record
 
 预期：测试失败，因为 SPEC 尚未说明 Open Design。
 
-- [ ] **步骤 3：增加明确的偏离决策**
+- [x] **步骤 3：增加明确的偏离决策**
 
 在 `SPEC.md` 技术选型中增加：
 
@@ -398,7 +398,7 @@ python -m unittest tests.test_final_evidence.FinalEvidenceTests.test_spec_record
 
 在 README 已知限制和 `AGENT_LOG.md` 本阶段记录中引用同一事实，避免只有 SPEC 单点声明。
 
-- [ ] **步骤 4：运行聚焦测试并确认绿灯**
+- [x] **步骤 4：运行聚焦测试并确认绿灯**
 
 运行：
 
@@ -409,7 +409,7 @@ python -m unittest tests.test_final_evidence
 
 预期：测试通过。
 
-- [ ] **步骤 5：提交 Open Design 决策记录**
+- [x] **步骤 5：提交 Open Design 决策记录**
 
 ```powershell
 git add -- tests/test_final_evidence.py SPEC.md README.md AGENT_LOG.md

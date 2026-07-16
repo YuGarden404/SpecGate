@@ -892,3 +892,12 @@
 - 人工/远端边界：本任务只核对本地 Git 历史中 PR #18 至 PR #20 的功能 commit、merge commit 与 PR 编号；未打开或修改远端 PR，未核对 PR #20 合并后 CI/Pages，未生成或伪造新截图，这些项目继续标记为待人工核对。
 - 质量审查测试加固：新契约在正确材料上直接通过，因此执行可控 mutation：临时将第 5 节 PR #20 同行 merge SHA 从 `c39d101` 改为 `c39d102`。精确行契约因期望元组计数为 0 而失败（`Ran 1 test`、`FAILED (failures=1)`）；随即恢复 `c39d101` 后同一测试通过，错误 mutation 未进入提交。
 - 质量审查验证：PR 表格精确行、快照语义和跨材料一致性 3 项测试结果为 `Ran 3 tests in 0.002s`、`OK`；完整 `tests.test_final_evidence` 结果为 `Ran 12 tests in 0.009s`、`OK`，`git diff --check` 退出码为 0。
+
+## 2026-07-16 最终交付合规修复：任务 4 Open Design 流程偏离
+
+- Agent 与工作区：由本地 Codex Subagent 在独立 worktree `final-delivery-implementation` 实施，起点为 `01cae8ce8ee3b0578bf74b4ef90354dc9a23140c`；未修改主工作区。
+- TDD RED：先新增 `test_spec_records_the_actual_open_design_decision`，指定聚焦测试结果为 `Ran 1 test in 0.001s`、`FAILED (failures=1)`；失败原因为 `SPEC.md` 尚不包含 `Open Design`，符合预期。
+- TDD GREEN：在 `SPEC.md` 最小增加真实流程偏离决策并同步 README 后，聚焦测试结果为 `Ran 1 test in 0.000s`、`OK`；完整 `tests.test_final_evidence` 结果为 `Ran 15 tests in 0.012s`、`OK`。
+- 决策同步：当前 WebUI 早期实现使用项目自定义的轻量界面样式，未采用 Open Design 设计系统或 skill；原因是交互式 Web 产品面在最初 CLI 与静态报告范围之后加入，当时没有重新执行前端设计系统选型。项目如实记录课程推荐流程偏离，不追溯性声称已经采用 Open Design。
+- 变更边界：本任务只同步测试与事实材料，不借最终材料修复重做 UI，未修改 `src/specgate/`、任何 UI 生产实现、产品功能规范或部署状态。
+- 人工确认范围：仅核对跨文档措辞是否一致、是否如实保留历史偏离以及是否没有生产代码变化；本任务不把该核对表述为重新完成前端选型、UI 重构或视觉验收。后续若重构 UI，将先选择并记录设计系统与 skill。

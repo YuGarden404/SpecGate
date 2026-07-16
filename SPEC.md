@@ -461,6 +461,10 @@ GitHub Pages 发布静态首页、知识图谱 demo 和运行报告，README 提
 - 分发：Docker。
 - 部署：GitHub Pages 或 GitLab Pages 展示静态报告。
 
+### Open Design 决策
+
+当前 WebUI 早期实现使用项目自定义的轻量界面样式，未采用 Open Design 设计系统或 skill。原因是最初范围是 CLI 与静态报告；交互式 Web 产品面在后续阶段加入，当时没有重新执行前端设计系统选型。这是对课程推荐流程的真实偏离；项目不追溯性声称已经使用 Open Design。本阶段只记录偏离和影响，不借最终材料修复重做 UI，也不改变产品功能规范或部署状态。若后续 UI 重构，将先选择并记录设计系统与 skill。
+
 ## 11. 验收标准
 
 MVP 完成时必须满足：

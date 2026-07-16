@@ -472,6 +472,7 @@ python -m unittest discover -s tests -v
 - MVP 不做 Playwright。
 - MVP 只处理静态单页 HTML 任务。
 - WebUI 通过轮询展示 run 状态，但生成内容仍限定为静态单页 HTML 和可审计报告，不执行同源模型生成页面。
+- 当前 WebUI 功能范围与运行方式不变；其早期界面采用项目自定义的轻量样式，未采用 Open Design 设计系统或 skill。这是已记录的课程推荐流程偏离，本阶段不借最终材料重做 UI。
 
 ## 第三方依赖与许可证
 
