@@ -555,7 +555,7 @@ git commit -m "docs: add current PR and CI attribution evidence"
 - 修改：`PLAN.md`
 - 修改：`AGENT_LOG.md`
 
-- [ ] **步骤 1：运行文档契约测试**
+- [x] **步骤 1：运行文档契约测试**
 
 ```powershell
 $env:PYTHONPATH="src"
@@ -564,7 +564,7 @@ python -m unittest tests.test_final_evidence tests.test_workflows
 
 预期：测试通过且没有错误。
 
-- [ ] **步骤 2：运行六项确定性机制演示**
+- [x] **步骤 2：运行六项确定性机制演示**
 
 ```powershell
 $env:PYTHONPATH="src"
@@ -573,7 +573,7 @@ python -m unittest tests.test_runner.RunnerTests.test_guardrail_block_is_recorde
 
 预期：输出 `Ran 6 tests` 和 `OK`。
 
-- [ ] **步骤 3：运行完整测试套件**
+- [x] **步骤 3：运行完整测试套件**
 
 ```powershell
 $env:PYTHONPATH="src"
@@ -582,7 +582,7 @@ python -m unittest discover -s tests
 
 预期：退出码为 0，并输出 `OK`。记录本次运行的准确测试数量、耗时和跳过数量。
 
-- [ ] **步骤 4：运行语法与空白检查**
+- [x] **步骤 4：运行语法与空白检查**
 
 ```powershell
 python -m compileall -q src tests
@@ -592,7 +592,7 @@ git diff --check
 
 预期：所有命令退出码均为 0，且没有错误输出。
 
-- [ ] **步骤 5：运行凭据与历史检查**
+- [x] **步骤 5：运行凭据与历史检查**
 
 ```powershell
 git check-ignore -v .env
@@ -602,7 +602,7 @@ git grep -n -I -E "(sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,})
 
 预期：`.env` 已被忽略，`.env` 提交历史为空，凭据扫描没有真实密钥命中。任何测试 fixture 或文档命中都必须人工检查并记录，不能自动忽略。
 
-- [ ] **步骤 6：重新检查公开 Pages**
+- [x] **步骤 6：重新检查公开 Pages**
 
 Open and verify:
 
@@ -614,11 +614,11 @@ https://yugarden404.github.io/SpecGate/report/
 
 预期：三个页面均可加载，并显示预期标题和主标题。
 
-- [ ] **步骤 7：冻结准确的最终结果**
+- [x] **步骤 7：冻结准确的最终结果**
 
 使用步骤 3 的准确输出更新“当前最终结果”字段。只有明确标注为 2026-07-16 审查起点时才保留 908；同时把所有任务的提交哈希补充到 `PLAN.md`，并把按时间排序的结果补充到 `AGENT_LOG.md`。
 
-- [ ] **步骤 8：更新数字后重新运行文档契约测试**
+- [x] **步骤 8：更新数字后重新运行文档契约测试**
 
 ```powershell
 $env:PYTHONPATH="src"

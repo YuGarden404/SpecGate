@@ -962,3 +962,17 @@
 - TDD GREEN：反向“镜像…GHCR”只在发布谓词紧邻前检查“不、不会、不再、未、尚未、没有”，没有把单字“不”加入全局否定；clause 保留问号，并排除以“是否、能否、可否、有没有”发起或以中英文问号结尾的疑问。永久正反例结果为 `Ran 1 test in 0.001s`、`OK`。
 - 验证：部署声明、远端结构和交付状态 3 项结果为 `Ran 3 tests in 0.007s`、`OK`；完整 `tests.test_final_evidence` 结果为 `Ran 19 tests in 0.075s`、`OK`。
 - 边界：本轮仍只修改 `tests/test_final_evidence.py` 与追加本日志；没有修改真实状态材料、生产代码、截图或远端状态，未 push。
+
+## 2026-07-16 最终交付合规修复：任务 7 最终验证与快照冻结
+
+- Agent 与工作区：由本地 Codex Subagent 在独立 worktree `final-delivery-implementation` 执行，起点为 `57cc06959ba799d375f38441c30092f5c4bd470d`；起点工作树干净，未修改主工作区或 `src/specgate/` 生产代码。
+- 文档契约：`$env:PYTHONPATH="src"; python -m unittest tests.test_final_evidence tests.test_workflows` 结果为 `Ran 20 tests in 0.065s`、`OK`，退出码 0。
+- 六项确定性机制：计划指定的 Runner guardrail、Gate feedback、review pause、approval resume 与两项 CLI benchmark 结果为 `Ran 6 tests in 47.709s`、`OK`，退出码 0。
+- 完整套件：`$env:PYTHONPATH="src"; python -m unittest discover -s tests` 结果为 `Ran 919 tests in 402.898s`、`OK (skipped=27)`，退出码 0。命令中的非法 `unsafe` profile argparse 输出来自预期拒绝测试，不是失败。
+- 语法与空白：`python -m compileall -q src tests`、`node --check src/specgate/web_static/app.js`、`git diff --check` 均退出码 0 且无输出。
+- 凭据与历史：`git check-ignore -v .env` 返回 `.gitignore:8:.env`；`git log --all --oneline -- .env` 退出码 0 且无输出；排除 `tests` 与 `docs/superpowers/plans` 后的疑似 OpenAI、AWS、GitHub 密钥模式扫描退出码 1 且无输出，表示无匹配项，因此没有需要分类为真实秘密、fixture 或文档示例的命中。
+- Pages 人工门禁：主线程本轮通过只读浏览器复核首页标题 `SpecGate WebUI`、主标题 `SpecGate 静态 HTML 生成与修复闭环`；demo 标题与主标题 `AI for Coding 知识图谱`；report 标题与主标题 `SpecGate Run Report`。本地验证 Subagent 没有亲自浏览远端，未把该复核归为自身浏览结果。
+- 结果口径：`908` 只保留为 PR #20 合并后 `main@c39d101` 的 2026-07-16 审查起点，`896` 只保留为 2026-07-15 历史阶段；当前最终结果统一为 `919`。
+- 提交映射：计划校准 `a25a4b6`；任务 1 `ff1f74a`、`89fef8d`；任务 2 `5bbe548`、`8d66ab1`；任务 3 `f6d7b76`、`01cae8c`；任务 4 `6380410`；任务 5 `6626f44`、`41aa125`；任务 6 `3355033`、`f05b10f`、`1de68fc`、`3438457`、`57cc069`。任务 7 冻结提交由完成本记录后的 Git 事实证明，提交前不预填 SHA。
+- 更新后契约：首次重新运行暴露 1 个过期断言，它仍要求“最终测试数字将在本阶段结束时刷新”；仅将该最终数字契约改为精确要求 `919`、`402.898s` 和退出码 0，并拒绝旧待刷新标记。更新后的文档与工作流契约为 `Ran 20 tests in 0.063s`、`OK`，退出码 0；`git diff --check` 退出码 0，仅有 Windows LF→CRLF 提示，没有 whitespace error。
+- 边界：本任务未部署服务、未发布容器镜像、未 push、未创建 PR；公网交互式 Web 后端与公开容器 registry 保持待完成。

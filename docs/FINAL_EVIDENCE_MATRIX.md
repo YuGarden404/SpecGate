@@ -9,7 +9,7 @@
 - 审查起点主线基线：`main@c39d101`。
 - 最近已合并功能修复：PR #20。
 - 审查起点完整回归：`Ran 908 tests in 210.559s`、`OK (skipped=27)`。
-- 当前工作阶段：最终交付合规修复；最终测试数字将在本阶段结束时刷新。
+- 当前最终验证（2026-07-16 最终交付合规 worktree）：`Ran 919 tests in 402.898s`、`OK (skipped=27)`，命令退出码为 0。
 - 远端证据：用户已更新 PR #18、PR #19、PR #20 的“执行归属”，三份描述均记录主开发 Agent 为 OpenAI Codex，并区分人工参与与 Mock/Fake/Stub 自动测试边界。
 - PR #20 合并后验证：主线程只读核验 `main@c39d101` 的 [CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238) 与 [Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 成功；四个 job 的映射见第 6 节，截图见 `docs/evidence/github-actions-pr20-final.png`。
 - 公开入口：<https://yugarden404.github.io/SpecGate/>。
@@ -79,6 +79,12 @@
 
 截图无凭据或账户敏感信息。该证据只证明当前 main 的自动测试、Docker CI 构建与静态 Pages 发布链成功；公网交互式 Web 后端和公开容器 registry 仍待后续独立阶段完成。
 
+主线程在本轮通过只读浏览器重新核对公开 Pages；本地验证 Subagent 没有亲自浏览远端：
+
+- 首页：标题 `SpecGate WebUI`，主标题 `SpecGate 静态 HTML 生成与修复闭环`
+- demo：标题与主标题均为 `AI for Coding 知识图谱`
+- report：标题与主标题均为 `SpecGate Run Report`
+
 ## 7. 核心机制复现
 
 ```powershell
@@ -98,6 +104,14 @@ python -m compileall -q src tests
 node --check src/specgate/web_static/app.js
 git diff --check
 ```
+
+当前最终结果（2026-07-16 最终交付合规 worktree）：
+
+- 文档与工作流契约：`Ran 20 tests in 0.065s`、`OK`，退出码 0。
+- 六项确定性机制：`Ran 6 tests in 47.709s`、`OK`，退出码 0。
+- 完整套件：`Ran 919 tests in 402.898s`、`OK (skipped=27)`，退出码 0。
+- `python -m compileall -q src tests`、`node --check src/specgate/web_static/app.js` 与 `git diff --check` 均退出码 0 且无错误输出。
+- `.env` 由 `.gitignore:8` 忽略，`.env` 提交历史为空；排除测试与实施计划后的疑似密钥模式扫描无命中。
 
 历史阶段结果（2026-07-15 Web 真实 LLM 接入分支）：`Ran 896 tests in 216.620s`、`OK (skipped=27)`。该数字早于 PR #20 生命周期修复，不代表当前快照。非法 `unsafe` governance profile 的 argparse 输出来自预期拒绝测试，不是失败；跳过项主要来自 Windows 当前没有创建符号链接的权限和仓库既有平台条件。
 
