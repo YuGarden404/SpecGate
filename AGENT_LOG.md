@@ -939,3 +939,11 @@
 - 图片链接 mutation：临时删除矩阵中的 `![...](evidence/github-actions-pr20-final.png)` 行，同时保留表格与正文路径；结构化测试结果为 `Ran 1 test in 0.001s`、`FAILED (failures=1)`，图片目标计数为 0。恢复唯一图片行后，PNG、结构映射、当前状态与部署边界 5 项聚焦测试结果为 `Ran 5 tests in 0.056s`、`OK`；mutation 未进入提交。
 - 完整材料验证：`python -m unittest tests.test_final_evidence` 结果为 `Ran 18 tests in 0.063s`、`OK`。矩阵和清单的当前交付状态表继续精确要求公网交互式 Web 后端、公开容器 registry 为“待完成”；任务 6 当前正文拒绝与该边界冲突的部署/发布完成声明。
 - 变更边界：只修改测试和证据材料，未修改生产代码、截图二进制或远端状态；未部署、未发布镜像、未 push 或创建 PR。
+
+#### 部署声明变体复审
+
+- TDD RED：先加入永久 mutation 测试，覆盖“公网交互式 Web 后端已完成”“公开容器 registry 已完成”“GHCR 镜像已发布”以及带冒号/空格的“已经部署”、`发布完成`、`已经发布` 变体；首次结果为 `Ran 1 test in 0.001s`、`FAILED (errors=1)`，原因是局部肯定声明检测 helper 尚不存在。
+- TDD GREEN：新增受控正则 helper 后，干净文本中的“待完成”“未部署”“没有发布”“不代表”和“发布镜像不等于部署服务”均无误报，全部肯定 mutation 均被拒绝；helper 单测与实际章节契约结果为 `Ran 2 tests in 0.004s`、`OK`。
+- 作用范围：实际材料检查只组合证据矩阵第 2、3、6、9 节与提交清单第 2、5、7 节，不扫描历史 Agent Log 全文；当前状态表仍由独立表格契约精确要求公网交互式 Web 后端、公开容器 registry 为“待完成”。
+- 验证：部署声明 helper、任务 6 结构证据与交付状态表 3 项结果为 `Ran 3 tests in 0.005s`、`OK`；完整 `tests.test_final_evidence` 结果为 `Ran 19 tests in 0.068s`、`OK`。
+- 边界：本轮只修改 `tests/test_final_evidence.py` 与追加本日志，没有修改生产代码、证据截图、远端 PR/Actions 或部署状态；未 push。

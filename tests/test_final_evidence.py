@@ -177,6 +177,46 @@ def markdown_image_targets_in_section(relative: str, heading: str) -> tuple[str,
     )
 
 
+def find_affirmative_public_deployment_claims(text: str) -> tuple[str, ...]:
+    separator = r"\s*(?:[：:]\s*)?(?:状态\s*(?:为|是)\s*)?"
+    patterns = (
+        re.compile(
+            r"公网\s*交互式\s*Web\s*后端"
+            + separator
+            + r"(?:已经部署|已经完成|部署完成|已部署|已完成)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"公开\s*容器\s*registry"
+            + separator
+            + r"(?:已经发布|发布完成|已发布|已完成)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"GHCR(?:\s*镜像)?"
+            + separator
+            + r"(?:已经发布|发布完成|已发布|已完成)",
+            re.IGNORECASE,
+        ),
+    )
+    negated_prefix = re.compile(
+        r"(?:不代表|不等于|并非|不是|不得声称|不能声称|未声称|没有声称)"
+        r"\s*[`*_]*\s*$"
+    )
+
+    claims: list[tuple[int, str]] = []
+    for pattern in patterns:
+        for match in pattern.finditer(text):
+            sentence_prefix = re.split(
+                r"[。！？；;\n]",
+                text[max(0, match.start() - 64) : match.start()],
+            )[-1]
+            if negated_prefix.search(sentence_prefix):
+                continue
+            claims.append((match.start(), match.group(0).strip()))
+    return tuple(claim for _, claim in sorted(claims))
+
+
 def markdown_table_in_section(relative: str, heading: str) -> tuple[tuple[str, ...], ...]:
     section = markdown_section(relative, heading)
 
@@ -296,6 +336,30 @@ class FinalEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "CRC"):
             validate_png_bytes(bytes(crc_corrupted))
 
+    def test_public_deployment_claim_detector_handles_negation_and_variants(self):
+        clean_text = """
+        公网交互式 Web 后端待完成，当前未部署。
+        公开容器 registry 待完成，没有发布。
+        GHCR 镜像未发布；发布镜像不等于部署服务。
+        CI 成功不代表公网交互式 Web 后端已经部署，也不代表公开容器 registry 已经发布。
+        """
+        self.assertEqual(find_affirmative_public_deployment_claims(clean_text), ())
+
+        mutations = (
+            "公网交互式 Web 后端已完成",
+            "公开容器 registry 已完成",
+            "GHCR 镜像已发布",
+            "公网交互式 Web 后端 ： 已经部署",
+            "公开容器 registry：发布完成",
+            "GHCR 已经发布",
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                self.assertEqual(
+                    find_affirmative_public_deployment_claims(mutation),
+                    (mutation,),
+                )
+
     def test_release_chain_and_screenshot_links_are_recorded(self):
         matrix = MATRIX.read_text(encoding="utf-8")
         releases = (
@@ -349,21 +413,33 @@ class FinalEvidenceTests(unittest.TestCase):
             "[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242)"
             " → `main@c39d101` → `build-pages`、`deploy-pages` → 成功",
         )
-        contradictory_claims = (
-            "公网后端已部署",
-            "公网交互式 Web 后端已部署",
-            "公网交互式 Web 后端：已完成",
-            "公开容器 registry：已完成",
-            "registry 已发布",
-            "GHCR 已发布",
-        )
         for document, section in remote_sections.items():
             with self.subTest(document=document, boundary="run mapping"):
                 for mapping in expected_run_mappings:
                     self.assertIn(mapping, section)
+
+        current_delivery_sections = {
+            "matrix": "\n".join(
+                markdown_section("docs/FINAL_EVIDENCE_MATRIX.md", heading)
+                for heading in (
+                    "## 2. 最终版本快照",
+                    "## 3. 课程交付物",
+                    "## 6. CI 与截图说明",
+                    "## 9. 边界",
+                )
+            ),
+            "checklist": "\n".join(
+                markdown_section("docs/FINAL_SUBMISSION_CHECKLIST.md", heading)
+                for heading in (
+                    "## 2. 课程交付物对照",
+                    "## 5. Git / PR / CI 证据链",
+                    "## 7. 当前完成度判断",
+                )
+            ),
+        }
+        for document, section in current_delivery_sections.items():
             with self.subTest(document=document, boundary="deployment claims"):
-                for claim in contradictory_claims:
-                    self.assertNotIn(claim, section)
+                self.assertEqual(find_affirmative_public_deployment_claims(section), ())
 
     def test_pr18_through_pr20_release_rows_are_exact_and_unique(self):
         matrix = MATRIX.read_text(encoding="utf-8")
