@@ -57,6 +57,25 @@ def read_text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def extract_current_final_run(snapshot: str) -> tuple[str, str, float]:
+    pattern = re.compile(
+        r"^- 当前最终验证（2026-07-16 最终交付合规 worktree）：`"
+        r"(?P<result>Ran 919 tests in (?P<duration>[0-9]+(?:\.[0-9]+)?)s)`、"
+        r"`OK \(skipped=27\)`，命令退出码为 0。$",
+        re.MULTILINE,
+    )
+    matches = list(pattern.finditer(snapshot))
+    if len(matches) != 1:
+        raise AssertionError(
+            f"expected one current final run in matrix snapshot, found {len(matches)}"
+        )
+    match = matches[0]
+    duration = float(match.group("duration"))
+    if duration <= 0:
+        raise AssertionError("current final run duration must be positive")
+    return match.group(0), match.group("result"), duration
+
+
 def validate_png_bytes(raw: bytes) -> tuple[int, int]:
     if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
         raise ValueError("invalid PNG signature")
@@ -609,8 +628,22 @@ class FinalEvidenceTests(unittest.TestCase):
         self.assertIn("Ran 908 tests in 210.559s", snapshot)
         self.assertIn("OK (skipped=27)", snapshot)
         self.assertIn("当前最终验证", snapshot)
-        self.assertIn("Ran 919 tests in 402.898s", snapshot)
-        self.assertIn("命令退出码为 0", snapshot)
+        current_line, current_run, duration = extract_current_final_run(snapshot)
+        self.assertEqual(snapshot.count(current_line), 1)
+        self.assertGreater(duration, 0)
+        frozen_run_materials = {
+            "checklist": read_text("docs/FINAL_SUBMISSION_CHECKLIST.md"),
+            "plan": read_text("PLAN.md").split(
+                "# 2026-07-16 最终交付合规修复", 1
+            )[1],
+            "agent log": read_text("AGENT_LOG.md").split(
+                "## 2026-07-16 最终交付合规修复：任务 7 最终验证与快照冻结",
+                1,
+            )[1],
+        }
+        for document, section in frozen_run_materials.items():
+            with self.subTest(document=document, boundary="same frozen final run"):
+                self.assertIn(current_run, section)
         self.assertNotIn("最终测试数字将在本阶段结束时刷新", snapshot)
         self.assertIn("CI #53", snapshot)
         self.assertIn("Pages #31", snapshot)

@@ -628,7 +628,7 @@ git diff --check
 
 预期：测试通过，且没有空白错误。
 
-- [ ] **步骤 9：提交经过验证的最终快照**
+- [x] **步骤 9：提交经过验证的最终快照**
 
 ```powershell
 git add -- docs/FINAL_EVIDENCE_MATRIX.md docs/FINAL_SUBMISSION_CHECKLIST.md PLAN.md AGENT_LOG.md
