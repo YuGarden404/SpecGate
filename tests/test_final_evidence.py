@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import struct
 import unittest
 from pathlib import Path
@@ -133,15 +134,144 @@ class FinalEvidenceTests(unittest.TestCase):
         for screenshot in SCREENSHOTS:
             self.assertIn(f"evidence/{screenshot.name}", matrix)
 
+    def test_pr18_through_pr20_release_rows_are_exact_and_unique(self):
+        matrix = MATRIX.read_text(encoding="utf-8")
+        heading = "## 5. 最近阶段 Git / PR / CI"
+        self.assertIn(heading, matrix)
+        section = matrix.split(heading, 1)[1].split("\n## ", 1)[0]
+        table_rows = [
+            tuple(cell.strip() for cell in line.strip().strip("|").split("|"))
+            for line in section.splitlines()
+            if line.startswith("|")
+        ]
+        self.assertGreaterEqual(len(table_rows), 2)
+        self.assertEqual(
+            table_rows[0][:4],
+            ("阶段", "功能 commit", "Merge commit", "PR"),
+        )
+
+        link_pattern = re.compile(
+            r"^\[#(?P<pr>\d+)\]\("
+            r"(?P<url>https://github\.com/YuGarden404/SpecGate/pull/(?P=pr))"
+            r"\)$"
+        )
+        sha_pattern = re.compile(r"^`(?P<sha>[0-9a-f]{7})`$")
+        releases = []
+        for cells in table_rows[2:]:
+            self.assertGreaterEqual(len(cells), 4)
+            match = link_pattern.fullmatch(cells[3])
+            self.assertIsNotNone(match, msg=f"invalid PR cell: {cells[3]}")
+            feature_commit = sha_pattern.fullmatch(cells[1])
+            merge_commit = sha_pattern.fullmatch(cells[2])
+            self.assertIsNotNone(feature_commit, msg=f"invalid feature SHA: {cells[1]}")
+            self.assertIsNotNone(merge_commit, msg=f"invalid merge SHA: {cells[2]}")
+            releases.append(
+                (
+                    cells[0],
+                    feature_commit.group("sha"),
+                    merge_commit.group("sha"),
+                    int(match.group("pr")),
+                    match.group("url"),
+                )
+            )
+
+        expected_releases = (
+            (
+                "后端审计加固",
+                "d3607c4",
+                "8d30ca5",
+                18,
+                "https://github.com/YuGarden404/SpecGate/pull/18",
+            ),
+            (
+                "Web 真实 LLM 接入",
+                "5279a7c",
+                "b98563a",
+                19,
+                "https://github.com/YuGarden404/SpecGate/pull/19",
+            ),
+            (
+                "真实 LLM 生命周期修复",
+                "e35eb46",
+                "c39d101",
+                20,
+                "https://github.com/YuGarden404/SpecGate/pull/20",
+            ),
+        )
+        for expected in expected_releases:
+            with self.subTest(pr=expected[3]):
+                self.assertEqual(releases.count(expected), 1)
+                for column, value in enumerate(expected):
+                    self.assertEqual(
+                        sum(row[column] == value for row in releases),
+                        1,
+                        msg=f"release field is not unique: {value}",
+                    )
+
     def test_final_snapshot_uses_pr20_baseline_without_stale_branch_claims(self):
         matrix = MATRIX.read_text(encoding="utf-8")
         snapshot = matrix.split("## 3. 课程交付物", 1)[0]
         self.assertIn("main@c39d101", snapshot)
         self.assertIn("PR #20", snapshot)
-        self.assertIn("Ran 908 tests", snapshot)
+        self.assertIn("审查起点完整回归", snapshot)
+        self.assertIn("Ran 908 tests in 210.559s", snapshot)
+        self.assertIn("OK (skipped=27)", snapshot)
+        self.assertIn("最终测试数字将在本阶段结束时刷新", snapshot)
+        self.assertIn("CI、Pages 和新截图仍待人工远端核对", snapshot)
         self.assertNotIn("当前未提交分支", snapshot)
         self.assertNotIn("main@e73e937", snapshot)
         self.assertNotIn("Ran 896 tests", snapshot)
+
+    def test_current_release_status_is_consistent_across_factual_materials(self):
+        current_sections = {
+            "matrix": MATRIX.read_text(encoding="utf-8").split(
+                "## 3. 课程交付物", 1
+            )[0],
+            "checklist": read_text("docs/FINAL_SUBMISSION_CHECKLIST.md"),
+            "reflection facts": read_text("docs/REFLECTION_FACT_CHECK.md").split(
+                "## 5. 最终证据", 1
+            )[1],
+            "plan": read_text("PLAN.md").split(
+                "# 2026-07-16 最终交付合规修复", 1
+            )[1],
+            "agent log": read_text("AGENT_LOG.md").split(
+                "## 2026-07-16 最终交付合规修复：任务 2", 1
+            )[1],
+        }
+        for document, section in current_sections.items():
+            with self.subTest(document=document):
+                self.assertIn("审查起点", section)
+                self.assertIn("main@c39d101", section)
+                self.assertIn("PR #20", section)
+                self.assertIn("Ran 908 tests in 210.559s", section)
+                self.assertIn("OK (skipped=27)", section)
+
+        pending_markers = {
+            "matrix": "仍待人工远端核对",
+            "checklist": "仍待人工远端核对",
+            "reflection facts": "尚待人工远端核对",
+            "plan": "未核对前不标记完成",
+            "agent log": "继续标记为待人工核对",
+        }
+        for document, marker in pending_markers.items():
+            with self.subTest(document=document, boundary="remote evidence"):
+                self.assertIn(marker, current_sections[document])
+                for line in current_sections[document].splitlines():
+                    if "PR #20" not in line:
+                        continue
+                    if not any(term in line for term in ("CI", "Pages", "截图")):
+                        continue
+                    self.assertFalse(
+                        any(
+                            term in line
+                            for term in (
+                                "CI、Pages 和新截图已完成",
+                                "CI、Pages 和新截图均通过",
+                                "CI、Pages 和新截图为绿色",
+                            )
+                        ),
+                        msg=f"{document} marks pending PR #20 evidence complete: {line}",
+                    )
 
     def test_readme_has_required_delivery_sections(self):
         readme = read_text("README.md")

@@ -890,3 +890,5 @@
 - 事实口径：审查起点为 PR #20 合并后的 `main@c39d101`，完整回归证据为 `Ran 908 tests in 210.559s`、`OK (skipped=27)`；`896` 项结果仅保留为 2026-07-15 Web 真实 LLM 接入分支的历史阶段记录。
 - 学生归属：只更新 `docs/REFLECTION_FACT_CHECK.md` 中供学生核对的事实，没有修改 `REFLECTION.md` 或代写观点。
 - 人工/远端边界：本任务只核对本地 Git 历史中 PR #18 至 PR #20 的功能 commit、merge commit 与 PR 编号；未打开或修改远端 PR，未核对 PR #20 合并后 CI/Pages，未生成或伪造新截图，这些项目继续标记为待人工核对。
+- 质量审查测试加固：新契约在正确材料上直接通过，因此执行可控 mutation：临时将第 5 节 PR #20 同行 merge SHA 从 `c39d101` 改为 `c39d102`。精确行契约因期望元组计数为 0 而失败（`Ran 1 test`、`FAILED (failures=1)`）；随即恢复 `c39d101` 后同一测试通过，错误 mutation 未进入提交。
+- 质量审查验证：PR 表格精确行、快照语义和跨材料一致性 3 项测试结果为 `Ran 3 tests in 0.002s`、`OK`；完整 `tests.test_final_evidence` 结果为 `Ran 12 tests in 0.009s`、`OK`，`git diff --check` 退出码为 0。
