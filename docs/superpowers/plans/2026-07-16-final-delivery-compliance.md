@@ -490,8 +490,9 @@ git commit -m "docs: distinguish static review and public deployment"
 - 修改：`docs/FINAL_EVIDENCE_MATRIX.md`
 - 修改：`docs/FINAL_SUBMISSION_CHECKLIST.md`
 - 修改：`AGENT_LOG.md`
+- 修改：`docs/superpowers/plans/2026-07-16-final-delivery-compliance.md`
 
-- [ ] **步骤 1：人工核对并更新 PR 归属**
+- [x] **步骤 1：人工核对并更新 PR 归属**
 
 用户打开 PR #18、#19、#20，确认每个 PR 描述包含以下真实归属：
 
@@ -506,7 +507,7 @@ git commit -m "docs: distinguish static review and public deployment"
 
 如某个 PR 的真实情况不同，按对应 `AGENT_LOG.md` 修正文案，不能机械复制错误事实。
 
-- [ ] **步骤 2：截取当前 Actions 证据**
+- [x] **步骤 2：截取当前 Actions 证据**
 
 用户在 GitHub Actions 页面确认 PR #20 合并后的 `unit-test`、`docker-build` 和 Pages 均为成功状态，并保存完整截图到：
 
@@ -516,7 +517,7 @@ docs/evidence/github-actions-pr20-final.png
 
 截图必须显示仓库、工作流、commit/PR 和成功状态，不包含凭据或账户敏感信息。
 
-- [ ] **步骤 3：把新截图加入证据测试**
+- [x] **步骤 3：把新截图加入证据测试**
 
 在 `SCREENSHOTS` 中增加：
 
@@ -524,7 +525,7 @@ docs/evidence/github-actions-pr20-final.png
 ROOT / "docs" / "evidence" / "github-actions-pr20-final.png",
 ```
 
-- [ ] **步骤 4：运行截图与证据测试**
+- [x] **步骤 4：运行截图与证据测试**
 
 运行：
 
@@ -535,11 +536,11 @@ python -m unittest tests.test_final_evidence.FinalEvidenceTests.test_required_ev
 
 预期：在 PNG 不存在且矩阵未引用它时测试失败；加入真实截图和链接后测试通过。
 
-- [ ] **步骤 5：只记录已经完成的远端事实**
+- [x] **步骤 5：只记录已经完成的远端事实**
 
 在证据矩阵、提交清单和 `AGENT_LOG.md` 中记录已核对的 PR 归属与截图。若用户没有完成某项远端更新，该项保持“待完成”，本任务不得宣称绿灯。
 
-- [ ] **步骤 6：提交远端证据**
+- [x] **步骤 6：提交远端证据**
 
 ```powershell
 git add -- tests/test_final_evidence.py docs/evidence/github-actions-pr20-final.png docs/FINAL_EVIDENCE_MATRIX.md docs/FINAL_SUBMISSION_CHECKLIST.md AGENT_LOG.md

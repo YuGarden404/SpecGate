@@ -20,6 +20,7 @@ COLD_START_AUDIT = (
 SCREENSHOTS = (
     ROOT / "docs" / "evidence" / "github-actions-web-runtime-and-credentials.png",
     ROOT / "docs" / "evidence" / "github-actions-runtime-config.png",
+    ROOT / "docs" / "evidence" / "github-actions-pr20-final.png",
 )
 KEY_EVIDENCE_PATHS = (
     "src/specgate/runner.py",
@@ -278,7 +279,10 @@ class FinalEvidenceTests(unittest.TestCase):
         self.assertIn("Ran 908 tests in 210.559s", snapshot)
         self.assertIn("OK (skipped=27)", snapshot)
         self.assertIn("最终测试数字将在本阶段结束时刷新", snapshot)
-        self.assertIn("CI、Pages 和新截图仍待人工远端核对", snapshot)
+        self.assertIn("CI #53", snapshot)
+        self.assertIn("Pages #31", snapshot)
+        self.assertIn("github-actions-pr20-final.png", snapshot)
+        self.assertNotIn("CI、Pages 和新截图仍待人工远端核对", snapshot)
         self.assertNotIn("当前未提交分支", snapshot)
         self.assertNotIn("main@e73e937", snapshot)
         self.assertNotIn("Ran 896 tests", snapshot)
@@ -307,32 +311,39 @@ class FinalEvidenceTests(unittest.TestCase):
                 self.assertIn("Ran 908 tests in 210.559s", section)
                 self.assertIn("OK (skipped=27)", section)
 
-        pending_markers = {
-            "matrix": "仍待人工远端核对",
-            "checklist": "仍待人工远端核对",
-            "reflection facts": "尚待人工远端核对",
-            "plan": "未核对前不标记完成",
-            "agent log": "继续标记为待人工核对",
+        agent_log = read_text("AGENT_LOG.md")
+        task_6_heading = "## 2026-07-16 最终交付合规修复：任务 6 远端证据门禁"
+        self.assertIn(task_6_heading, agent_log)
+        verified_sections = {
+            "matrix": MATRIX.read_text(encoding="utf-8"),
+            "checklist": read_text("docs/FINAL_SUBMISSION_CHECKLIST.md"),
+            "agent log task 6": agent_log.split(task_6_heading, 1)[1],
         }
-        for document, marker in pending_markers.items():
-            with self.subTest(document=document, boundary="remote evidence"):
-                self.assertIn(marker, current_sections[document])
-                for line in current_sections[document].splitlines():
-                    if "PR #20" not in line:
-                        continue
-                    if not any(term in line for term in ("CI", "Pages", "截图")):
-                        continue
-                    self.assertFalse(
-                        any(
-                            term in line
-                            for term in (
-                                "CI、Pages 和新截图已完成",
-                                "CI、Pages 和新截图均通过",
-                                "CI、Pages 和新截图为绿色",
-                            )
-                        ),
-                        msg=f"{document} marks pending PR #20 evidence complete: {line}",
-                    )
+        for document, section in verified_sections.items():
+            with self.subTest(document=document, boundary="verified remote evidence"):
+                for phrase in (
+                    "PR #18",
+                    "PR #19",
+                    "PR #20",
+                    "执行归属",
+                    "OpenAI Codex",
+                    "CI #53",
+                    "Pages #31",
+                    "main@c39d101",
+                    "unit-test",
+                    "docker-build",
+                    "build-pages",
+                    "deploy-pages",
+                    "docs/evidence/github-actions-pr20-final.png",
+                ):
+                    self.assertIn(phrase, section)
+
+        for document in ("matrix", "checklist"):
+            with self.subTest(document=document, boundary="no stale pending marker"):
+                self.assertNotIn(
+                    "PR #20 合并后的 CI、Pages 和新截图仍待人工远端核对",
+                    verified_sections[document],
+                )
 
     def test_readme_has_required_delivery_sections(self):
         readme = read_text("README.md")
@@ -547,7 +558,7 @@ class FinalEvidenceTests(unittest.TestCase):
 
         expected_screenshot_statuses = {
             "历史 CI/Pages 截图（截至 PR #15/#17）": "已完成",
-            "PR #20 后 CI/Pages 与新截图": "待核验",
+            "PR #20 后 CI/Pages 与新截图": "已完成",
         }
         for name, expected_status in expected_screenshot_statuses.items():
             with self.subTest(document="checklist", screenshot=name):
