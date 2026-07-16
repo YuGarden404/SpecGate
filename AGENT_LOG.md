@@ -947,3 +947,11 @@
 - 作用范围：实际材料检查只组合证据矩阵第 2、3、6、9 节与提交清单第 2、5、7 节，不扫描历史 Agent Log 全文；当前状态表仍由独立表格契约精确要求公网交互式 Web 后端、公开容器 registry 为“待完成”。
 - 验证：部署声明 helper、任务 6 结构证据与交付状态表 3 项结果为 `Ran 3 tests in 0.005s`、`OK`；完整 `tests.test_final_evidence` 结果为 `Ran 19 tests in 0.068s`、`OK`。
 - 边界：本轮只修改 `tests/test_final_evidence.py` 与追加本日志，没有修改生产代码、证据截图、远端 PR/Actions 或部署状态；未 push。
+
+#### 稳定分句与同义词复审
+
+- TDD RED：永久测试增加“公网后端已部署”“公网 Web 后端已经部署”“公开 registry 已发布”“镜像已发布到 GHCR”和原有完整称谓正例，并增加带冒号/中文引号的“不代表、不得声称、不能声称”否定例；正反例与范围组合结果为 `Ran 2 tests in 0.006s`、`FAILED (failures=1)`，旧整句正则误报 3 条包装后的否定声明。
+- TDD GREEN：改为按换行、句末、逗号、分号和“但/但是/而”转折分 clause，去除空白、Markdown、冒号与中英文引号包装，再分别识别公网后端、公开 registry、GHCR 镜像和“镜像…GHCR”反向语序；同句主体前或状态前存在否定标记时不判为肯定。正反例与实际范围组合结果为 `Ran 2 tests in 0.006s`、`OK`。
+- 实际范围：证据矩阵当前检查新增第 5 节，现覆盖第 2、3、5、6、9 节；提交清单覆盖第 2、5、7 节；`AGENT_LOG.md` 只截取任务 6 主标题之后、首个 `###` 子节之前的主记录，因此后续质量 mutation 示例不参与实际状态扫描。
+- 验证：部署声明、远端结构和精确交付状态 3 项结果为 `Ran 3 tests in 0.007s`、`OK`；完整 `tests.test_final_evidence` 结果为 `Ran 19 tests in 0.081s`、`OK`。
+- 边界：本轮仍只修改 `tests/test_final_evidence.py` 与追加本日志，没有修改真实状态材料、生产代码、截图或远端状态；未 push。

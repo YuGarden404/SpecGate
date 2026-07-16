@@ -178,43 +178,91 @@ def markdown_image_targets_in_section(relative: str, heading: str) -> tuple[str,
 
 
 def find_affirmative_public_deployment_claims(text: str) -> tuple[str, ...]:
-    separator = r"\s*(?:[：:]\s*)?(?:状态\s*(?:为|是)\s*)?"
-    patterns = (
-        re.compile(
-            r"公网\s*交互式\s*Web\s*后端"
-            + separator
-            + r"(?:已经部署|已经完成|部署完成|已部署|已完成)",
-            re.IGNORECASE,
-        ),
-        re.compile(
-            r"公开\s*容器\s*registry"
-            + separator
-            + r"(?:已经发布|发布完成|已发布|已完成)",
-            re.IGNORECASE,
-        ),
-        re.compile(
-            r"GHCR(?:\s*镜像)?"
-            + separator
-            + r"(?:已经发布|发布完成|已发布|已完成)",
-            re.IGNORECASE,
-        ),
-    )
-    negated_prefix = re.compile(
-        r"(?:不代表|不等于|并非|不是|不得声称|不能声称|未声称|没有声称)"
-        r"\s*[`*_]*\s*$"
+    backend_aliases = ("公网交互式web后端", "公网web后端", "公网后端")
+    registry_aliases = ("公开容器registry", "公开registry")
+    backend_statuses = ("已经部署", "已经完成", "部署完成", "已部署", "已完成")
+    publication_statuses = ("已经发布", "发布完成", "已发布", "已经完成", "已完成")
+    denial_markers = (
+        "不代表",
+        "不等于",
+        "并非",
+        "不是",
+        "不得声称",
+        "不得",
+        "不能声称",
+        "不能",
+        "未",
+        "没有声称",
+        "没有",
     )
 
-    claims: list[tuple[int, str]] = []
-    for pattern in patterns:
-        for match in pattern.finditer(text):
-            sentence_prefix = re.split(
-                r"[。！？；;\n]",
-                text[max(0, match.start() - 64) : match.start()],
-            )[-1]
-            if negated_prefix.search(sentence_prefix):
-                continue
-            claims.append((match.start(), match.group(0).strip()))
-    return tuple(claim for _, claim in sorted(claims))
+    def normalize(clause: str) -> str:
+        return re.sub(
+            r"[\s`*_#~：:'\"“”‘’（）()\[\]{}<>《》|]+",
+            "",
+            clause,
+        ).lower()
+
+    def has_denial(normalized: str, subject_start: int, status_start: int) -> bool:
+        relevant = normalized[:subject_start] + normalized[subject_start:status_start]
+        return any(marker in relevant for marker in denial_markers)
+
+    def has_forward_claim(
+        normalized: str,
+        aliases: tuple[str, ...],
+        statuses: tuple[str, ...],
+    ) -> bool:
+        for alias in aliases:
+            search_from = 0
+            while (subject_start := normalized.find(alias, search_from)) >= 0:
+                after_subject = subject_start + len(alias)
+                status_positions = (
+                    normalized.find(status, after_subject) for status in statuses
+                )
+                status_start = min((pos for pos in status_positions if pos >= 0), default=-1)
+                if status_start >= 0 and not has_denial(
+                    normalized,
+                    subject_start,
+                    status_start,
+                ):
+                    return True
+                search_from = after_subject
+        return False
+
+    def has_reverse_ghcr_claim(normalized: str) -> bool:
+        image_start = normalized.find("镜像")
+        while image_start >= 0:
+            ghcr_start = normalized.find("ghcr", image_start + len("镜像"))
+            if ghcr_start >= 0:
+                between = normalized[image_start + len("镜像") : ghcr_start]
+                reverse_statuses = publication_statuses + ("发布到",)
+                status_offsets = (between.find(status) for status in reverse_statuses)
+                relative_status = min(
+                    (pos for pos in status_offsets if pos >= 0),
+                    default=-1,
+                )
+                if relative_status >= 0:
+                    status_start = image_start + len("镜像") + relative_status
+                    if not has_denial(normalized, image_start, status_start):
+                        return True
+            image_start = normalized.find("镜像", image_start + len("镜像"))
+        return False
+
+    clauses = re.split(r"(?:\r?\n|[。！？；;，,]|但是|但|而)", text)
+    claims = []
+    for raw_clause in clauses:
+        clause = raw_clause.strip()
+        if not clause:
+            continue
+        normalized = normalize(clause)
+        if (
+            has_forward_claim(normalized, backend_aliases, backend_statuses)
+            or has_forward_claim(normalized, registry_aliases, publication_statuses)
+            or has_forward_claim(normalized, ("ghcr镜像", "ghcr"), publication_statuses)
+            or has_reverse_ghcr_claim(normalized)
+        ):
+            claims.append(clause)
+    return tuple(claims)
 
 
 def markdown_table_in_section(relative: str, heading: str) -> tuple[tuple[str, ...], ...]:
@@ -342,13 +390,20 @@ class FinalEvidenceTests(unittest.TestCase):
         公开容器 registry 待完成，没有发布。
         GHCR 镜像未发布；发布镜像不等于部署服务。
         CI 成功不代表公网交互式 Web 后端已经部署，也不代表公开容器 registry 已经发布。
+        不代表：公网交互式 Web 后端已经部署。
+        不得声称：“公开容器 registry 已完成”。
+        不能声称：GHCR 镜像已经发布。
         """
         self.assertEqual(find_affirmative_public_deployment_claims(clean_text), ())
 
         mutations = (
+            "公网后端已部署",
+            "公网 Web 后端已经部署",
             "公网交互式 Web 后端已完成",
+            "公开 registry 已发布",
             "公开容器 registry 已完成",
             "GHCR 镜像已发布",
+            "镜像已发布到 GHCR",
             "公网交互式 Web 后端 ： 已经部署",
             "公开容器 registry：发布完成",
             "GHCR 已经发布",
@@ -424,6 +479,7 @@ class FinalEvidenceTests(unittest.TestCase):
                 for heading in (
                     "## 2. 最终版本快照",
                     "## 3. 课程交付物",
+                    "## 5. 最近阶段 Git / PR / CI",
                     "## 6. CI 与截图说明",
                     "## 9. 边界",
                 )
@@ -436,7 +492,15 @@ class FinalEvidenceTests(unittest.TestCase):
                     "## 7. 当前完成度判断",
                 )
             ),
+            "agent log task 6 main record": agent_log.split(task_6_heading, 1)[1].split(
+                "\n### ", 1
+            )[0],
         }
+        self.assertIn("部署边界", current_delivery_sections["agent log task 6 main record"])
+        self.assertNotIn(
+            "任务 6 质量审查修复",
+            current_delivery_sections["agent log task 6 main record"],
+        )
         for document, section in current_delivery_sections.items():
             with self.subTest(document=document, boundary="deployment claims"):
                 self.assertEqual(find_affirmative_public_deployment_claims(section), ())
