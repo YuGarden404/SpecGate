@@ -985,3 +985,12 @@
 - 质量修复：提交 `f0c3bf0`（完整 SHA `f0c3bf07c929f28630bee295a1b90be47175b298`）改为从权威矩阵提取正浮点耗时并跨材料校验同一次冻结运行，同时补充冻结提交与独立复跑边界。
 - 质量复审：`APPROVED`，没有新的 Critical 或 Important 问题；审查者独立复跑文档与工作流契约，结果为 `Ran 20 tests in 0.077s`、`OK`。
 - 步骤 11 预检查：收尾修改前 `git status --short` 无输出；最近 20 条提交覆盖计划校准、任务 1 至任务 7、冻结提交与质量修复。
+
+### 全阶段终审问题修复
+
+- 事实一致性 RED：将 `docs/REFLECTION_FACT_CHECK.md` 纳入当前远端证据契约，并要求 CI #53、Pages #31、`main@c39d101`、`docs/evidence/github-actions-pr20-final.png`、已完成/已核验语义及待完成部署边界；聚焦测试结果为 `Ran 1 test in 0.006s`、`FAILED (failures=9)`，失败均来自该文件仍保留旧“尚待人工远端核对”状态且缺少当前证据。
+- 事实一致性 GREEN：仅更新事实核对清单的远端状态和部署边界，保留“观点、案例选择、批判结论和最终文字由学生本人修改确认”的边界；聚焦测试结果为 `Ran 1 test in 0.003s`、`OK`。
+- 否定作用域 RED：新增四个永久 mutation，分别覆盖前一主体否定、后一主体肯定，前后均否定，以及前一主体肯定、后一主体否定；旧逻辑结果为 `Ran 1 test in 0.002s`、`FAILED (failures=3)`，证明整句否定错误遮蔽连接词后的独立主体。
+- 否定作用域 GREEN：仅把“并且、且、同时、以及”加入既有分句边界，使每个短 clause 独立判断；全部既有正反例和四个新 mutation 结果为 `Ran 1 test in 0.001s`、`OK`。
+- 验证：两个聚焦测试组合结果为 `Ran 2 tests in 0.005s`、`OK`；完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 20 tests in 0.084s`、`OK`；`git diff --check` 退出码 0，仅有 Windows LF→CRLF 提示，没有 whitespace error。`.env` 继续由 `.gitignore:8` 忽略且提交历史为空；排除 `tests` 和实施计划后的 OpenAI、AWS、GitHub 疑似密钥模式扫描退出码 1 且无输出，表示没有命中。
+- 变更边界：本轮只修改 `tests/test_final_evidence.py`、`docs/REFLECTION_FACT_CHECK.md`、`AGENT_LOG.md` 与 `PLAN.md`；没有修改 `src/specgate/` 生产代码或 `REFLECTION.md` 正文，未部署、未发布镜像、未 push。

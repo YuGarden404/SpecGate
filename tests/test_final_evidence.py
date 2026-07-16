@@ -275,7 +275,10 @@ def find_affirmative_public_deployment_claims(text: str) -> tuple[str, ...]:
             image_start = normalized.find("镜像", image_start + len("镜像"))
         return False
 
-    clauses = re.split(r"(?:\r?\n|[。！!；;，,]|但是|但|而)", text)
+    clauses = re.split(
+        r"(?:\r?\n|[。！!；;，,]|但是|并且|同时|以及|但|而|且)",
+        text,
+    )
     claims = []
     for raw_clause in clauses:
         clause = raw_clause.strip()
@@ -453,6 +456,21 @@ class FinalEvidenceTests(unittest.TestCase):
                 self.assertEqual(
                     find_affirmative_public_deployment_claims(mutation),
                     (mutation,),
+                )
+
+        scoped_mutations = {
+            "公网后端未部署且公开 registry 已发布": ("公开 registry 已发布",),
+            "公开 registry 未发布，同时公网 Web 后端已经部署": (
+                "公网 Web 后端已经部署",
+            ),
+            "公网后端未部署且公开 registry 未发布": (),
+            "公网后端已部署且公开 registry 未发布": ("公网后端已部署",),
+        }
+        for mutation, expected_claims in scoped_mutations.items():
+            with self.subTest(mutation=mutation, boundary="negation scope"):
+                self.assertEqual(
+                    find_affirmative_public_deployment_claims(mutation),
+                    expected_claims,
                 )
 
     def test_release_chain_and_screenshot_links_are_recorded(self):
@@ -704,12 +722,33 @@ class FinalEvidenceTests(unittest.TestCase):
                 ):
                     self.assertIn(phrase, section)
 
-        for document in ("matrix", "checklist"):
+        reflection_facts = read_text("docs/REFLECTION_FACT_CHECK.md")
+        for document, section in {
+            "matrix": verified_sections["matrix"],
+            "checklist": verified_sections["checklist"],
+            "reflection facts": reflection_facts,
+        }.items():
             with self.subTest(document=document, boundary="no stale pending marker"):
-                self.assertNotIn(
+                for stale_marker in (
                     "PR #20 合并后的 CI、Pages 和新截图仍待人工远端核对",
-                    verified_sections[document],
-                )
+                    "尚待人工远端核对",
+                    "待核对",
+                ):
+                    self.assertNotIn(stale_marker, section)
+
+        for phrase in (
+            "CI #53",
+            "Pages #31",
+            "main@c39d101",
+            "docs/evidence/github-actions-pr20-final.png",
+            "已完成",
+            "已核验",
+            "公网交互式 Web 后端",
+            "公开容器 registry",
+            "待完成",
+        ):
+            with self.subTest(document="reflection facts", phrase=phrase):
+                self.assertIn(phrase, reflection_facts)
 
     def test_readme_has_required_delivery_sections(self):
         readme = read_text("README.md")
