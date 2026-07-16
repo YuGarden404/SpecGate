@@ -105,6 +105,12 @@ Python CLI harness + mock LLM + 静态 HTML 生成/修复
 - 采纳 Task 3 测试隔离建议，统一使用临时目录。
 - 采纳凭据范围说明建议，在 `SPEC.md` 明确 MVP 只要求凭据状态存根和 fail-closed 行为，完整 keyring CLI 属于后续扩展。
 
+### 最终合规阶段补充冷启动
+
+2026-07-16 增加最终合规阶段补充冷启动。本记录是最终合规阶段的补充冷启动验证，不替代 2026-07-08 的早期 SPEC/PLAN 可执行性审查，也不追溯性声称 MVP 实现前完成过完整实现试跑。
+
+全新 Gemini Web 会话只读取 `SPEC.md` 与最终合规实施计划，尝试任务 2 和任务 3；它在缺少七个目标文件当前完整内容时暂停并明确请求这些文件，同时提供骨架补丁草案。为保留隔离边界，没有继续上传这些文件。Web 会话没有修改仓库，也没有运行测试；实际实现交由具备本地 worktree、文件系统和 shell 能力的 Subagent。完整事实记录见 `docs/superpowers/audits/2026-07-16-final-compliance-cold-start.md`。
+
 ## 6. 当前自检
 
 - 还没有在 SPEC 之前写实现代码。

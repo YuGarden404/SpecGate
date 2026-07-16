@@ -869,3 +869,128 @@
 - Task 12：材料契约首次出现 20 个预期失败，定位 schema v4、Web 仅 Mock、真实模型安全链和证据路径等过期事实；同步 SPEC、README、部署、walkthrough、证据矩阵与事实核对后，材料/工作流契约 9 项通过。
 - 最终验证：全量 `Ran 896 tests in 216.620s`、`OK (skipped=27)`；compileall、Node 语法、材料契约与 `git diff --check` 退出码均为 0。凭据扫描命中均为测试哨兵、攻击 fixture、历史计划示例或主密钥占位符。
 - 当前状态：Task 1–12 完成。全程未访问真实 Provider，也未执行 Git 写操作；远端 commit、PR、CI 与部署证据等待用户实际操作后补充。
+
+## 2026-07-16 最终合规阶段补充冷启动
+
+- Agent 类型与环境：Claude Code v2.1.70 无法连接 `api.anthropic.com`，且用户没有可用 Anthropic 服务条件；OpenCode 的官方签名/校验 Windows x64 二进制在本机无法加载，本机无可用 WSL distribution；Gemini CLI 0.50.0 可启动，但用户账户没有 Gemini Code Assist 使用权限，未能执行任务。
+- 会话隔离：用户改用全新独立 Gemini Web 会话，只上传 `SPEC.md` 与 `docs/superpowers/plans/2026-07-16-final-delivery-compliance.md`，没有提供聊天历史、Agent memory 或其他仓库文件。
+- 尝试任务：Gemini Web 尝试任务 2“同步当前发布版本与证据链”和任务 3“增加完整的直接依赖许可证表”。
+- 暂停与问题：任务 2 在步骤 1 和步骤 3、任务 3 在步骤 1 和步骤 4 暂停，因为缺少当前完整文件内容。Gemini Web 明确请求 `tests/test_final_evidence.py`、`docs/FINAL_EVIDENCE_MATRIX.md`、`docs/FINAL_SUBMISSION_CHECKLIST.md`、`docs/REFLECTION_FACT_CHECK.md`、`PLAN.md`、`AGENT_LOG.md`、`README.md`。
+- 实际产出：Gemini Web 给出任务 2 与任务 3 的骨架补丁草案，明确声明没有本地 shell、没有可供任务使用的外部网络工具，也无法直接操作工作区文件；没有修改任何文件，也没有运行任何测试。该草案未被记录为已应用，整个尝试约 3 分钟。
+- 计划修订：最终合规实施计划增加“执行环境前提”，`SPEC.md` 增加交付材料 Agent 执行环境边界；不再上传七个目标文件，缺少上下文本身作为能力边界证据保留，实际修改、TDD 和 Git 操作交由本地 Subagent。
+- 人工参与：用户完成工具选择、Gemini Web 独立会话创建、两个文件上传、结果转交，并决定保留隔离边界、不再上传七个目标文件。
+- 追溯边界：本记录是最终合规阶段的补充冷启动验证，不替代 2026-07-08 的早期 SPEC/PLAN 审查，也不声称 MVP 实现前做过完整实现试跑。
+
+## 2026-07-16 最终交付合规修复：任务 2 发布证据链同步
+
+- Agent 与工作区：由本地 Subagent 在独立 worktree `final-delivery-implementation` 和分支 `codex/final-delivery-compliance-impl` 实施，起点为 `89fef8d5570916aaf194bdcd4a7b8aa1e004d5c1`；未修改主工作区或 `src/specgate/` 生产代码。
+- TDD RED：先扩展 `test_release_chain_and_screenshot_links_are_recorded` 并新增 PR #20 快照契约；聚焦命令结果为 `Ran 2 tests in 0.002s`、`FAILED (failures=4)`，失败原因是证据矩阵缺少 PR #18、#19、#20 链接，且快照不含 `main@c39d101`。
+- TDD GREEN：最小同步权威证据矩阵与关联事实材料后，同一聚焦命令结果为 `Ran 2 tests in 0.001s`、`OK`。
+- 聚焦验证：`python -m unittest tests.test_final_evidence` 结果为 `Ran 10 tests in 0.008s`、`OK`；`git diff --check` 退出码为 0，只有 Windows 工作副本的 LF→CRLF 提示，没有 whitespace error。
+- 事实口径：审查起点为 PR #20 合并后的 `main@c39d101`，完整回归证据为 `Ran 908 tests in 210.559s`、`OK (skipped=27)`；`896` 项结果仅保留为 2026-07-15 Web 真实 LLM 接入分支的历史阶段记录。
+- 学生归属：只更新 `docs/REFLECTION_FACT_CHECK.md` 中供学生核对的事实，没有修改 `REFLECTION.md` 或代写观点。
+- 人工/远端边界：本任务只核对本地 Git 历史中 PR #18 至 PR #20 的功能 commit、merge commit 与 PR 编号；未打开或修改远端 PR，未核对 PR #20 合并后 CI/Pages，未生成或伪造新截图，这些项目继续标记为待人工核对。
+- 质量审查测试加固：新契约在正确材料上直接通过，因此执行可控 mutation：临时将第 5 节 PR #20 同行 merge SHA 从 `c39d101` 改为 `c39d102`。精确行契约因期望元组计数为 0 而失败（`Ran 1 test`、`FAILED (failures=1)`）；随即恢复 `c39d101` 后同一测试通过，错误 mutation 未进入提交。
+- 质量审查验证：PR 表格精确行、快照语义和跨材料一致性 3 项测试结果为 `Ran 3 tests in 0.002s`、`OK`；完整 `tests.test_final_evidence` 结果为 `Ran 12 tests in 0.009s`、`OK`，`git diff --check` 退出码为 0。
+
+## 2026-07-16 最终交付合规修复：任务 4 Open Design 流程偏离
+
+- Agent 与工作区：由本地 Codex Subagent 在独立 worktree `final-delivery-implementation` 实施，起点为 `01cae8ce8ee3b0578bf74b4ef90354dc9a23140c`；未修改主工作区。
+- TDD RED：先新增 `test_spec_records_the_actual_open_design_decision`，指定聚焦测试结果为 `Ran 1 test in 0.001s`、`FAILED (failures=1)`；失败原因为 `SPEC.md` 尚不包含 `Open Design`，符合预期。
+- TDD GREEN：在 `SPEC.md` 最小增加真实流程偏离决策并同步 README 后，聚焦测试结果为 `Ran 1 test in 0.000s`、`OK`；完整 `tests.test_final_evidence` 结果为 `Ran 15 tests in 0.012s`、`OK`。
+- 决策同步：当前 WebUI 早期实现使用项目自定义的轻量界面样式，未采用 Open Design 设计系统或 skill；原因是交互式 Web 产品面在最初 CLI 与静态报告范围之后加入，当时没有重新执行前端设计系统选型。项目如实记录课程推荐流程偏离，不追溯性声称已经采用 Open Design。
+- 变更边界：本任务只同步测试与事实材料，不借最终材料修复重做 UI，未修改 `src/specgate/`、任何 UI 生产实现、产品功能规范或部署状态。
+- 人工确认范围：仅核对跨文档措辞是否一致、是否如实保留历史偏离以及是否没有生产代码变化；本任务不把该核对表述为重新完成前端选型、UI 重构或视觉验收。后续若重构 UI，将先选择并记录设计系统与 skill。
+
+## 2026-07-16 最终交付合规修复：任务 5 交付状态边界
+
+- Agent 与工作区：由本地 Codex Subagent 在独立 worktree `final-delivery-implementation` 实施，起点为 `63804102d9c11448941ed967756d724263dcf89f`；未修改主工作区或 `src/specgate/`。
+- TDD RED：先新增 `test_submission_docs_do_not_claim_public_backend_or_registry`，指定聚焦测试结果为 `Ran 1 test in 0.006s`、`FAILED (failures=5)`；失败原因是提交材料缺少公开静态入口、公网交互后端、公开 registry 与待完成状态的拆分，且仍包含 `公开 WebUI URL | 已完成`。
+- TDD GREEN：最小修正文档边界后，最新聚焦测试结果为 `Ran 1 test in 0.001s`、`OK`；完整 `tests.test_final_evidence` 结果为 `Ran 16 tests in 0.014s`、`OK`，`git diff --check` 退出码为 0，只有 Windows LF→CRLF 提示，没有 whitespace error。
+- 状态拆分：公开静态评审入口、本地交互式 WebUI、Docker 本地与 CI 构建标记为已完成；公网交互式 Web 后端和公开容器 registry 标记为待完成。README 与 SPEC 明确发布镜像不等于部署服务。
+- 部署与发布边界：本任务未部署公网服务、未发布容器镜像，也未把 `Dockerfile`、CI smoke 或 GitHub Pages 当作相关完成证据。
+- 人工确认范围：PR #20 合并后的当前远端 CI、Pages 与新截图继续保留给任务 6 人工门禁；本任务只核对本地材料的状态一致性，不声称已完成远端核验。
+
+### 任务 5 质量审查修复
+
+- 审查验证：原边界测试只拼接两份文档全文查找短语，不能证明目标表格中的名称唯一、状态精确或数据列数正确；提交清单还把历史截图与 PR #20 后待核验截图泛化为同一条“已完成”。
+- TDD RED：先将测试改为解析两份文档的指定课程交付物章节和唯一 Markdown 表格，精确检查五类交付状态、行唯一性、表头/列数及旧行拒绝；聚焦结果为 `Ran 1 test in 0.003s`、`FAILED (failures=2)`，仅因两条截图状态尚未拆分。
+- TDD GREEN：把清单拆为“历史 CI/Pages 截图（截至 PR #15/#17）—已完成”和“PR #20 后 CI/Pages 与新截图—待核验”后，聚焦结果为 `Ran 1 test in 0.001s`、`OK`。
+- 边界保持：任务 6 的远端人工核验门禁不变；本次未修改生产代码，未部署、未发布镜像、未 push 或创建 PR。
+
+## 2026-07-16 最终交付合规修复：任务 6 远端证据门禁
+
+- Agent 与工作区：由本地 Codex Subagent 在独立 worktree `final-delivery-implementation` 实施，起点为 `41aa125052262bf9f5295452f88619d99069cf6d`；未修改主工作区或 `src/specgate/` 生产代码。
+- 人工 PR 归属：用户编辑并完成 PR #18、PR #19、PR #20 的“执行归属”；主线程只读复核三份描述均包含 OpenAI Codex、人工参与与自动测试边界。本地 Subagent 没有打开或编辑远端 PR，也没有执行远端写入。
+- 人工 Actions 证据：用户提供 `YuGarden404/SpecGate` Actions 列表截图；截图显示 PR #20 合并标题，以及 `main@c39d101` 的 CI #53 与 Pages #31 为绿色成功。主线程只读复核 CI #53 的 `unit-test`、`docker-build` 和 Pages #31 的 `build-pages`、`deploy-pages` 均成功。
+- 远端来源链（主线程只读复核）：[CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238) → `main@c39d101` → `unit-test`、`docker-build` → 成功；[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) → `main@c39d101` → `build-pages`、`deploy-pages` → 成功。本地 Subagent 没有亲自浏览远端，也没有把截图列表外观替代为 job 明细证据。
+- 截图处理：仅将用户指定的合格源图复制为 `docs/evidence/github-actions-pr20-final.png`，未纳入其余六张截图，也未修改或拼接图片；检查结果为 PNG 签名有效、343772 字节、2557×1491，未见凭据或账户敏感信息。
+- TDD RED：把新截图加入 `SCREENSHOTS` 后，指定两项测试结果为 `Ran 2 tests in 0.032s`、`FAILED (failures=1, errors=1)`；失败原因分别是 PNG 不存在和证据矩阵未引用。增强当前发布状态契约后的单项测试结果为 `Ran 1 test in 0.003s`、`FAILED (failures=1)`，失败原因是任务 6 日志章节尚不存在。
+- TDD GREEN：加入真实截图、矩阵链接与远端事实后，计划指定的两项截图/链接测试结果为 `Ran 2 tests in 0.002s`、`OK`；远端状态契约也纳入 PR 归属、四个 job 和部署边界检查。
+- 完整材料验证：第一次运行暴露任务 5 契约仍把 PR #20 后截图固定为“待核验”；根因是旧阶段常量未随已完成的人工门禁更新。仅把该截图证据状态改为“已完成”后，部署边界单项测试结果为 `Ran 1 test in 0.001s`、`OK`，完整 `tests.test_final_evidence` 结果为 `Ran 16 tests in 0.012s`、`OK`；公网后端与公开 registry 的“待完成”断言保持不变。
+- 部署边界：CI #53、Pages #31 与截图只证明自动测试、Docker CI 构建和静态 Pages 发布链成功；公网交互式 Web 后端与公开容器 registry 仍待后续独立阶段完成。本任务未部署服务、未发布镜像、未 push 或创建 PR。
+
+### 任务 6 质量审查修复
+
+- PNG 完整性 RED：先用仓库真实 PNG 构造 24 字节截断和 IHDR CRC 损坏样本；永久测试首次结果为 `Ran 1 test in 0.001s`、`FAILED (errors=1)`，原因是完整性 helper 尚不存在。
+- PNG 完整性 GREEN：新增纯标准库 chunk 解析，检查长度边界、chunk CRC、IHDR、IDAT、唯一末尾 IEND、尾随数据以及 zlib 解压和非空像素流；损坏样本与三张真实截图组合结果为 `Ran 2 tests in 0.050s`、`OK`，未引入 Pillow 或新依赖。
+- 远端结构 RED：图片/章节 helper 缺失时单项测试先 `FAILED (errors=1)`；实现章节与 Markdown 图片解析后，矩阵、清单和任务 6 日志均因缺少完整 run 映射而产生 3 个预期失败。
+- 远端结构 GREEN：三处当前证据统一记录 [CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238) → `main@c39d101` → `unit-test`、`docker-build` → 成功，以及 [Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) → `main@c39d101` → `build-pages`、`deploy-pages` → 成功；单项测试结果为 `Ran 1 test in 0.002s`、`OK`。
+- 图片链接 mutation：临时删除矩阵中的 `![...](evidence/github-actions-pr20-final.png)` 行，同时保留表格与正文路径；结构化测试结果为 `Ran 1 test in 0.001s`、`FAILED (failures=1)`，图片目标计数为 0。恢复唯一图片行后，PNG、结构映射、当前状态与部署边界 5 项聚焦测试结果为 `Ran 5 tests in 0.056s`、`OK`；mutation 未进入提交。
+- 完整材料验证：`python -m unittest tests.test_final_evidence` 结果为 `Ran 18 tests in 0.063s`、`OK`。矩阵和清单的当前交付状态表继续精确要求公网交互式 Web 后端、公开容器 registry 为“待完成”；任务 6 当前正文拒绝与该边界冲突的部署/发布完成声明。
+- 变更边界：只修改测试和证据材料，未修改生产代码、截图二进制或远端状态；未部署、未发布镜像、未 push 或创建 PR。
+
+#### 部署声明变体复审
+
+- TDD RED：先加入永久 mutation 测试，覆盖“公网交互式 Web 后端已完成”“公开容器 registry 已完成”“GHCR 镜像已发布”以及带冒号/空格的“已经部署”、`发布完成`、`已经发布` 变体；首次结果为 `Ran 1 test in 0.001s`、`FAILED (errors=1)`，原因是局部肯定声明检测 helper 尚不存在。
+- TDD GREEN：新增受控正则 helper 后，干净文本中的“待完成”“未部署”“没有发布”“不代表”和“发布镜像不等于部署服务”均无误报，全部肯定 mutation 均被拒绝；helper 单测与实际章节契约结果为 `Ran 2 tests in 0.004s`、`OK`。
+- 作用范围：实际材料检查只组合证据矩阵第 2、3、6、9 节与提交清单第 2、5、7 节，不扫描历史 Agent Log 全文；当前状态表仍由独立表格契约精确要求公网交互式 Web 后端、公开容器 registry 为“待完成”。
+- 验证：部署声明 helper、任务 6 结构证据与交付状态表 3 项结果为 `Ran 3 tests in 0.005s`、`OK`；完整 `tests.test_final_evidence` 结果为 `Ran 19 tests in 0.068s`、`OK`。
+- 边界：本轮只修改 `tests/test_final_evidence.py` 与追加本日志，没有修改生产代码、证据截图、远端 PR/Actions 或部署状态；未 push。
+
+#### 稳定分句与同义词复审
+
+- TDD RED：永久测试增加“公网后端已部署”“公网 Web 后端已经部署”“公开 registry 已发布”“镜像已发布到 GHCR”和原有完整称谓正例，并增加带冒号/中文引号的“不代表、不得声称、不能声称”否定例；正反例与范围组合结果为 `Ran 2 tests in 0.006s`、`FAILED (failures=1)`，旧整句正则误报 3 条包装后的否定声明。
+- TDD GREEN：改为按换行、句末、逗号、分号和“但/但是/而”转折分 clause，去除空白、Markdown、冒号与中英文引号包装，再分别识别公网后端、公开 registry、GHCR 镜像和“镜像…GHCR”反向语序；同句主体前或状态前存在否定标记时不判为肯定。正反例与实际范围组合结果为 `Ran 2 tests in 0.006s`、`OK`。
+- 实际范围：证据矩阵当前检查新增第 5 节，现覆盖第 2、3、5、6、9 节；提交清单覆盖第 2、5、7 节；`AGENT_LOG.md` 只截取任务 6 主标题之后、首个 `###` 子节之前的主记录，因此后续质量 mutation 示例不参与实际状态扫描。
+- 验证：部署声明、远端结构和精确交付状态 3 项结果为 `Ran 3 tests in 0.007s`、`OK`；完整 `tests.test_final_evidence` 结果为 `Ran 19 tests in 0.081s`、`OK`。
+- 边界：本轮仍只修改 `tests/test_final_evidence.py` 与追加本日志，没有修改真实状态材料、生产代码、截图或远端状态；未 push。
+
+#### GHCR 反向语序否定与疑问复审
+
+- TDD RED：永久非肯定样本增加“镜像不发布/不会发布/不再发布/尚未发布/没有发布到 GHCR”和“是否/能否将镜像发布到 GHCR？”；同时增加“不会阻止镜像已发布到 GHCR”“不久后镜像已发布到 GHCR”肯定样本。首次结果为 `Ran 1 test in 0.001s`、`FAILED (failures=1)`，旧反向分支误报其中 5 条非肯定样本。
+- TDD GREEN：反向“镜像…GHCR”只在发布谓词紧邻前检查“不、不会、不再、未、尚未、没有”，没有把单字“不”加入全局否定；clause 保留问号，并排除以“是否、能否、可否、有没有”发起或以中英文问号结尾的疑问。永久正反例结果为 `Ran 1 test in 0.001s`、`OK`。
+- 验证：部署声明、远端结构和交付状态 3 项结果为 `Ran 3 tests in 0.007s`、`OK`；完整 `tests.test_final_evidence` 结果为 `Ran 19 tests in 0.075s`、`OK`。
+- 边界：本轮仍只修改 `tests/test_final_evidence.py` 与追加本日志；没有修改真实状态材料、生产代码、截图或远端状态，未 push。
+
+## 2026-07-16 最终交付合规修复：任务 7 最终验证与快照冻结
+
+- Agent 与工作区：由本地 Codex Subagent 在独立 worktree `final-delivery-implementation` 执行，起点为 `57cc06959ba799d375f38441c30092f5c4bd470d`；起点工作树干净，未修改主工作区或 `src/specgate/` 生产代码。
+- 文档契约：`$env:PYTHONPATH="src"; python -m unittest tests.test_final_evidence tests.test_workflows` 结果为 `Ran 20 tests in 0.065s`、`OK`，退出码 0。
+- 六项确定性机制：计划指定的 Runner guardrail、Gate feedback、review pause、approval resume 与两项 CLI benchmark 结果为 `Ran 6 tests in 47.709s`、`OK`，退出码 0。
+- 完整套件：`$env:PYTHONPATH="src"; python -m unittest discover -s tests` 结果为 `Ran 919 tests in 402.898s`、`OK (skipped=27)`，退出码 0。命令中的非法 `unsafe` profile argparse 输出来自预期拒绝测试，不是失败。
+- 语法与空白：`python -m compileall -q src tests`、`node --check src/specgate/web_static/app.js`、`git diff --check` 均退出码 0 且无输出。
+- 凭据与历史：`git check-ignore -v .env` 返回 `.gitignore:8:.env`；`git log --all --oneline -- .env` 退出码 0 且无输出；排除 `tests` 与 `docs/superpowers/plans` 后的疑似 OpenAI、AWS、GitHub 密钥模式扫描退出码 1 且无输出，表示无匹配项，因此没有需要分类为真实秘密、fixture 或文档示例的命中。
+- Pages 人工门禁：主线程本轮通过只读浏览器复核首页标题 `SpecGate WebUI`、主标题 `SpecGate 静态 HTML 生成与修复闭环`；demo 标题与主标题 `AI for Coding 知识图谱`；report 标题与主标题 `SpecGate Run Report`。本地验证 Subagent 没有亲自浏览远端，未把该复核归为自身浏览结果。
+- 结果口径：`908` 只保留为 PR #20 合并后 `main@c39d101` 的 2026-07-16 审查起点，`896` 只保留为 2026-07-15 历史阶段；当前最终结果统一为 `919`。
+- 提交映射：计划校准 `a25a4b6`；任务 1 `ff1f74a`、`89fef8d`；任务 2 `5bbe548`、`8d66ab1`；任务 3 `f6d7b76`、`01cae8c`；任务 4 `6380410`；任务 5 `6626f44`、`41aa125`；任务 6 `3355033`、`f05b10f`、`1de68fc`、`3438457`、`57cc069`；任务 7 冻结提交 `ed3572e`。完整 SHA 可从当前任务 Git 历史核对。
+- 更新后契约：首次重新运行暴露 1 个过期断言，它仍要求“最终测试数字将在本阶段结束时刷新”；仅将该最终数字契约改为精确要求 `919`、`402.898s` 和退出码 0，并拒绝旧待刷新标记。更新后的文档与工作流契约为 `Ran 20 tests in 0.063s`、`OK`，退出码 0；`git diff --check` 退出码 0，仅有 Windows LF→CRLF 提示，没有 whitespace error。
+- 质量审查独立复跑：审查者重新运行完整套件，结果为 `Ran 919 tests in 392.480s`、`OK (skipped=27)`，退出码 0。该结果是质量审查环境中的独立复跑，不替换冻结提交 `ed3572e` 所记录的 `402.898s` 运行观测。
+- 边界：本任务未部署服务、未发布容器镜像、未 push、未创建 PR；公网交互式 Web 后端与公开容器 registry 保持待完成。
+
+### 任务 7 两阶段审查与收尾
+
+- 规格合规审查：逐项对照最终交付合规设计与实施计划后 `APPROVED`，无 Critical、Important 或 Minor 问题；审查者独立复跑文档与工作流契约，结果为 `Ran 20 tests in 0.064s`、`OK`。
+- 初次质量审查：发现 2 个 Important 问题，分别是永久证据契约硬编码单次本机耗时，以及任务 7 冻结提交与审查复跑事实尚未完成收尾映射。
+- 质量修复：提交 `f0c3bf0`（完整 SHA `f0c3bf07c929f28630bee295a1b90be47175b298`）改为从权威矩阵提取正浮点耗时并跨材料校验同一次冻结运行，同时补充冻结提交与独立复跑边界。
+- 质量复审：`APPROVED`，没有新的 Critical 或 Important 问题；审查者独立复跑文档与工作流契约，结果为 `Ran 20 tests in 0.077s`、`OK`。
+- 步骤 11 预检查：收尾修改前 `git status --short` 无输出；最近 20 条提交覆盖计划校准、任务 1 至任务 7、冻结提交与质量修复。
+
+### 全阶段终审问题修复
+
+- 事实一致性 RED：将 `docs/REFLECTION_FACT_CHECK.md` 纳入当前远端证据契约，并要求 CI #53、Pages #31、`main@c39d101`、`docs/evidence/github-actions-pr20-final.png`、已完成/已核验语义及待完成部署边界；聚焦测试结果为 `Ran 1 test in 0.006s`、`FAILED (failures=9)`，失败均来自该文件仍保留旧“尚待人工远端核对”状态且缺少当前证据。
+- 事实一致性 GREEN：仅更新事实核对清单的远端状态和部署边界，保留“观点、案例选择、批判结论和最终文字由学生本人修改确认”的边界；聚焦测试结果为 `Ran 1 test in 0.003s`、`OK`。
+- 否定作用域 RED：新增四个永久 mutation，分别覆盖前一主体否定、后一主体肯定，前后均否定，以及前一主体肯定、后一主体否定；旧逻辑结果为 `Ran 1 test in 0.002s`、`FAILED (failures=3)`，证明整句否定错误遮蔽连接词后的独立主体。
+- 否定作用域 GREEN：仅把“并且、且、同时、以及”加入既有分句边界，使每个短 clause 独立判断；全部既有正反例和四个新 mutation 结果为 `Ran 1 test in 0.001s`、`OK`。
+- 验证：两个聚焦测试组合结果为 `Ran 2 tests in 0.005s`、`OK`；完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 20 tests in 0.084s`、`OK`；`git diff --check` 退出码 0，仅有 Windows LF→CRLF 提示，没有 whitespace error。`.env` 继续由 `.gitignore:8` 忽略且提交历史为空；排除 `tests` 和实施计划后的 OpenAI、AWS、GitHub 疑似密钥模式扫描退出码 1 且无输出，表示没有命中。
+- 变更边界：本轮只修改 `tests/test_final_evidence.py`、`docs/REFLECTION_FACT_CHECK.md`、`AGENT_LOG.md` 与 `PLAN.md`；没有修改 `src/specgate/` 生产代码或 `REFLECTION.md` 正文，未部署、未发布镜像、未 push。

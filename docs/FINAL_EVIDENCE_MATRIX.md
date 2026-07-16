@@ -6,14 +6,13 @@
 
 ## 2. 最终版本快照
 
-- 当前主线基线：`main@e73e937`。
-- 最近合并：PR #17，学生本人确认后的项目反思。
-- 当前安全加固分支回归：`Ran 846 tests in 216.617s`、`OK (skipped=27)`。
-- 远端最近状态：PR #17 合并后的 CI #47 与 Pages #28 为绿色；仓库截图保留到 PR #16 前后的关键工作流，最新编号由 GitHub Actions 页面核对。
+- 审查起点主线基线：`main@c39d101`。
+- 最近已合并功能修复：PR #20。
+- 审查起点完整回归：`Ran 908 tests in 210.559s`、`OK (skipped=27)`。
+- 当前最终验证（2026-07-16 最终交付合规 worktree）：`Ran 919 tests in 402.898s`、`OK (skipped=27)`，命令退出码为 0。
+- 远端证据：用户已更新 PR #18、PR #19、PR #20 的“执行归属”，三份描述均记录主开发 Agent 为 OpenAI Codex，并区分人工参与与 Mock/Fake/Stub 自动测试边界。
+- PR #20 合并后验证：主线程只读核验 `main@c39d101` 的 [CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238) 与 [Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 成功；四个 job 的映射见第 6 节，截图见 `docs/evidence/github-actions-pr20-final.png`。
 - 公开入口：<https://yugarden404.github.io/SpecGate/>。
-- 当前未提交分支：`feat-real-llm-web-integration`；尚无 commit、PR、CI run 或部署截图，不在本矩阵中虚构远端编号。
-- 当前分支高风险组合：`Ran 318 tests in 115.002s`、`OK (skipped=3)`；自动测试使用 Fake/Stub Transport，没有访问真实网络。
-- 当前分支全量回归：`Ran 896 tests in 216.620s`、`OK (skipped=27)`；compileall、JavaScript 语法、材料契约和 whitespace 检查退出码均为 0。
 
 ## 3. 课程交付物
 
@@ -23,8 +22,11 @@
 | 自实现 Harness | 已完成 | `src/specgate/runner.py`、`src/specgate/actions.py`、`src/specgate/tools.py` | Runner 机制测试 |
 | MockLLM 确定性测试 | 已完成 | `tests/test_runner.py`、`tests/test_cli.py` | `python -m unittest tests.test_runner tests.test_cli` |
 | 凭据治理 | 已完成 | `src/specgate/credentials.py`、`src/specgate/web_credentials.py` | 凭据测试，无明文回显 |
-| 分发 | 已完成 | `Dockerfile`、`.gitlab-ci.yml` | Docker build/smoke 与 CI |
-| 公开 WebUI | 已完成 | `README.md`、`.github/workflows/pages.yml` | 打开 Pages URL |
+| 公开静态评审入口 | 已完成 | GitHub Pages 首页、demo、报告 | 打开 README 中的三个 Pages URL |
+| 本地交互式 WebUI | 已完成 | `Dockerfile`、Web 运行时与确定性测试 | Docker/本地启动与确定性测试 |
+| 公网交互式 Web 后端 | 待完成 | 后续独立部署阶段 | 任务 6 人工门禁之后另行部署与核验 |
+| Docker 本地与 CI 构建 | 已完成 | `Dockerfile`、`.gitlab-ci.yml` | Docker build/smoke 与 CI |
+| 公开容器 registry | 待完成 | 后续 GHCR 分发阶段 | 发布后另行记录公开镜像地址与摘要 |
 | 学生反思 | 已由学生确认 | `REFLECTION.md`、`docs/REFLECTION_FACT_CHECK.md` | PR #17 与学生确认记录 |
 
 ## 4. 核心机制
@@ -54,6 +56,9 @@
 | Runner 配置 | `a523137` | `f45e73a` | [#15](https://github.com/YuGarden404/SpecGate/pull/15) | `evidence/github-actions-runtime-config.png` |
 | 最终材料 | `116cc10` | `fa3278a` | [#16](https://github.com/YuGarden404/SpecGate/pull/16) | 合并后 CI/Pages |
 | 学生反思 | `d550032` | `e73e937` | [#17](https://github.com/YuGarden404/SpecGate/pull/17) | CI #47、Pages #28 |
+| 后端审计加固 | `d3607c4` | `8d30ca5` | [#18](https://github.com/YuGarden404/SpecGate/pull/18) | PR “执行归属”已核对；OpenAI Codex、人工参与与自动测试边界已记录 |
+| Web 真实 LLM 接入 | `5279a7c` | `b98563a` | [#19](https://github.com/YuGarden404/SpecGate/pull/19) | PR “执行归属”已核对；OpenAI Codex、人工参与与自动测试边界已记录 |
+| 真实 LLM 生命周期修复 | `e35eb46` | `c39d101` | [#20](https://github.com/YuGarden404/SpecGate/pull/20) | PR “执行归属”已核对；[CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)、[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 与 `docs/evidence/github-actions-pr20-final.png` |
 
 ## 6. CI 与截图说明
 
@@ -63,7 +68,22 @@
 
 ![Runner 配置接线与最终 main Actions](evidence/github-actions-runtime-config.png)
 
-截图记录 PR #15、合并后 main CI #43 和 Pages #26 均通过。Workflow 定义见 `.github/workflows/ci.yml`、`.github/workflows/pages.yml`；GitLab 课程要求见 `.gitlab-ci.yml`，Docker 分发见 `Dockerfile`。
+截图记录 PR #15、合并后 main CI #43 和 Pages #26 均通过。Workflow 定义见 `.github/workflows/ci.yml`、`.github/workflows/pages.yml`；GitLab 课程要求见 `.gitlab-ci.yml`，Docker 本地与 CI 构建定义见 `Dockerfile`。这些历史证据不代表镜像已经发布到公开容器 registry，也不代表公网交互式 Web 后端已经部署。
+
+![PR #20 合并后的 main CI 与 Pages](evidence/github-actions-pr20-final.png)
+
+用户提供的截图显示 `YuGarden404/SpecGate` Actions 列表中的 PR #20 合并标题，以及以下由主线程只读复核的来源链：
+
+- [CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238) → `main@c39d101` → `unit-test`、`docker-build` → 成功
+- [Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) → `main@c39d101` → `build-pages`、`deploy-pages` → 成功
+
+截图无凭据或账户敏感信息。该证据只证明当前 main 的自动测试、Docker CI 构建与静态 Pages 发布链成功；公网交互式 Web 后端和公开容器 registry 仍待后续独立阶段完成。
+
+主线程在本轮通过只读浏览器重新核对公开 Pages；本地验证 Subagent 没有亲自浏览远端：
+
+- 首页：标题 `SpecGate WebUI`，主标题 `SpecGate 静态 HTML 生成与修复闭环`
+- demo：标题与主标题均为 `AI for Coding 知识图谱`
+- report：标题与主标题均为 `SpecGate Run Report`
 
 ## 7. 核心机制复现
 
@@ -85,13 +105,22 @@ node --check src/specgate/web_static/app.js
 git diff --check
 ```
 
-当前真实 LLM 接入分支全量结果：`Ran 896 tests in 216.620s`、`OK (skipped=27)`。非法 `unsafe` governance profile 的 argparse 输出来自预期拒绝测试，不是失败；跳过项主要来自 Windows 当前没有创建符号链接的权限和仓库既有平台条件。
+当前最终结果（2026-07-16 最终交付合规 worktree）：
+
+- 文档与工作流契约：`Ran 20 tests in 0.065s`、`OK`，退出码 0。
+- 六项确定性机制：`Ran 6 tests in 47.709s`、`OK`，退出码 0。
+- 完整套件：`Ran 919 tests in 402.898s`、`OK (skipped=27)`，退出码 0。
+- `python -m compileall -q src tests`、`node --check src/specgate/web_static/app.js` 与 `git diff --check` 均退出码 0 且无错误输出。
+- `.env` 由 `.gitignore:8` 忽略，`.env` 提交历史为空；排除测试与实施计划后的疑似密钥模式扫描无命中。
+
+历史阶段结果（2026-07-15 Web 真实 LLM 接入分支）：`Ran 896 tests in 216.620s`、`OK (skipped=27)`。该数字早于 PR #20 生命周期修复，不代表当前快照。非法 `unsafe` governance profile 的 argparse 输出来自预期拒绝测试，不是失败；跳过项主要来自 Windows 当前没有创建符号链接的权限和仓库既有平台条件。
 
 ## 9. 边界
 
 - 自动验收只使用 MockLLM/Fake/Stub，不访问真实 DNS、socket 或 Provider。
 - Web 默认使用 MockLLM；完整配置后新 run 可使用真实模型，Provider 失败不会降级。
 - GitHub Pages 仅为静态展示，真实模式需要部署 Web 后端、持久化数据库、凭据主密钥与 `SPECGATE_LLM_ALLOWED_HOSTS` 网络策略。
+- 本地交互式 WebUI 已具备 Docker/本地启动与确定性测试；公网交互式 Web 后端和公开容器 registry 均待后续独立阶段完成。发布镜像不等于部署服务。
 - 不开放 shell，不执行同源模型生成 HTML。
 - CLI 持久化凭据使用 OS keyring；Web 使用独立主密钥和 AES-256-GCM。
 - `.env` 只作为被保护路径和威胁示例出现，SpecGate 不读写 `.env`。
