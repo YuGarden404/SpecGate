@@ -71,15 +71,15 @@ SpecGate 的 Harness 核心、Mock/Stub 确定性测试、凭据治理、CI、Do
 
 本阶段在材料实施前增加一次补充冷启动验证：
 
-1. 使用与主开发 Agent（Codex）不同类型的全新 Claude Code 会话；选择依据是本机已安装 Claude Code，而未安装 Gemini CLI。
+1. 使用与主开发 Agent（Codex）不同类型的全新 Gemini CLI 会话。Claude Code 因无官方账号且无法连接 Anthropic 服务而退出，OpenCode 官方 Windows x64 二进制在本机无法加载；用户具有可用 Google 账号，因此改用官方 `@google/gemini-cli@0.50.0`。
 2. 不导入本对话历史、memory 或口头解释。
 3. 只提供更新后的 `SPEC.md`、`PLAN.md` 和固定任务指令。
-4. 让 Claude Code 尝试完成本阶段的 1 至 2 个材料任务。
+4. 让 Gemini CLI 尝试完成本阶段的 1 至 2 个材料任务。
 5. 明确要求遇到不确定内容立即暂停提问，不得猜测继续。
 6. 保存其问题、输出、误读、与预期差异及执行耗时。
 7. 根据结果修订 SPEC/PLAN，并记录修订前后的关键 diff。
 
-该记录必须称为“最终合规阶段的补充冷启动验证”，不能描述为 MVP 实现前已经完成的历史事件。若 Claude Code 没有暂停、没有产出或任务失败，也应如实记录。
+该记录必须称为“最终合规阶段的补充冷启动验证”，不能描述为 MVP 实现前已经完成的历史事件。若 Gemini CLI 没有暂停、没有产出或任务失败，也应如实记录。
 
 ## 7. Open Design 处理
 
@@ -132,7 +132,7 @@ SpecGate 的 Harness 核心、Mock/Stub 确定性测试、凭据治理、CI、Do
 
 - 无法验证的远端信息写为“待核对”。
 - 许可证不确定时查询官方元数据，不做推测。
-- Claude Code 没有按预期暂停或产出时记录实际结果。
+- Gemini CLI 没有按预期暂停或产出时记录实际结果。
 - 已合并 PR 缺少归属信息时列为待人工更新。
 - HEAD、PR 或测试数量变化后，在最终验证阶段重新刷新快照。
 - 不为了让文档看起来完整而删除失败历史或平台限制。

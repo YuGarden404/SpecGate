@@ -6,7 +6,7 @@
 
 **实现结构：** 以 `tests/test_final_evidence.py` 作为确定性材料契约入口，每个合规主题先增加失败断言，再最小化修改对应 Markdown 材料。远端 PR、CI 截图和不同类型 Agent 冷启动结果作为人工门禁，只有真实发生后才写入“已完成”；生产代码保持不变。
 
-**技术栈：** Python 3.11+、`unittest`、`tomllib`、Markdown、Git/GitHub、全新 Claude Code 会话。
+**技术栈：** Python 3.11+、`unittest`、`tomllib`、Markdown、Git/GitHub、`@google/gemini-cli@0.50.0` 全新会话。
 
 ---
 
@@ -24,7 +24,7 @@
 - `README.md`：第三方许可证表、静态 Pages 与交互式 Web 后端边界。
 - `docs/evidence/github-actions-pr20-final.png`：由用户提供的 PR #20 合并后 CI/Pages 截图。
 
-## 执行前门禁：全新 Claude Code 冷启动
+## 执行前门禁：全新 Gemini CLI 冷启动
 
 此门禁必须在任务 1 以外的材料实现开始前完成。它是最终合规阶段的补充验证，不追溯性替代 2026-07-08 的早期计划审查。
 
@@ -32,9 +32,15 @@
 
 调用 `superpowers:using-git-worktrees`，从包含本计划的 commit 创建独立冷启动 worktree。冷启动 worktree 不导入当前对话、memory 或未提交改动。
 
-- [ ] **步骤 2：启动完全独立的 Claude Code 会话**
+- [ ] **步骤 2：启动完全独立的 Gemini CLI 会话**
 
-在冷启动 worktree 中启动不同类型的 Claude Code Agent。选择它是因为主开发 Agent 为 Codex，且本机已安装 Claude Code、未安装 Gemini CLI。只向它发送以下指令，不补充口头解释：
+Claude Code 因无官方账号且无法连接 Anthropic 服务而退出；OpenCode 官方 Windows x64 二进制在本机无法加载。用户具有可用 Google 账号，因此在冷启动 worktree 中运行官方 Gemini CLI：
+
+```powershell
+npx.cmd --yes @google/gemini-cli@0.50.0
+```
+
+完成 Google 登录后，只向全新 Gemini CLI 会话发送以下指令，不补充口头解释：
 
 ```text
 这是一次 SpecGate 最终合规阶段的冷启动验证。
@@ -54,11 +60,11 @@ docs/superpowers/plans/2026-07-16-final-delivery-compliance.md。
 
 - [ ] **步骤 3：保留未经改写的结果**
 
-用户把 Claude Code 的问题、最终报告、`git diff --stat`、测试输出和耗时原样提供给主线程。主线程不得先行润色或把失败改写为成功。
+用户把 Gemini CLI 的问题、最终报告、`git diff --stat`、测试输出和耗时原样提供给主线程。主线程不得先行润色或把失败改写为成功。Claude Code 与 OpenCode 的环境阻塞也作为 Agent 选择过程如实记录。
 
 - [ ] **步骤 4：判断计划是否需要修订**
 
-若 Claude Code 因计划歧义暂停，先修订本计划并提交该修订，再开始任务 1。若 Claude Code 可以完成任务，也要记录其与预期不同的理解和产出差异。
+若 Gemini CLI 因计划歧义暂停，先修订本计划并提交该修订，再开始任务 1。若 Gemini CLI 可以完成任务，也要记录其与预期不同的理解和产出差异。
 
 ### 任务 1：记录补充冷启动证据
 
@@ -116,9 +122,9 @@ python -m unittest tests.test_final_evidence.FinalEvidenceTests.test_supplementa
 
 预期：测试失败，因为 `docs/superpowers/audits/2026-07-16-final-compliance-cold-start.md` 尚不存在。
 
-- [ ] **步骤 3：根据 Claude Code 的实际结果编写审计记录**
+- [ ] **步骤 3：根据 Gemini CLI 的实际结果编写审计记录**
 
-创建审计文件并使用测试要求的八个标题。每节只写 Claude Code 原始结果能够支持的事实；没有暂停问题时明确写“本次没有暂停提问”，没有成功产出时记录失败和阻塞点。禁止使用推测性补全。
+创建审计文件并使用测试要求的八个标题。每节只写 Gemini CLI 原始结果能够支持的事实；没有暂停问题时明确写“本次没有暂停提问”，没有成功产出时记录失败和阻塞点。禁止使用推测性补全。
 
 在 `SPEC_PROCESS.md` 的冷启动章节后追加“最终合规阶段补充冷启动”，明确：
 
