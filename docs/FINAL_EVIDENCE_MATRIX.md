@@ -11,7 +11,7 @@
 - 审查起点完整回归：`Ran 908 tests in 210.559s`、`OK (skipped=27)`。
 - 当前工作阶段：最终交付合规修复；最终测试数字将在本阶段结束时刷新。
 - 远端证据：用户已更新 PR #18、PR #19、PR #20 的“执行归属”，三份描述均记录主开发 Agent 为 OpenAI Codex，并区分人工参与与 Mock/Fake/Stub 自动测试边界。
-- PR #20 合并后验证：主线程只读核验 `main@c39d101` 的 CI #53 与 Pages #31 成功；`unit-test`、`docker-build`、`build-pages`、`deploy-pages` 均成功，截图见 `docs/evidence/github-actions-pr20-final.png`。
+- PR #20 合并后验证：主线程只读核验 `main@c39d101` 的 [CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238) 与 [Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 成功；四个 job 的映射见第 6 节，截图见 `docs/evidence/github-actions-pr20-final.png`。
 - 公开入口：<https://yugarden404.github.io/SpecGate/>。
 
 ## 3. 课程交付物
@@ -58,7 +58,7 @@
 | 学生反思 | `d550032` | `e73e937` | [#17](https://github.com/YuGarden404/SpecGate/pull/17) | CI #47、Pages #28 |
 | 后端审计加固 | `d3607c4` | `8d30ca5` | [#18](https://github.com/YuGarden404/SpecGate/pull/18) | PR “执行归属”已核对；OpenAI Codex、人工参与与自动测试边界已记录 |
 | Web 真实 LLM 接入 | `5279a7c` | `b98563a` | [#19](https://github.com/YuGarden404/SpecGate/pull/19) | PR “执行归属”已核对；OpenAI Codex、人工参与与自动测试边界已记录 |
-| 真实 LLM 生命周期修复 | `e35eb46` | `c39d101` | [#20](https://github.com/YuGarden404/SpecGate/pull/20) | PR “执行归属”已核对；CI #53、Pages #31 与 `docs/evidence/github-actions-pr20-final.png` |
+| 真实 LLM 生命周期修复 | `e35eb46` | `c39d101` | [#20](https://github.com/YuGarden404/SpecGate/pull/20) | PR “执行归属”已核对；[CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)、[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 与 `docs/evidence/github-actions-pr20-final.png` |
 
 ## 6. CI 与截图说明
 
@@ -72,7 +72,12 @@
 
 ![PR #20 合并后的 main CI 与 Pages](evidence/github-actions-pr20-final.png)
 
-用户提供的截图显示 `YuGarden404/SpecGate` Actions 列表中的 PR #20 合并标题，以及 `main@c39d101` 的 CI #53、Pages #31 均为成功状态。主线程进一步只读核验 CI #53 的 `unit-test`、`docker-build` 与 Pages #31 的 `build-pages`、`deploy-pages` 均成功。截图无凭据或账户敏感信息。该证据只证明当前 main 的自动测试、Docker CI 构建与静态 Pages 发布链成功；公网交互式 Web 后端和公开容器 registry 仍待后续独立阶段完成。
+用户提供的截图显示 `YuGarden404/SpecGate` Actions 列表中的 PR #20 合并标题，以及以下由主线程只读复核的来源链：
+
+- [CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238) → `main@c39d101` → `unit-test`、`docker-build` → 成功
+- [Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) → `main@c39d101` → `build-pages`、`deploy-pages` → 成功
+
+截图无凭据或账户敏感信息。该证据只证明当前 main 的自动测试、Docker CI 构建与静态 Pages 发布链成功；公网交互式 Web 后端和公开容器 registry 仍待后续独立阶段完成。
 
 ## 7. 核心机制复现
 

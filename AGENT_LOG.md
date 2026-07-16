@@ -923,8 +923,19 @@
 - Agent 与工作区：由本地 Codex Subagent 在独立 worktree `final-delivery-implementation` 实施，起点为 `41aa125052262bf9f5295452f88619d99069cf6d`；未修改主工作区或 `src/specgate/` 生产代码。
 - 人工 PR 归属：用户编辑并完成 PR #18、PR #19、PR #20 的“执行归属”；主线程只读复核三份描述均包含 OpenAI Codex、人工参与与自动测试边界。本地 Subagent 没有打开或编辑远端 PR，也没有执行远端写入。
 - 人工 Actions 证据：用户提供 `YuGarden404/SpecGate` Actions 列表截图；截图显示 PR #20 合并标题，以及 `main@c39d101` 的 CI #53 与 Pages #31 为绿色成功。主线程只读复核 CI #53 的 `unit-test`、`docker-build` 和 Pages #31 的 `build-pages`、`deploy-pages` 均成功。
+- 远端来源链（主线程只读复核）：[CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238) → `main@c39d101` → `unit-test`、`docker-build` → 成功；[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) → `main@c39d101` → `build-pages`、`deploy-pages` → 成功。本地 Subagent 没有亲自浏览远端，也没有把截图列表外观替代为 job 明细证据。
 - 截图处理：仅将用户指定的合格源图复制为 `docs/evidence/github-actions-pr20-final.png`，未纳入其余六张截图，也未修改或拼接图片；检查结果为 PNG 签名有效、343772 字节、2557×1491，未见凭据或账户敏感信息。
 - TDD RED：把新截图加入 `SCREENSHOTS` 后，指定两项测试结果为 `Ran 2 tests in 0.032s`、`FAILED (failures=1, errors=1)`；失败原因分别是 PNG 不存在和证据矩阵未引用。增强当前发布状态契约后的单项测试结果为 `Ran 1 test in 0.003s`、`FAILED (failures=1)`，失败原因是任务 6 日志章节尚不存在。
 - TDD GREEN：加入真实截图、矩阵链接与远端事实后，计划指定的两项截图/链接测试结果为 `Ran 2 tests in 0.002s`、`OK`；远端状态契约也纳入 PR 归属、四个 job 和部署边界检查。
 - 完整材料验证：第一次运行暴露任务 5 契约仍把 PR #20 后截图固定为“待核验”；根因是旧阶段常量未随已完成的人工门禁更新。仅把该截图证据状态改为“已完成”后，部署边界单项测试结果为 `Ran 1 test in 0.001s`、`OK`，完整 `tests.test_final_evidence` 结果为 `Ran 16 tests in 0.012s`、`OK`；公网后端与公开 registry 的“待完成”断言保持不变。
 - 部署边界：CI #53、Pages #31 与截图只证明自动测试、Docker CI 构建和静态 Pages 发布链成功；公网交互式 Web 后端与公开容器 registry 仍待后续独立阶段完成。本任务未部署服务、未发布镜像、未 push 或创建 PR。
+
+### 任务 6 质量审查修复
+
+- PNG 完整性 RED：先用仓库真实 PNG 构造 24 字节截断和 IHDR CRC 损坏样本；永久测试首次结果为 `Ran 1 test in 0.001s`、`FAILED (errors=1)`，原因是完整性 helper 尚不存在。
+- PNG 完整性 GREEN：新增纯标准库 chunk 解析，检查长度边界、chunk CRC、IHDR、IDAT、唯一末尾 IEND、尾随数据以及 zlib 解压和非空像素流；损坏样本与三张真实截图组合结果为 `Ran 2 tests in 0.050s`、`OK`，未引入 Pillow 或新依赖。
+- 远端结构 RED：图片/章节 helper 缺失时单项测试先 `FAILED (errors=1)`；实现章节与 Markdown 图片解析后，矩阵、清单和任务 6 日志均因缺少完整 run 映射而产生 3 个预期失败。
+- 远端结构 GREEN：三处当前证据统一记录 [CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238) → `main@c39d101` → `unit-test`、`docker-build` → 成功，以及 [Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) → `main@c39d101` → `build-pages`、`deploy-pages` → 成功；单项测试结果为 `Ran 1 test in 0.002s`、`OK`。
+- 图片链接 mutation：临时删除矩阵中的 `![...](evidence/github-actions-pr20-final.png)` 行，同时保留表格与正文路径；结构化测试结果为 `Ran 1 test in 0.001s`、`FAILED (failures=1)`，图片目标计数为 0。恢复唯一图片行后，PNG、结构映射、当前状态与部署边界 5 项聚焦测试结果为 `Ran 5 tests in 0.056s`、`OK`；mutation 未进入提交。
+- 完整材料验证：`python -m unittest tests.test_final_evidence` 结果为 `Ran 18 tests in 0.063s`、`OK`。矩阵和清单的当前交付状态表继续精确要求公网交互式 Web 后端、公开容器 registry 为“待完成”；任务 6 当前正文拒绝与该边界冲突的部署/发布完成声明。
+- 变更边界：只修改测试和证据材料，未修改生产代码、截图二进制或远端状态；未部署、未发布镜像、未 push 或创建 PR。

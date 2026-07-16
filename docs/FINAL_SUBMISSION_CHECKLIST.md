@@ -42,7 +42,7 @@ MVP 范围：
 | GitHub Actions | 已完成 | `.github/workflows/ci.yml`、`.github/workflows/pages.yml` |
 | 最终证据矩阵 | 已完成 | `docs/FINAL_EVIDENCE_MATRIX.md` |
 | 历史 CI/Pages 截图（截至 PR #15/#17） | 已完成 | `docs/evidence/` 中的历史截图与第 5 节记录 |
-| PR #20 后 CI/Pages 与新截图 | 已完成 | CI #53、Pages #31、`docs/evidence/github-actions-pr20-final.png` |
+| PR #20 后 CI/Pages 与新截图 | 已完成 | [CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)、[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242)、`docs/evidence/github-actions-pr20-final.png` |
 | 公开静态评审入口 | 已完成 | GitHub Pages 首页、demo、报告 |
 | 本地交互式 WebUI | 已完成 | Docker/本地启动与确定性测试 |
 | 公网交互式 Web 后端 | 待完成 | 后续独立部署阶段 |
@@ -97,7 +97,12 @@ MVP 范围：
 | Web 真实 LLM 接入 | `5279a7c` | `b98563a` | [#19](https://github.com/YuGarden404/SpecGate/pull/19) |
 | 真实 LLM 生命周期修复 | `e35eb46` | `c39d101` | [#20](https://github.com/YuGarden404/SpecGate/pull/20) |
 
-PR #12 合并后 Pages 曾因依赖缺失失败，PR #13 修复后恢复通过；该失败—修复历史保留在 `docs/FINAL_EVIDENCE_MATRIX.md` 和 `docs/evidence/` 中。用户已更新并核对 PR #18、PR #19、PR #20 的“执行归属”：三份描述均记录主开发 Agent 为 OpenAI Codex，并区分人工参与与自动测试边界。主线程只读核验 `main@c39d101` 的 CI #53、Pages #31 成功，其中 `unit-test`、`docker-build`、`build-pages`、`deploy-pages` 均成功；截图见 `docs/evidence/github-actions-pr20-final.png`。
+PR #12 合并后 Pages 曾因依赖缺失失败，PR #13 修复后恢复通过；该失败—修复历史保留在 `docs/FINAL_EVIDENCE_MATRIX.md` 和 `docs/evidence/` 中。用户已更新并核对 PR #18、PR #19、PR #20 的“执行归属”：三份描述均记录主开发 Agent 为 OpenAI Codex，并区分人工参与与自动测试边界。PR #20 合并后的来源链为：
+
+- [CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238) → `main@c39d101` → `unit-test`、`docker-build` → 成功
+- [Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) → `main@c39d101` → `build-pages`、`deploy-pages` → 成功
+
+以上运行由主线程只读核验；截图见 `docs/evidence/github-actions-pr20-final.png`。
 
 ## 6. 本地复现命令
 

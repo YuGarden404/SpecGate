@@ -4,6 +4,7 @@ import re
 import struct
 import tomllib
 import unittest
+import zlib
 from pathlib import Path
 
 
@@ -56,7 +57,101 @@ def read_text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
-def markdown_table_in_section(relative: str, heading: str) -> tuple[tuple[str, ...], ...]:
+def validate_png_bytes(raw: bytes) -> tuple[int, int]:
+    if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("invalid PNG signature")
+
+    offset = 8
+    chunk_index = 0
+    dimensions: tuple[int, int] | None = None
+    idat_parts: list[bytes] = []
+    idat_ended = False
+    seen_iend = False
+    while offset < len(raw):
+        if len(raw) - offset < 12:
+            raise ValueError("truncated PNG chunk header")
+
+        length = struct.unpack(">I", raw[offset : offset + 4])[0]
+        chunk_type = raw[offset + 4 : offset + 8]
+        if re.fullmatch(rb"[A-Za-z]{4}", chunk_type) is None:
+            raise ValueError("invalid PNG chunk type")
+        data_start = offset + 8
+        data_end = data_start + length
+        chunk_end = data_end + 4
+        if chunk_end > len(raw):
+            raise ValueError("truncated PNG chunk data")
+
+        chunk_data = raw[data_start:data_end]
+        expected_crc = struct.unpack(">I", raw[data_end:chunk_end])[0]
+        actual_crc = zlib.crc32(chunk_type)
+        actual_crc = zlib.crc32(chunk_data, actual_crc) & 0xFFFFFFFF
+        if actual_crc != expected_crc:
+            raise ValueError(f"invalid PNG CRC for {chunk_type.decode('ascii')}")
+
+        if chunk_index == 0 and chunk_type != b"IHDR":
+            raise ValueError("PNG must start with IHDR")
+        if chunk_type == b"IHDR":
+            if chunk_index != 0 or dimensions is not None or length != 13:
+                raise ValueError("invalid PNG IHDR")
+            width, height, bit_depth, color_type, compression, filtering, interlace = (
+                struct.unpack(">IIBBBBB", chunk_data)
+            )
+            valid_bit_depths = {
+                0: {1, 2, 4, 8, 16},
+                2: {8, 16},
+                3: {1, 2, 4, 8},
+                4: {8, 16},
+                6: {8, 16},
+            }
+            if (
+                width == 0
+                or height == 0
+                or bit_depth not in valid_bit_depths.get(color_type, set())
+                or compression != 0
+                or filtering != 0
+                or interlace not in (0, 1)
+            ):
+                raise ValueError("invalid PNG IHDR")
+            dimensions = (width, height)
+        elif chunk_type == b"IDAT":
+            if dimensions is None or idat_ended:
+                raise ValueError("invalid PNG IDAT sequence")
+            idat_parts.append(chunk_data)
+        else:
+            if idat_parts:
+                idat_ended = True
+            if chunk_type == b"IEND":
+                if length != 0 or seen_iend or not idat_parts:
+                    raise ValueError("invalid PNG IEND")
+                seen_iend = True
+                offset = chunk_end
+                if offset != len(raw):
+                    raise ValueError("PNG has trailing data after IEND")
+                break
+
+        offset = chunk_end
+        chunk_index += 1
+
+    if dimensions is None:
+        raise ValueError("PNG is missing IHDR")
+    if not idat_parts:
+        raise ValueError("PNG is missing IDAT")
+    if not seen_iend:
+        raise ValueError("truncated PNG without IEND")
+
+    decompressor = zlib.decompressobj()
+    try:
+        pixels = decompressor.decompress(b"".join(idat_parts)) + decompressor.flush()
+    except zlib.error as exc:
+        raise ValueError("invalid PNG IDAT zlib stream") from exc
+    if not decompressor.eof or decompressor.unused_data or decompressor.unconsumed_tail:
+        raise ValueError("incomplete PNG IDAT zlib stream")
+    if not pixels:
+        raise ValueError("empty PNG pixel stream")
+    return dimensions
+
+
+def markdown_section(relative: str, heading: str) -> str:
     text = read_text(relative)
     heading_matches = list(re.finditer(rf"^{re.escape(heading)}\s*$", text, re.MULTILINE))
     if len(heading_matches) != 1:
@@ -66,7 +161,24 @@ def markdown_table_in_section(relative: str, heading: str) -> tuple[tuple[str, .
 
     section_tail = text[heading_matches[0].end() :]
     next_heading = re.search(r"^##\s+", section_tail, re.MULTILINE)
-    section = section_tail[: next_heading.start()] if next_heading else section_tail
+    return section_tail[: next_heading.start()] if next_heading else section_tail
+
+
+def markdown_image_targets_in_section(relative: str, heading: str) -> tuple[str, ...]:
+    section = markdown_section(relative, heading)
+    image_pattern = re.compile(
+        r"!\[(?:\\.|[^\]\\\r\n])*\]"
+        r"\(\s*(?P<target><[^>\r\n]+>|[^\s()]+)"
+        r"(?:\s+(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|\([^()\r\n]*\)))?\s*\)"
+    )
+    return tuple(
+        match.group("target").removeprefix("<").removesuffix(">")
+        for match in image_pattern.finditer(section)
+    )
+
+
+def markdown_table_in_section(relative: str, heading: str) -> tuple[tuple[str, ...], ...]:
+    section = markdown_section(relative, heading)
 
     table_blocks: list[list[str]] = []
     current_block: list[str] = []
@@ -165,11 +277,24 @@ class FinalEvidenceTests(unittest.TestCase):
         for screenshot in SCREENSHOTS:
             with self.subTest(screenshot=screenshot.name):
                 raw = screenshot.read_bytes()
-                self.assertEqual(raw[:8], b"\x89PNG\r\n\x1a\n")
-                self.assertGreaterEqual(len(raw), 24)
-                width, height = struct.unpack(">II", raw[16:24])
+                width, height = validate_png_bytes(raw)
                 self.assertGreaterEqual(width, 1000)
                 self.assertGreaterEqual(height, 500)
+
+    def test_png_validator_rejects_truncated_and_crc_corrupted_inputs(self):
+        raw = SCREENSHOTS[0].read_bytes()
+        width, height = validate_png_bytes(raw)
+        self.assertGreaterEqual(width, 1000)
+        self.assertGreaterEqual(height, 500)
+
+        with self.assertRaisesRegex(ValueError, "truncated"):
+            validate_png_bytes(raw[:24])
+
+        crc_corrupted = bytearray(raw)
+        ihdr_crc_offset = 8 + 4 + 4 + 13
+        crc_corrupted[ihdr_crc_offset] ^= 0x01
+        with self.assertRaisesRegex(ValueError, "CRC"):
+            validate_png_bytes(bytes(crc_corrupted))
 
     def test_release_chain_and_screenshot_links_are_recorded(self):
         matrix = MATRIX.read_text(encoding="utf-8")
@@ -195,6 +320,50 @@ class FinalEvidenceTests(unittest.TestCase):
                 self.assertIn(merge_commit, matrix)
         for screenshot in SCREENSHOTS:
             self.assertIn(f"evidence/{screenshot.name}", matrix)
+
+    def test_pr20_remote_evidence_is_structurally_bound(self):
+        image_target = "evidence/github-actions-pr20-final.png"
+        image_targets = markdown_image_targets_in_section(
+            "docs/FINAL_EVIDENCE_MATRIX.md",
+            "## 6. CI 与截图说明",
+        )
+        self.assertEqual(image_targets.count(image_target), 1)
+
+        agent_log = read_text("AGENT_LOG.md")
+        task_6_heading = "## 2026-07-16 最终交付合规修复：任务 6 远端证据门禁"
+        self.assertIn(task_6_heading, agent_log)
+        remote_sections = {
+            "matrix": markdown_section(
+                "docs/FINAL_EVIDENCE_MATRIX.md",
+                "## 6. CI 与截图说明",
+            ),
+            "checklist": markdown_section(
+                "docs/FINAL_SUBMISSION_CHECKLIST.md",
+                "## 5. Git / PR / CI 证据链",
+            ),
+            "agent log task 6": agent_log.split(task_6_heading, 1)[1],
+        }
+        expected_run_mappings = (
+            "[CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)"
+            " → `main@c39d101` → `unit-test`、`docker-build` → 成功",
+            "[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242)"
+            " → `main@c39d101` → `build-pages`、`deploy-pages` → 成功",
+        )
+        contradictory_claims = (
+            "公网后端已部署",
+            "公网交互式 Web 后端已部署",
+            "公网交互式 Web 后端：已完成",
+            "公开容器 registry：已完成",
+            "registry 已发布",
+            "GHCR 已发布",
+        )
+        for document, section in remote_sections.items():
+            with self.subTest(document=document, boundary="run mapping"):
+                for mapping in expected_run_mappings:
+                    self.assertIn(mapping, section)
+            with self.subTest(document=document, boundary="deployment claims"):
+                for claim in contradictory_claims:
+                    self.assertNotIn(claim, section)
 
     def test_pr18_through_pr20_release_rows_are_exact_and_unique(self):
         matrix = MATRIX.read_text(encoding="utf-8")

@@ -543,7 +543,7 @@ python -m unittest tests.test_final_evidence.FinalEvidenceTests.test_required_ev
 - [x] **步骤 6：提交远端证据**
 
 ```powershell
-git add -- tests/test_final_evidence.py docs/evidence/github-actions-pr20-final.png docs/FINAL_EVIDENCE_MATRIX.md docs/FINAL_SUBMISSION_CHECKLIST.md AGENT_LOG.md
+git add -- tests/test_final_evidence.py docs/evidence/github-actions-pr20-final.png docs/FINAL_EVIDENCE_MATRIX.md docs/FINAL_SUBMISSION_CHECKLIST.md AGENT_LOG.md docs/superpowers/plans/2026-07-16-final-delivery-compliance.md
 git commit -m "docs: add current PR and CI attribution evidence"
 ```
 
