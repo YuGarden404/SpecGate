@@ -243,18 +243,30 @@ def find_affirmative_public_deployment_claims(text: str) -> tuple[str, ...]:
                 )
                 if relative_status >= 0:
                     status_start = image_start + len("镜像") + relative_status
-                    if not has_denial(normalized, image_start, status_start):
+                    predicate_prefix = between[:relative_status]
+                    locally_negated = re.search(
+                        r"(?:不会|不再|尚未|没有|未|不)$",
+                        predicate_prefix,
+                    )
+                    if (
+                        locally_negated is None
+                        and not has_denial(normalized, image_start, status_start)
+                    ):
                         return True
             image_start = normalized.find("镜像", image_start + len("镜像"))
         return False
 
-    clauses = re.split(r"(?:\r?\n|[。！？；;，,]|但是|但|而)", text)
+    clauses = re.split(r"(?:\r?\n|[。！!；;，,]|但是|但|而)", text)
     claims = []
     for raw_clause in clauses:
         clause = raw_clause.strip()
         if not clause:
             continue
         normalized = normalize(clause)
+        if normalized.startswith(("是否", "能否", "可否", "有没有")) or normalized.endswith(
+            ("?", "？")
+        ):
+            continue
         if (
             has_forward_claim(normalized, backend_aliases, backend_statuses)
             or has_forward_claim(normalized, registry_aliases, publication_statuses)
@@ -393,6 +405,13 @@ class FinalEvidenceTests(unittest.TestCase):
         不代表：公网交互式 Web 后端已经部署。
         不得声称：“公开容器 registry 已完成”。
         不能声称：GHCR 镜像已经发布。
+        镜像不发布到 GHCR。
+        镜像不会发布到 GHCR。
+        镜像不再发布到 GHCR。
+        镜像尚未发布到 GHCR。
+        镜像没有发布到 GHCR。
+        是否已将镜像发布到 GHCR？
+        能否将镜像发布到 GHCR？
         """
         self.assertEqual(find_affirmative_public_deployment_claims(clean_text), ())
 
@@ -404,6 +423,8 @@ class FinalEvidenceTests(unittest.TestCase):
             "公开容器 registry 已完成",
             "GHCR 镜像已发布",
             "镜像已发布到 GHCR",
+            "不会阻止镜像已发布到 GHCR",
+            "不久后镜像已发布到 GHCR",
             "公网交互式 Web 后端 ： 已经部署",
             "公开容器 registry：发布完成",
             "GHCR 已经发布",
