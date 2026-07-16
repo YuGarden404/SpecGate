@@ -151,6 +151,28 @@ class WebLLMFactoryTests(unittest.TestCase):
         self.assertEqual(missing.exception.code, "credential_missing")
         self.assertEqual(self.transport.calls, [])
 
+    def test_resume_preflight_accepts_matching_credential_without_transport(self):
+        self.save_llm_settings("https://api.example.test/v1", "test-model")
+        self.credentials.put(self.user_id, "SENTINEL-secret")
+        config = self.freeze()
+
+        self.factory.preflight_resume(config, self.user_id)
+
+        self.assertEqual(self.transport.calls, [])
+
+    def test_resume_preflight_rejects_cleared_credential_without_transport(self):
+        self.save_llm_settings("https://api.example.test/v1", "test-model")
+        self.credentials.put(self.user_id, "SENTINEL-secret")
+        config = self.freeze()
+        self.credentials.clear(self.user_id)
+
+        with self.assertRaises(WebLLMError) as missing:
+            self.factory.preflight_resume(config, self.user_id)
+
+        self.assertEqual(missing.exception.code, "credential_missing")
+        self.assertEqual(self.transport.calls, [])
+        self.assertNotIn("SENTINEL-secret", str(missing.exception))
+
     def test_mock_factory_never_accepts_a_real_snapshot(self):
         real = LLMRunConfig.real(
             "https://api.example.test/v1",

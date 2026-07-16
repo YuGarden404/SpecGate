@@ -771,9 +771,12 @@ def _load_project_or_404(db_path: Path, user_id: int, project_id: int):
 
 def _load_run_for_artifact(db_path: Path, user_id: int, run_id: int):
     try:
-        return get_run(db_path, user_id, run_id)
+        run = get_run(db_path, user_id, run_id)
     except ValueError as exc:
         raise _http_error_for_value_error(exc) from exc
+    if run["status"] != "completed":
+        raise HTTPException(status_code=404, detail="artifact not found")
+    return run
 
 
 def _artifact_response(
@@ -900,6 +903,7 @@ def _project_dict(row) -> dict[str, Any]:
 
 def _run_dict(row) -> dict[str, Any]:
     data = _row_dict(row)
+    artifacts_published = data["status"] == "completed"
     run = {
         "id": data["id"],
         "status": data["status"],
@@ -911,8 +915,8 @@ def _run_dict(row) -> dict[str, Any]:
         "finished_at": data["finished_at"],
         "cancel_requested_at": data["cancel_requested_at"],
         "deadline_at": data["deadline_at"],
-        "has_index_artifact": bool(data["index_artifact_path"]),
-        "has_zip_artifact": bool(data["zip_artifact_path"]),
+        "has_index_artifact": artifacts_published and bool(data["index_artifact_path"]),
+        "has_zip_artifact": artifacts_published and bool(data["zip_artifact_path"]),
     }
     try:
         llm_config = LLMRunConfig.from_json(data["llm_config_json"])
@@ -922,9 +926,9 @@ def _run_dict(row) -> dict[str, Any]:
     else:
         run["llm_mode"] = llm_config.mode
         run["llm_model"] = llm_config.model
-    if data["index_artifact_path"]:
+    if artifacts_published and data["index_artifact_path"]:
         run["index_artifact_url"] = f"/api/runs/{data['id']}/artifacts/index"
-    if data["zip_artifact_path"]:
+    if artifacts_published and data["zip_artifact_path"]:
         run["zip_artifact_url"] = f"/api/runs/{data['id']}/artifacts/zip"
     return run
 
@@ -937,6 +941,7 @@ def _approval_dict(row) -> dict[str, Any]:
         "project_id": data["project_id"],
         "approval_id": data["approval_id"],
         "status": data["status"],
+        "run_status": data["run_status"],
         "action_name": data["action_name"],
         "target_path": data["target_path"],
         "reason": data["reason"],

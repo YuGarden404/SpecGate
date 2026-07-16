@@ -158,6 +158,70 @@ class WebApprovalsTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in approvals], [alice_approval["id"]])
         self.assertEqual([row["approval_id"] for row in approvals], ["alice-approval"])
         self.assertEqual([row["queue_revision"] for row in approvals], [0])
+        self.assertEqual([row["run_status"] for row in approvals], ["needs_approval"])
+
+    def test_approve_web_approval_rejects_cancelled_run_without_mutation(self):
+        db_path, data_root, alice, _bob, alice_project, _bob_project = self.make_context()
+        run, web_approval = self.add_web_approval(
+            db_path,
+            data_root,
+            alice,
+            alice_project,
+            run_status="cancelled",
+        )
+
+        with self.assertRaisesRegex(ValueError, "^run is not waiting for approval$"):
+            approve_web_approval(
+                db_path,
+                data_root,
+                alice["id"],
+                web_approval["id"],
+                expected_revision=0,
+            )
+
+        paths = project_paths(data_root, alice["id"], alice_project["id"])
+        queue = ApprovalQueue.read(web_run_paths(paths, run["id"]).approval_queue)
+        self.assertEqual(queue.revision, 0)
+        self.assertEqual(queue.approvals[0].status, "pending")
+        with closing(connect_db(db_path)) as conn:
+            stored = conn.execute(
+                "select status, decided_at from approvals where id = ?",
+                (web_approval["id"],),
+            ).fetchone()
+        self.assertEqual(stored["status"], "pending")
+        self.assertIsNone(stored["decided_at"])
+
+    def test_deny_web_approval_rejects_cancelled_run_without_mutation(self):
+        db_path, data_root, alice, _bob, alice_project, _bob_project = self.make_context()
+        run, web_approval = self.add_web_approval(
+            db_path,
+            data_root,
+            alice,
+            alice_project,
+            run_status="cancelled",
+        )
+
+        with self.assertRaisesRegex(ValueError, "^run is not waiting for approval$"):
+            deny_web_approval(
+                db_path,
+                data_root,
+                alice["id"],
+                web_approval["id"],
+                "cancelled run must stay immutable",
+                expected_revision=0,
+            )
+
+        paths = project_paths(data_root, alice["id"], alice_project["id"])
+        queue = ApprovalQueue.read(web_run_paths(paths, run["id"]).approval_queue)
+        self.assertEqual(queue.revision, 0)
+        self.assertEqual(queue.approvals[0].status, "pending")
+        with closing(connect_db(db_path)) as conn:
+            stored = conn.execute(
+                "select status, decided_at from approvals where id = ?",
+                (web_approval["id"],),
+            ).fetchone()
+        self.assertEqual(stored["status"], "pending")
+        self.assertIsNone(stored["decided_at"])
 
     def test_approve_web_approval_updates_queue_and_db(self):
         db_path, data_root, alice, _bob, alice_project, _bob_project = self.make_context()
@@ -386,7 +450,7 @@ class WebApprovalsTests(unittest.TestCase):
         self.assertEqual(ApprovalQueue.read(alice_paths.approval_queue).approvals[0].status, "approved")
         self.assertEqual(ApprovalQueue.read(bob_paths.approval_queue).approvals[0].status, "pending")
 
-    def test_same_approval_id_is_isolated_from_terminal_run_in_same_project(self):
+    def test_terminal_run_approval_is_rejected_without_affecting_new_run(self):
         db_path, data_root, alice, _bob, alice_project, _bob_project = self.make_context()
         old_run, old_approval = self.add_web_approval(
             db_path,
@@ -397,18 +461,19 @@ class WebApprovalsTests(unittest.TestCase):
         )
         new_run, _new_approval = self.add_web_approval(db_path, data_root, alice, alice_project)
 
-        approve_web_approval(
-            db_path,
-            data_root,
-            alice["id"],
-            old_approval["id"],
-            expected_revision=0,
-        )
+        with self.assertRaisesRegex(ValueError, "^run is not waiting for approval$"):
+            approve_web_approval(
+                db_path,
+                data_root,
+                alice["id"],
+                old_approval["id"],
+                expected_revision=0,
+            )
 
         project_storage = project_paths(data_root, alice["id"], alice_project["id"])
         old_queue = ApprovalQueue.read(web_run_paths(project_storage, old_run["id"]).approval_queue)
         new_queue = ApprovalQueue.read(web_run_paths(project_storage, new_run["id"]).approval_queue)
-        self.assertEqual(old_queue.approvals[0].status, "approved")
+        self.assertEqual(old_queue.approvals[0].status, "pending")
         self.assertEqual(new_queue.approvals[0].status, "pending")
 
     def test_resume_run_once_only_resumes_queued_run_with_decided_approval(self):

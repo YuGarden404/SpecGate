@@ -7,6 +7,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from specgate.llm_config import LLMConfigError, LLMRunConfig
 from specgate.runtime_config import RunRuntimeConfig, RuntimeConfigError
 from specgate.trace import redact
 from specgate.web_db import connect_db
@@ -98,7 +99,11 @@ def build_run_debug(
         project_paths(data_root, user_id, int(project["id"])),
         run_id,
     )
-    artifact_payloads = [_artifact_dict(row, run_id, paths, data_root) for row in artifacts]
+    artifact_payloads = (
+        [_artifact_dict(row, run_id, paths, data_root) for row in artifacts]
+        if run["status"] == "completed"
+        else []
+    )
     approval_payloads = [_approval_dict(row) for row in approvals]
     trace = _read_trace(paths.audit, "trace.jsonl", max_trace_events, max_event_chars)
     evidence = {
@@ -134,7 +139,8 @@ def _row_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 def _run_dict(row: sqlite3.Row) -> dict[str, Any]:
     data = _row_dict(row)
-    return {
+    artifacts_published = data["status"] == "completed"
+    run = {
         "id": data["id"],
         "project_id": data["project_id"],
         "status": data["status"],
@@ -144,9 +150,18 @@ def _run_dict(row: sqlite3.Row) -> dict[str, Any]:
         "created_at": data["created_at"],
         "started_at": data["started_at"],
         "finished_at": data["finished_at"],
-        "has_index_artifact": bool(data["index_artifact_path"]),
-        "has_zip_artifact": bool(data["zip_artifact_path"]),
+        "has_index_artifact": artifacts_published and bool(data["index_artifact_path"]),
+        "has_zip_artifact": artifacts_published and bool(data["zip_artifact_path"]),
     }
+    try:
+        llm_config = LLMRunConfig.from_json(data["llm_config_json"])
+    except (LLMConfigError, KeyError):
+        run["llm_mode"] = "invalid"
+        run["llm_model"] = None
+    else:
+        run["llm_mode"] = llm_config.mode
+        run["llm_model"] = llm_config.model
+    return run
 
 
 def _project_dict(row: sqlite3.Row) -> dict[str, Any]:

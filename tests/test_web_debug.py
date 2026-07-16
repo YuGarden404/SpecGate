@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import specgate.web_debug as web_debug_module
+from specgate.llm_config import LLMRunConfig
 from specgate.web_auth import create_user
 from specgate.web_db import connect_db, init_db
 from specgate.web_debug import build_run_debug
@@ -78,6 +79,23 @@ class WebDebugTests(unittest.TestCase):
         self.assertIn("events", payload["trace"])
         self.assertIn("evidence", payload)
 
+    def test_build_run_debug_hides_stale_artifacts_for_failed_run(self):
+        db_path, data_root, user, _project, run = self.make_completed_run()
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                "update runs set status = 'failed', trust_level = 'failed' where id = ?",
+                (run["id"],),
+            )
+            conn.commit()
+
+        payload = build_run_debug(db_path, data_root, user["id"], run["id"])
+
+        self.assertFalse(payload["run"]["has_index_artifact"])
+        self.assertFalse(payload["run"]["has_zip_artifact"])
+        self.assertEqual(payload["artifacts"], [])
+        self.assertFalse(payload["summary"]["has_artifacts"])
+        self.assertEqual(payload["summary"]["artifact_count"], 0)
+
     def test_build_run_debug_returns_normalized_runtime_config(self):
         db_path, data_root, user, _project, run = self.make_completed_run()
         config = RunRuntimeConfig(
@@ -100,6 +118,42 @@ class WebDebugTests(unittest.TestCase):
 
         self.assertEqual(payload["runtime_config"], config.to_dict())
         self.assertIsNone(payload["runtime_config_error"])
+
+    def test_build_run_debug_returns_frozen_llm_mode_without_fingerprint(self):
+        db_path, data_root, user, _project, run = self.make_completed_run()
+        config = LLMRunConfig.real(
+            "https://api.example.test/v1",
+            "test-model",
+            "a" * 64,
+        )
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                "update runs set llm_config_json = ? where id = ?",
+                (config.to_json(), run["id"]),
+            )
+            conn.commit()
+
+        payload = build_run_debug(db_path, data_root, user["id"], run["id"])
+
+        self.assertEqual(payload["run"]["llm_mode"], "openai-compatible")
+        self.assertEqual(payload["run"]["llm_model"], "test-model")
+        self.assertNotIn("credential_fingerprint", repr(payload))
+
+    def test_build_run_debug_hides_invalid_llm_config_source(self):
+        db_path, data_root, user, _project, run = self.make_completed_run()
+        sentinel = "RAW_LLM_CONFIG_SENTINEL"
+        with closing(connect_db(db_path)) as conn:
+            conn.execute(
+                "update runs set llm_config_json = ? where id = ?",
+                (json.dumps({"schema_version": 99, "raw": sentinel}), run["id"]),
+            )
+            conn.commit()
+
+        payload = build_run_debug(db_path, data_root, user["id"], run["id"])
+
+        self.assertEqual(payload["run"]["llm_mode"], "invalid")
+        self.assertIsNone(payload["run"]["llm_model"])
+        self.assertNotIn(sentinel, json.dumps(payload, ensure_ascii=False))
 
     def test_build_run_debug_hides_invalid_runtime_config_source(self):
         db_path, data_root, user, _project, run = self.make_completed_run()
