@@ -880,3 +880,13 @@
 - 计划修订：最终合规实施计划增加“执行环境前提”，`SPEC.md` 增加交付材料 Agent 执行环境边界；不再上传七个目标文件，缺少上下文本身作为能力边界证据保留，实际修改、TDD 和 Git 操作交由本地 Subagent。
 - 人工参与：用户完成工具选择、Gemini Web 独立会话创建、两个文件上传、结果转交，并决定保留隔离边界、不再上传七个目标文件。
 - 追溯边界：本记录是最终合规阶段的补充冷启动验证，不替代 2026-07-08 的早期 SPEC/PLAN 审查，也不声称 MVP 实现前做过完整实现试跑。
+
+## 2026-07-16 最终交付合规修复：任务 2 发布证据链同步
+
+- Agent 与工作区：由本地 Subagent 在独立 worktree `final-delivery-implementation` 和分支 `codex/final-delivery-compliance-impl` 实施，起点为 `89fef8d5570916aaf194bdcd4a7b8aa1e004d5c1`；未修改主工作区或 `src/specgate/` 生产代码。
+- TDD RED：先扩展 `test_release_chain_and_screenshot_links_are_recorded` 并新增 PR #20 快照契约；聚焦命令结果为 `Ran 2 tests in 0.002s`、`FAILED (failures=4)`，失败原因是证据矩阵缺少 PR #18、#19、#20 链接，且快照不含 `main@c39d101`。
+- TDD GREEN：最小同步权威证据矩阵与关联事实材料后，同一聚焦命令结果为 `Ran 2 tests in 0.001s`、`OK`。
+- 聚焦验证：`python -m unittest tests.test_final_evidence` 结果为 `Ran 10 tests in 0.008s`、`OK`；`git diff --check` 退出码为 0，只有 Windows 工作副本的 LF→CRLF 提示，没有 whitespace error。
+- 事实口径：审查起点为 PR #20 合并后的 `main@c39d101`，完整回归证据为 `Ran 908 tests in 210.559s`、`OK (skipped=27)`；`896` 项结果仅保留为 2026-07-15 Web 真实 LLM 接入分支的历史阶段记录。
+- 学生归属：只更新 `docs/REFLECTION_FACT_CHECK.md` 中供学生核对的事实，没有修改 `REFLECTION.md` 或代写观点。
+- 人工/远端边界：本任务只核对本地 Git 历史中 PR #18 至 PR #20 的功能 commit、merge commit 与 PR 编号；未打开或修改远端 PR，未核对 PR #20 合并后 CI/Pages，未生成或伪造新截图，这些项目继续标记为待人工核对。

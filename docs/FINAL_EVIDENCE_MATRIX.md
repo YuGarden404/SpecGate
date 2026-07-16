@@ -6,14 +6,12 @@
 
 ## 2. 最终版本快照
 
-- 当前主线基线：`main@e73e937`。
-- 最近合并：PR #17，学生本人确认后的项目反思。
-- 当前安全加固分支回归：`Ran 846 tests in 216.617s`、`OK (skipped=27)`。
-- 远端最近状态：PR #17 合并后的 CI #47 与 Pages #28 为绿色；仓库截图保留到 PR #16 前后的关键工作流，最新编号由 GitHub Actions 页面核对。
+- 审查起点主线基线：`main@c39d101`。
+- 最近已合并功能修复：PR #20。
+- 审查起点完整回归：`Ran 908 tests in 210.559s`、`OK (skipped=27)`。
+- 当前工作阶段：最终交付合规修复；最终测试数字将在本阶段结束时刷新。
+- 远端证据边界：PR #18 至 PR #20 的 commit、merge commit 与 PR 链接已按仓库 Git 历史记录；PR #20 合并后的 CI、Pages 和新截图仍待人工远端核对。
 - 公开入口：<https://yugarden404.github.io/SpecGate/>。
-- 当前未提交分支：`feat-real-llm-web-integration`；尚无 commit、PR、CI run 或部署截图，不在本矩阵中虚构远端编号。
-- 当前分支高风险组合：`Ran 318 tests in 115.002s`、`OK (skipped=3)`；自动测试使用 Fake/Stub Transport，没有访问真实网络。
-- 当前分支全量回归：`Ran 896 tests in 216.620s`、`OK (skipped=27)`；compileall、JavaScript 语法、材料契约和 whitespace 检查退出码均为 0。
 
 ## 3. 课程交付物
 
@@ -54,6 +52,9 @@
 | Runner 配置 | `a523137` | `f45e73a` | [#15](https://github.com/YuGarden404/SpecGate/pull/15) | `evidence/github-actions-runtime-config.png` |
 | 最终材料 | `116cc10` | `fa3278a` | [#16](https://github.com/YuGarden404/SpecGate/pull/16) | 合并后 CI/Pages |
 | 学生反思 | `d550032` | `e73e937` | [#17](https://github.com/YuGarden404/SpecGate/pull/17) | CI #47、Pages #28 |
+| 后端审计加固 | `d3607c4` | `8d30ca5` | [#18](https://github.com/YuGarden404/SpecGate/pull/18) | 本地 Git 历史；CI/Pages 待人工核对 |
+| Web 真实 LLM 接入 | `5279a7c` | `b98563a` | [#19](https://github.com/YuGarden404/SpecGate/pull/19) | 本地 Git 历史；CI/Pages 待人工核对 |
+| 真实 LLM 生命周期修复 | `e35eb46` | `c39d101` | [#20](https://github.com/YuGarden404/SpecGate/pull/20) | 本地 Git 历史；CI/Pages 与新截图待人工核对 |
 
 ## 6. CI 与截图说明
 
@@ -85,7 +86,7 @@ node --check src/specgate/web_static/app.js
 git diff --check
 ```
 
-当前真实 LLM 接入分支全量结果：`Ran 896 tests in 216.620s`、`OK (skipped=27)`。非法 `unsafe` governance profile 的 argparse 输出来自预期拒绝测试，不是失败；跳过项主要来自 Windows 当前没有创建符号链接的权限和仓库既有平台条件。
+历史阶段结果（2026-07-15 Web 真实 LLM 接入分支）：`Ran 896 tests in 216.620s`、`OK (skipped=27)`。该数字早于 PR #20 生命周期修复，不代表当前快照。非法 `unsafe` governance profile 的 argparse 输出来自预期拒绝测试，不是失败；跳过项主要来自 Windows 当前没有创建符号链接的权限和仓库既有平台条件。
 
 ## 9. 边界
 

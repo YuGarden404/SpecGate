@@ -175,7 +175,7 @@ git commit -m "docs: record supplemental compliance cold start"
 - 修改：`PLAN.md`
 - 修改：`AGENT_LOG.md`
 
-- [ ] **步骤 1：扩展发布链测试并增加当前快照测试**
+- [x] **步骤 1：扩展发布链测试并增加当前快照测试**
 
 在 `test_release_chain_and_screenshot_links_are_recorded` 的 `releases` 中补充：
 
@@ -201,7 +201,7 @@ def test_final_snapshot_uses_pr20_baseline_without_stale_branch_claims(self):
     self.assertNotIn("Ran 896 tests", snapshot)
 ```
 
-- [ ] **步骤 2：运行两项测试并确认红灯**
+- [x] **步骤 2：运行两项测试并确认红灯**
 
 运行：
 
@@ -212,7 +212,7 @@ python -m unittest tests.test_final_evidence.FinalEvidenceTests.test_release_cha
 
 预期：测试失败，因为缺少 PR #18 至 #20 以及 PR #20 基线。
 
-- [ ] **步骤 3：更新权威证据文档**
+- [x] **步骤 3：更新权威证据文档**
 
 将 `docs/FINAL_EVIDENCE_MATRIX.md` 的当前快照改为以下事实口径：
 
@@ -233,7 +233,7 @@ python -m unittest tests.test_final_evidence.FinalEvidenceTests.test_release_cha
 
 同步 `docs/FINAL_SUBMISSION_CHECKLIST.md`、`docs/REFLECTION_FACT_CHECK.md`、`PLAN.md` 和 `AGENT_LOG.md`。旧测试数字保留在历史阶段段落，不再出现在“当前最终状态”中。
 
-- [ ] **步骤 4：运行聚焦证据测试并确认绿灯**
+- [x] **步骤 4：运行聚焦证据测试并确认绿灯**
 
 运行：
 
@@ -244,7 +244,7 @@ python -m unittest tests.test_final_evidence
 
 预期：测试通过。
 
-- [ ] **步骤 5：提交证据链同步结果**
+- [x] **步骤 5：提交证据链同步结果**
 
 ```powershell
 git add -- tests/test_final_evidence.py docs/FINAL_EVIDENCE_MATRIX.md docs/FINAL_SUBMISSION_CHECKLIST.md docs/REFLECTION_FACT_CHECK.md PLAN.md AGENT_LOG.md

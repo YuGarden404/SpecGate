@@ -1,5 +1,7 @@
 # SpecGate 最终提交检查清单
 
+当前证据口径：审查起点为 PR #20 合并后的 `main@c39d101`；该起点完整回归为 `Ran 908 tests in 210.559s`、`OK (skipped=27)`。当前正在进行最终交付合规修复，本阶段最终测试数字尚待刷新。
+
 ## 1. 项目定位
 
 SpecGate 是 AI4SE 期末项目 A 类选题 `Coding Agent Harness`。项目目标不是做一个复杂网页应用，而是从零实现一个小型 coding agent harness，展示如何把 LLM 的输出约束在可控、可测、可追踪、可修复的工程闭环中。
@@ -88,8 +90,11 @@ MVP 范围：
 | Runner 配置 | `a523137` | `f45e73a` | [#15](https://github.com/YuGarden404/SpecGate/pull/15) |
 | 最终材料 | `116cc10` | `fa3278a` | [#16](https://github.com/YuGarden404/SpecGate/pull/16) |
 | 学生反思 | `d550032` | `e73e937` | [#17](https://github.com/YuGarden404/SpecGate/pull/17) |
+| 后端审计加固 | `d3607c4` | `8d30ca5` | [#18](https://github.com/YuGarden404/SpecGate/pull/18) |
+| Web 真实 LLM 接入 | `5279a7c` | `b98563a` | [#19](https://github.com/YuGarden404/SpecGate/pull/19) |
+| 真实 LLM 生命周期修复 | `e35eb46` | `c39d101` | [#20](https://github.com/YuGarden404/SpecGate/pull/20) |
 
-PR #12 合并后 Pages 曾因依赖缺失失败，PR #13 修复后恢复通过；该失败—修复历史与最终 CI/Pages 状态均保留在 `docs/FINAL_EVIDENCE_MATRIX.md` 和 `docs/evidence/` 中。
+PR #12 合并后 Pages 曾因依赖缺失失败，PR #13 修复后恢复通过；该失败—修复历史保留在 `docs/FINAL_EVIDENCE_MATRIX.md` 和 `docs/evidence/` 中。PR #20 合并后的 CI、Pages 和新截图仍待人工远端核对，不在本清单中宣称已完成。
 
 ## 6. 本地复现命令
 

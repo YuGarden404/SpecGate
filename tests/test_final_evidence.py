@@ -116,6 +116,11 @@ class FinalEvidenceTests(unittest.TestCase):
             (13, "20c0102", "73fbb34"),
             (14, "e5fc981", "49f66a2"),
             (15, "a523137", "f45e73a"),
+            (16, "116cc10", "fa3278a"),
+            (17, "d550032", "e73e937"),
+            (18, "d3607c4", "8d30ca5"),
+            (19, "5279a7c", "b98563a"),
+            (20, "e35eb46", "c39d101"),
         )
         for pr, feature_commit, merge_commit in releases:
             with self.subTest(pr=pr):
@@ -127,6 +132,16 @@ class FinalEvidenceTests(unittest.TestCase):
                 self.assertIn(merge_commit, matrix)
         for screenshot in SCREENSHOTS:
             self.assertIn(f"evidence/{screenshot.name}", matrix)
+
+    def test_final_snapshot_uses_pr20_baseline_without_stale_branch_claims(self):
+        matrix = MATRIX.read_text(encoding="utf-8")
+        snapshot = matrix.split("## 3. 课程交付物", 1)[0]
+        self.assertIn("main@c39d101", snapshot)
+        self.assertIn("PR #20", snapshot)
+        self.assertIn("Ran 908 tests", snapshot)
+        self.assertNotIn("当前未提交分支", snapshot)
+        self.assertNotIn("main@e73e937", snapshot)
+        self.assertNotIn("Ran 896 tests", snapshot)
 
     def test_readme_has_required_delivery_sections(self):
         readme = read_text("README.md")
