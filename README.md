@@ -473,6 +473,19 @@ python -m unittest discover -s tests -v
 - MVP 只处理静态单页 HTML 任务。
 - WebUI 通过轮询展示 run 状态，但生成内容仍限定为静态单页 HTML 和可审计报告，不执行同源模型生成页面。
 
+## 第三方依赖与许可证
+
+| 依赖 | 版本范围 | 用途 | 许可证 | 官方项目 |
+| --- | --- | --- | --- | --- |
+| `cryptography` | `>=44,<47` | Web 凭据 AES-256-GCM 加密 | Apache-2.0 OR BSD-3-Clause | https://github.com/pyca/cryptography |
+| `fastapi` | `>=0.115,<1` | Web API 框架 | MIT | https://github.com/fastapi/fastapi |
+| `httpx` | `>=0.27,<1` | 测试与 HTTP 客户端支持 | BSD-3-Clause | https://github.com/encode/httpx |
+| `keyring` | `>=25,<26` | CLI 操作系统凭据存储 | MIT | https://github.com/jaraco/keyring |
+| `python-multipart` | `>=0.0.9,<1` | Web 表单与文件上传解析 | Apache-2.0 | https://github.com/Kludex/python-multipart |
+| `uvicorn` | `>=0.30,<1` | ASGI Web 服务器 | BSD-3-Clause | https://github.com/Kludex/uvicorn |
+
+该表只覆盖直接运行时依赖，完整传递依赖以安装环境中的包元数据为准。
+
 ## 安全边界
 
 Mock 模式不需要任何凭据。CLI 的 `specgate credentials status/set/clear <provider>` 使用系统 keyring，进程环境变量具有最高优先级；SpecGate 不读写 `.env`，keyring 不可用时失败关闭，也不会回退到明文文件。Web 凭据使用独立主密钥和 AES-256-GCM 加密，响应、异常、Trace 与普通数据库表不得出现凭据明文。

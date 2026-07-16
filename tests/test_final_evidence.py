@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import struct
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -52,6 +53,15 @@ KEY_EVIDENCE_PATHS = (
 
 def read_text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def direct_dependency_names() -> set[str]:
+    data = tomllib.loads(read_text("pyproject.toml"))
+    names = set()
+    for requirement in data["project"]["dependencies"]:
+        name = re.split(r"[<>=!~\[; ]", requirement, maxsplit=1)[0]
+        names.add(name.lower().replace("_", "-"))
+    return names
 
 
 class FinalEvidenceTests(unittest.TestCase):
@@ -288,6 +298,13 @@ class FinalEvidenceTests(unittest.TestCase):
             with self.subTest(heading=heading):
                 self.assertIn(heading, readme)
         self.assertIn("docs/FINAL_EVIDENCE_MATRIX.md", readme)
+
+    def test_readme_lists_every_direct_dependency_license(self):
+        readme = read_text("README.md")
+        self.assertIn("## 第三方依赖与许可证", readme)
+        for dependency in direct_dependency_names():
+            with self.subTest(dependency=dependency):
+                self.assertIn(f"| `{dependency}` |", readme)
 
     def test_spec_describes_current_credentials_runtime_and_config(self):
         spec = read_text("SPEC.md")

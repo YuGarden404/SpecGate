@@ -257,7 +257,7 @@ git commit -m "docs: synchronize final release evidence"
 - 修改：`tests/test_final_evidence.py`
 - 修改：`README.md`
 
-- [ ] **步骤 1：增加依赖解析导入和失败测试**
+- [x] **步骤 1：增加依赖解析导入和失败测试**
 
 在 `tests/test_final_evidence.py` 增加：
 
@@ -286,7 +286,7 @@ def test_readme_lists_every_direct_dependency_license(self):
             self.assertIn(f"| `{dependency}` |", readme)
 ```
 
-- [ ] **步骤 2：运行许可证测试并确认红灯**
+- [x] **步骤 2：运行许可证测试并确认红灯**
 
 运行：
 
@@ -297,7 +297,7 @@ python -m unittest tests.test_final_evidence.FinalEvidenceTests.test_readme_list
 
 预期：测试失败，因为 README 尚无许可证章节。
 
-- [ ] **步骤 3：核对已安装包的元数据**
+- [x] **步骤 3：核对已安装包的元数据**
 
 运行：
 
@@ -316,7 +316,7 @@ python-multipart: Apache-2.0
 uvicorn: BSD-3-Clause
 ```
 
-- [ ] **步骤 4：在 README 增加许可证表**
+- [x] **步骤 4：在 README 增加许可证表**
 
 在安全边界之前增加：
 
@@ -335,7 +335,7 @@ uvicorn: BSD-3-Clause
 
 补充一句：该表只覆盖直接运行时依赖，完整传递依赖以安装环境中的包元数据为准。
 
-- [ ] **步骤 5：运行聚焦测试并确认绿灯**
+- [x] **步骤 5：运行聚焦测试并确认绿灯**
 
 运行：
 
@@ -346,7 +346,7 @@ python -m unittest tests.test_final_evidence.FinalEvidenceTests.test_readme_list
 
 预期：测试通过。
 
-- [ ] **步骤 6：提交许可证文档**
+- [x] **步骤 6：提交许可证文档**
 
 ```powershell
 git add -- tests/test_final_evidence.py README.md
