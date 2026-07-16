@@ -8,6 +8,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MATRIX = ROOT / "docs" / "FINAL_EVIDENCE_MATRIX.md"
 REFLECTION_GUIDE = ROOT / "docs" / "REFLECTION_FACT_CHECK.md"
+COLD_START_AUDIT = (
+    ROOT
+    / "docs"
+    / "superpowers"
+    / "audits"
+    / "2026-07-16-final-compliance-cold-start.md"
+)
 SCREENSHOTS = (
     ROOT / "docs" / "evidence" / "github-actions-web-runtime-and-credentials.png",
     ROOT / "docs" / "evidence" / "github-actions-runtime-config.png",
@@ -47,6 +54,24 @@ def read_text(relative: str) -> str:
 
 
 class FinalEvidenceTests(unittest.TestCase):
+    def test_supplemental_cold_start_records_required_evidence(self):
+        self.assertTrue(COLD_START_AUDIT.is_file())
+        audit = COLD_START_AUDIT.read_text(encoding="utf-8")
+        for heading in (
+            "## 验证边界",
+            "## Agent 与会话",
+            "## 尝试任务",
+            "## 暂停与问题",
+            "## 实际产出与测试",
+            "## 与预期的差异",
+            "## SPEC / PLAN 修订",
+            "## 时间记录",
+        ):
+            with self.subTest(heading=heading):
+                self.assertIn(heading, audit)
+        self.assertIn("最终合规阶段的补充冷启动验证", audit)
+        self.assertIn("不替代 2026-07-08", audit)
+
     def test_required_evidence_artifacts_exist_and_pngs_are_readable(self):
         self.assertTrue(MATRIX.is_file())
         self.assertTrue(REFLECTION_GUIDE.is_file())

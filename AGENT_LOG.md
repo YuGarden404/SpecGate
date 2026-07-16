@@ -869,3 +869,14 @@
 - Task 12：材料契约首次出现 20 个预期失败，定位 schema v4、Web 仅 Mock、真实模型安全链和证据路径等过期事实；同步 SPEC、README、部署、walkthrough、证据矩阵与事实核对后，材料/工作流契约 9 项通过。
 - 最终验证：全量 `Ran 896 tests in 216.620s`、`OK (skipped=27)`；compileall、Node 语法、材料契约与 `git diff --check` 退出码均为 0。凭据扫描命中均为测试哨兵、攻击 fixture、历史计划示例或主密钥占位符。
 - 当前状态：Task 1–12 完成。全程未访问真实 Provider，也未执行 Git 写操作；远端 commit、PR、CI 与部署证据等待用户实际操作后补充。
+
+## 2026-07-16 最终合规阶段补充冷启动
+
+- Agent 类型与环境：Claude Code v2.1.70 无法连接 `api.anthropic.com`，且用户没有可用 Anthropic 服务条件；OpenCode 的官方签名/校验 Windows x64 二进制在本机无法加载，本机无可用 WSL distribution；Gemini CLI 0.50.0 可启动，但用户账户没有 Gemini Code Assist 使用权限，未能执行任务。
+- 会话隔离：用户改用全新独立 Gemini Web 会话，只上传 `SPEC.md` 与 `docs/superpowers/plans/2026-07-16-final-delivery-compliance.md`，没有提供聊天历史、Agent memory 或其他仓库文件。
+- 尝试任务：Gemini Web 尝试任务 2“同步当前发布版本与证据链”和任务 3“增加完整的直接依赖许可证表”。
+- 暂停与问题：任务 2 在步骤 1/3、任务 3 在步骤 1/4 暂停，因为缺少当前完整文件内容。Gemini Web 明确请求 `tests/test_final_evidence.py`、`docs/FINAL_EVIDENCE_MATRIX.md`、`docs/FINAL_SUBMISSION_CHECKLIST.md`、`docs/REFLECTION_FACT_CHECK.md`、`PLAN.md`、`AGENT_LOG.md`、`README.md`。
+- 实际产出：Gemini Web 给出任务 2 与任务 3 的骨架补丁草案，明确声明没有本地 shell、网络、文件系统写入能力，没有修改文件，也没有运行测试；该草案未被记录为已应用。整个尝试约 3 分钟。
+- 计划修订：最终合规实施计划增加“执行环境前提”，`SPEC.md` 增加交付材料 Agent 执行环境边界；不再上传七个目标文件，缺少上下文本身作为能力边界证据保留，实际修改、TDD 和 Git 操作交由本地 Subagent。
+- 人工参与：用户完成工具选择、Gemini Web 独立会话创建、两个文件上传、结果转交，并决定保留隔离边界、不再上传七个目标文件。
+- 追溯边界：本记录是最终合规阶段的补充冷启动验证，不替代 2026-07-08 的早期 SPEC/PLAN 审查，也不声称 MVP 实现前做过完整实现试跑。
