@@ -286,14 +286,14 @@ class WebLLMFactory:
             remaining_seconds=remaining_seconds,
         )
 
-    def test_connection(self, user_id: int, *, timeout_seconds: float = 10.0) -> None:
+    def test_connection(self, user_id: int) -> None:
         if self.db_path is None:
             raise WebLLMError("llm_configuration_required")
         with closing(connect_db(self.db_path)) as conn:
             config = self.freeze_config(conn, user_id)
         if config.mode != "openai-compatible":
             raise WebLLMError("llm_configuration_required")
-        deadline = self.monotonic_clock() + timeout_seconds
+        deadline = self.monotonic_clock() + self.network_config.request_timeout_seconds
         llm = self._build_real(
             config,
             user_id,
@@ -365,7 +365,7 @@ class LLMConnectionTestService:
 
     def test(self, user_id: int) -> dict[str, object]:
         with self.limiter.acquire(user_id):
-            self.factory.test_connection(user_id, timeout_seconds=10.0)
+            self.factory.test_connection(user_id)
         return {
             "ok": True,
             "mode": "openai-compatible",
