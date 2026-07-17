@@ -28,9 +28,11 @@
 
 ## 5. 最终证据
 
-- 截至 2026-07-16 审查起点，最近已合并功能修复为 PR #20，主线基线为 `main@c39d101`；该起点完整回归为 `Ran 908 tests in 210.559s`、`OK (skipped=27)`。
+- 截至 2026-07-17，当前主线为 PR #23 合并后的 `main@5fd86fa`；当前最终验证为 `Ran 921 tests in 403.030s`、`OK (skipped=27)`。
+- PR #23 合并后的 Actions 列表证据已核验：CI #59 与 Pages #34 均成功，当前截图为 `docs/evidence/github-actions-pr23-final.png`；私有仓库的精确 run URL 尚未从已登录页面录入。
 - 当前实现事实：Web 默认 Mock；API key、Base URL、Model 完整后新 run 使用真实模型；Provider 失败不会降级；课程自动测试仍使用 Fake/Stub 且不访问网络。
-- PR #20 合并后的远端门禁已完成并已核验：`main@c39d101` 对应的 CI #53 与 Pages #31 均成功，当前截图证据为 `docs/evidence/github-actions-pr20-final.png`。
+- 历史证据继续保留：PR #20 合并后的 `main@c39d101` 对应 CI #53、Pages #31 与 `docs/evidence/github-actions-pr20-final.png`，状态均为已完成、已核验。
+- 双仓库边界：GitHub 开发主仓库保存 PR/Actions 历史；NJU GitLab 课程镜像尚未创建，后续先设为 Private，检查前改为 Public，并单独验证 GitLab Pipeline。
 - 部署边界：公网交互式 Web 后端与公开容器 registry 仍待完成；当前没有部署公网后端，也没有发布公开镜像。
 - PR #12 合并后一度出现 Pages 依赖失败，PR #13 修复；这是适合人工反思的“验证发现真实交付缺口”案例。
 - 请学生本人核对全文是否满足课程要求的 1500–2500 字，并确认“AI 只参与润色和结构整理”的声明与实际使用方式一致。

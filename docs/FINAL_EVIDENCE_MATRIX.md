@@ -6,12 +6,12 @@
 
 ## 2. 最终版本快照
 
-- 审查起点主线基线：`main@c39d101`。
-- 最近已合并功能修复：PR #20。
-- 审查起点完整回归：`Ran 908 tests in 210.559s`、`OK (skipped=27)`。
-- 当前最终验证（2026-07-16 最终交付合规 worktree）：`Ran 919 tests in 402.898s`、`OK (skipped=27)`，命令退出码为 0。
-- 远端证据：用户已更新 PR #18、PR #19、PR #20 的“执行归属”，三份描述均记录主开发 Agent 为 OpenAI Codex，并区分人工参与与 Mock/Fake/Stub 自动测试边界。
-- PR #20 合并后验证：主线程只读核验 `main@c39d101` 的 [CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238) 与 [Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 成功；四个 job 的映射见第 6 节，截图见 `docs/evidence/github-actions-pr20-final.png`。
+- 当前主线基线：`main@5fd86fa`，最近已合并阶段为 PR #23。
+- 当前最终验证（2026-07-17 NJU SE Hub 审计分支）：`Ran 921 tests in 403.030s`、`OK (skipped=27)`，命令退出码为 0。
+- 当前远端证据：用户提供的 Actions 截图显示 PR #23 合并后的 CI #59 与 Pages #34 均成功，截图见 `docs/evidence/github-actions-pr23-final.png`。私有仓库的精确 run URL 尚未从已登录页面录入，因此本文件不猜测链接。
+- 执行归属历史：PR #18、PR #19、PR #20 均已记录主开发 Agent 为 OpenAI Codex，并区分人工参与与 Mock/Fake/Stub 自动测试边界。
+- 历史远端证据：PR #20 的 `main@c39d101`、[CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)、[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 与 `docs/evidence/github-actions-pr20-final.png` 继续保留，完整 job 映射见第 6 节。
+- 双仓库边界：GitHub 开发主仓库保留 commit、PR、GitHub PR/Actions 和 Pages 证据；NJU GitLab 课程镜像尚未创建，创建后先保持 Private，检查前改为 Public，并以独立 GitLab Pipeline 作为课程镜像验证。
 - 公开入口：<https://yugarden404.github.io/SpecGate/>。
 
 ## 3. 课程交付物
@@ -59,6 +59,9 @@
 | 后端审计加固 | `d3607c4` | `8d30ca5` | [#18](https://github.com/YuGarden404/SpecGate/pull/18) | PR “执行归属”已核对；OpenAI Codex、人工参与与自动测试边界已记录 |
 | Web 真实 LLM 接入 | `5279a7c` | `b98563a` | [#19](https://github.com/YuGarden404/SpecGate/pull/19) | PR “执行归属”已核对；OpenAI Codex、人工参与与自动测试边界已记录 |
 | 真实 LLM 生命周期修复 | `e35eb46` | `c39d101` | [#20](https://github.com/YuGarden404/SpecGate/pull/20) | PR “执行归属”已核对；[CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)、[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 与 `docs/evidence/github-actions-pr20-final.png` |
+| 最终交付合规 | `e34452c` | `2082fc9` | [#21](https://github.com/YuGarden404/SpecGate/pull/21) | 最终交付合规材料与完整验证 |
+| LLM 连接测试超时修复 | `a5861aa` | `3905e1e` | [#22](https://github.com/YuGarden404/SpecGate/pull/22) | 学校真实模型连接测试使用配置的请求超时 |
+| NJU SE Hub 真实 LLM 审计 | `5635ad2` | `5fd86fa` | [#23](https://github.com/YuGarden404/SpecGate/pull/23) | CI #59、Pages #34 与 `docs/evidence/github-actions-pr23-final.png` |
 
 ## 6. CI 与截图说明
 
@@ -78,6 +81,10 @@
 - [Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) → `main@c39d101` → `build-pages`、`deploy-pages` → 成功
 
 截图无凭据或账户敏感信息。该证据只证明当前 main 的自动测试、Docker CI 构建与静态 Pages 发布链成功；公网交互式 Web 后端和公开容器 registry 仍待后续独立阶段完成。
+
+![PR #23 合并后的 main CI 与 Pages](evidence/github-actions-pr23-final.png)
+
+用户提供的截图显示 PR #23 合并标题、`main@5fd86fa`，以及 CI #59 与 Pages #34 均为绿色成功。截图经 PNG 结构校验为 2557x1441、300972 字节，未见 token、API key、密码或其他凭据。该列表级证据不替代 job 明细或精确 run URL；后两者仅在用户从已登录的私有仓库页面提供后记录。
 
 主线程在本轮通过只读浏览器重新核对公开 Pages；本地验证 Subagent 没有亲自浏览远端：
 
@@ -105,11 +112,11 @@ node --check src/specgate/web_static/app.js
 git diff --check
 ```
 
-当前最终结果（2026-07-16 最终交付合规 worktree）：
+当前最终结果（2026-07-17 NJU SE Hub 审计分支）：
 
 - 文档与工作流契约：`Ran 20 tests in 0.065s`、`OK`，退出码 0。
 - 六项确定性机制：`Ran 6 tests in 47.709s`、`OK`，退出码 0。
-- 完整套件：`Ran 919 tests in 402.898s`、`OK (skipped=27)`，退出码 0。
+- 完整套件：`Ran 921 tests in 403.030s`、`OK (skipped=27)`，退出码 0。
 - `python -m compileall -q src tests`、`node --check src/specgate/web_static/app.js` 与 `git diff --check` 均退出码 0 且无错误输出。
 - `.env` 由 `.gitignore:8` 忽略，`.env` 提交历史为空；排除测试与实施计划后的疑似密钥模式扫描无命中。
 
@@ -121,6 +128,7 @@ git diff --check
 - Web 默认使用 MockLLM；完整配置后新 run 可使用真实模型，Provider 失败不会降级。
 - GitHub Pages 仅为静态展示，真实模式需要部署 Web 后端、持久化数据库、凭据主密钥与 `SPECGATE_LLM_ALLOWED_HOSTS` 网络策略。
 - 本地交互式 WebUI 已具备 Docker/本地启动与确定性测试；公网交互式 Web 后端和公开容器 registry 均待后续独立阶段完成。发布镜像不等于部署服务。
+- GitHub 是开发主仓库；NJU GitLab 课程镜像尚未创建。创建后仅同步 `main` 与 tags，先保持 Private，检查前改为 Public；GitHub PR/Actions 不迁移为 GitLab 平台元数据，GitLab Pipeline 必须独立通过。
 - 不开放 shell，不执行同源模型生成 HTML。
 - CLI 持久化凭据使用 OS keyring；Web 使用独立主密钥和 AES-256-GCM。
 - `.env` 只作为被保护路径和威胁示例出现，SpecGate 不读写 `.env`。

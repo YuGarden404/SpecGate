@@ -29,6 +29,7 @@ SCREENSHOTS = (
     ROOT / "docs" / "evidence" / "github-actions-web-runtime-and-credentials.png",
     ROOT / "docs" / "evidence" / "github-actions-runtime-config.png",
     ROOT / "docs" / "evidence" / "github-actions-pr20-final.png",
+    ROOT / "docs" / "evidence" / "github-actions-pr23-final.png",
 )
 KEY_EVIDENCE_PATHS = (
     "src/specgate/runner.py",
@@ -66,8 +67,8 @@ def read_text(relative: str) -> str:
 
 def extract_current_final_run(snapshot: str) -> tuple[str, str, float]:
     pattern = re.compile(
-        r"^- 当前最终验证（2026-07-16 最终交付合规 worktree）：`"
-        r"(?P<result>Ran 919 tests in (?P<duration>[0-9]+(?:\.[0-9]+)?)s)`、"
+        r"^- 当前最终验证（2026-07-17 NJU SE Hub 审计分支）：`"
+        r"(?P<result>Ran 921 tests in (?P<duration>[0-9]+(?:\.[0-9]+)?)s)`、"
         r"`OK \(skipped=27\)`，命令退出码为 0。$",
         re.MULTILINE,
     )
@@ -493,6 +494,9 @@ class FinalEvidenceTests(unittest.TestCase):
             (18, "d3607c4", "8d30ca5"),
             (19, "5279a7c", "b98563a"),
             (20, "e35eb46", "c39d101"),
+            (21, "e34452c", "2082fc9"),
+            (22, "a5861aa", "3905e1e"),
+            (23, "5635ad2", "5fd86fa"),
         )
         for pr, feature_commit, merge_commit in releases:
             with self.subTest(pr=pr):
@@ -570,7 +574,7 @@ class FinalEvidenceTests(unittest.TestCase):
             with self.subTest(document=document, boundary="deployment claims"):
                 self.assertEqual(find_affirmative_public_deployment_claims(section), ())
 
-    def test_pr18_through_pr20_release_rows_are_exact_and_unique(self):
+    def test_pr18_through_pr23_release_rows_are_exact_and_unique(self):
         matrix = MATRIX.read_text(encoding="utf-8")
         heading = "## 5. 最近阶段 Git / PR / CI"
         self.assertIn(heading, matrix)
@@ -633,6 +637,27 @@ class FinalEvidenceTests(unittest.TestCase):
                 20,
                 "https://github.com/YuGarden404/SpecGate/pull/20",
             ),
+            (
+                "最终交付合规",
+                "e34452c",
+                "2082fc9",
+                21,
+                "https://github.com/YuGarden404/SpecGate/pull/21",
+            ),
+            (
+                "LLM 连接测试超时修复",
+                "a5861aa",
+                "3905e1e",
+                22,
+                "https://github.com/YuGarden404/SpecGate/pull/22",
+            ),
+            (
+                "NJU SE Hub 真实 LLM 审计",
+                "5635ad2",
+                "5fd86fa",
+                23,
+                "https://github.com/YuGarden404/SpecGate/pull/23",
+            ),
         )
         for expected in expected_releases:
             with self.subTest(pr=expected[3]):
@@ -644,25 +669,23 @@ class FinalEvidenceTests(unittest.TestCase):
                         msg=f"release field is not unique: {value}",
                     )
 
-    def test_final_snapshot_uses_pr20_baseline_without_stale_branch_claims(self):
+    def test_final_snapshot_uses_pr23_main_and_latest_verification(self):
         matrix = MATRIX.read_text(encoding="utf-8")
         snapshot = matrix.split("## 3. 课程交付物", 1)[0]
-        self.assertIn("main@c39d101", snapshot)
-        self.assertIn("PR #20", snapshot)
-        self.assertIn("审查起点完整回归", snapshot)
-        self.assertIn("Ran 908 tests in 210.559s", snapshot)
-        self.assertIn("OK (skipped=27)", snapshot)
+        self.assertIn("main@5fd86fa", snapshot)
+        self.assertIn("PR #23", snapshot)
         self.assertIn("当前最终验证", snapshot)
         current_line, current_run, duration = extract_current_final_run(snapshot)
         self.assertEqual(snapshot.count(current_line), 1)
+        self.assertEqual(current_run.split(" in ", 1)[0], "Ran 921 tests")
         self.assertGreater(duration, 0)
         frozen_run_materials = {
             "checklist": read_text("docs/FINAL_SUBMISSION_CHECKLIST.md"),
             "plan": read_text("PLAN.md").split(
-                "# 2026-07-16 最终交付合规修复", 1
+                "# 2026-07-17 最终提交同步与双仓库交付", 1
             )[1],
             "agent log": read_text("AGENT_LOG.md").split(
-                "## 2026-07-16 最终交付合规修复：任务 7 最终验证与快照冻结",
+                "## 2026-07-17 最终提交同步与双仓库交付",
                 1,
             )[1],
         }
@@ -670,13 +693,11 @@ class FinalEvidenceTests(unittest.TestCase):
             with self.subTest(document=document, boundary="same frozen final run"):
                 self.assertIn(current_run, section)
         self.assertNotIn("最终测试数字将在本阶段结束时刷新", snapshot)
-        self.assertIn("CI #53", snapshot)
-        self.assertIn("Pages #31", snapshot)
-        self.assertIn("github-actions-pr20-final.png", snapshot)
-        self.assertNotIn("CI、Pages 和新截图仍待人工远端核对", snapshot)
+        self.assertIn("CI #59", snapshot)
+        self.assertIn("Pages #34", snapshot)
+        self.assertIn("github-actions-pr23-final.png", snapshot)
+        self.assertNotIn("最近已合并功能修复：PR #20", snapshot)
         self.assertNotIn("当前未提交分支", snapshot)
-        self.assertNotIn("main@e73e937", snapshot)
-        self.assertNotIn("Ran 896 tests", snapshot)
 
     def test_current_release_status_is_consistent_across_factual_materials(self):
         current_sections = {
@@ -688,19 +709,25 @@ class FinalEvidenceTests(unittest.TestCase):
                 "## 5. 最终证据", 1
             )[1],
             "plan": read_text("PLAN.md").split(
-                "# 2026-07-16 最终交付合规修复", 1
+                "# 2026-07-17 最终提交同步与双仓库交付", 1
             )[1],
             "agent log": read_text("AGENT_LOG.md").split(
-                "## 2026-07-16 最终交付合规修复：任务 2", 1
+                "## 2026-07-17 最终提交同步与双仓库交付", 1
             )[1],
         }
+        current_phrases = (
+            "main@5fd86fa",
+            "PR #23",
+            "Ran 921 tests in 403.030s",
+            "OK (skipped=27)",
+            "CI #59",
+            "Pages #34",
+            "docs/evidence/github-actions-pr23-final.png",
+        )
         for document, section in current_sections.items():
-            with self.subTest(document=document):
-                self.assertIn("审查起点", section)
-                self.assertIn("main@c39d101", section)
-                self.assertIn("PR #20", section)
-                self.assertIn("Ran 908 tests in 210.559s", section)
-                self.assertIn("OK (skipped=27)", section)
+            for phrase in current_phrases:
+                with self.subTest(document=document, phrase=phrase):
+                    self.assertIn(phrase, section)
 
         agent_log = read_text("AGENT_LOG.md")
         task_6_heading = "## 2026-07-16 最终交付合规修复：任务 6 远端证据门禁"
@@ -756,6 +783,27 @@ class FinalEvidenceTests(unittest.TestCase):
         ):
             with self.subTest(document="reflection facts", phrase=phrase):
                 self.assertIn(phrase, reflection_facts)
+
+    def test_delivery_docs_distinguish_github_source_and_nju_gitlab_mirror(self):
+        readme = read_text("README.md")
+        matrix = read_text("docs/FINAL_EVIDENCE_MATRIX.md")
+        checklist = read_text("docs/FINAL_SUBMISSION_CHECKLIST.md")
+        combined = "\n".join((readme, matrix, checklist))
+
+        for phrase in (
+            "GitHub 开发主仓库",
+            "NJU GitLab 课程镜像",
+            "GitHub PR/Actions",
+            "GitLab Pipeline",
+            "Private",
+            "检查前改为 Public",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, combined)
+
+        self.assertNotIn("GitHub Actions 已迁移到 GitLab", combined)
+        self.assertNotIn("公网交互式 Web 后端 | 已完成", combined)
+        self.assertNotIn("公开容器 registry | 已完成", combined)
 
     def test_readme_has_required_delivery_sections(self):
         readme = read_text("README.md")

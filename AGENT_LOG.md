@@ -994,3 +994,15 @@
 - 否定作用域 GREEN：仅把“并且、且、同时、以及”加入既有分句边界，使每个短 clause 独立判断；全部既有正反例和四个新 mutation 结果为 `Ran 1 test in 0.001s`、`OK`。
 - 验证：两个聚焦测试组合结果为 `Ran 2 tests in 0.005s`、`OK`；完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 20 tests in 0.084s`、`OK`；`git diff --check` 退出码 0，仅有 Windows LF→CRLF 提示，没有 whitespace error。`.env` 继续由 `.gitignore:8` 忽略且提交历史为空；排除 `tests` 和实施计划后的 OpenAI、AWS、GitHub 疑似密钥模式扫描退出码 1 且无输出，表示没有命中。
 - 变更边界：本轮只修改 `tests/test_final_evidence.py`、`docs/REFLECTION_FACT_CHECK.md`、`AGENT_LOG.md` 与 `PLAN.md`；没有修改 `src/specgate/` 生产代码或 `REFLECTION.md` 正文，未部署、未发布镜像、未 push。
+
+## 2026-07-17 最终提交同步与双仓库交付
+
+- 当前基线：PR #23 已合并为 `main@5fd86fa`；真实 NJU SE Hub 兼容性审计完整回归为 `Ran 921 tests in 403.030s`、`OK (skipped=27)`。
+- TDD RED：先更新最终证据契约，要求 PR #21-#23 发布链、CI #59、Pages #34、`docs/evidence/github-actions-pr23-final.png` 与双仓库职责；聚焦测试因材料和截图尚未同步而按预期失败。
+- 截图核验：用户提供的 PR #23 Actions 截图显示 CI #59 与 Pages #34 均成功；PNG 校验结果为 2557x1441、300972 字节，未见 token、API key、密码或其他凭据。
+- 当前证据：截图归档为 `docs/evidence/github-actions-pr23-final.png`。私有仓库的精确 run URL 未能从未登录的只读浏览器取得，因此未猜测链接。
+- 双仓库职责：GitHub 开发主仓库继续保存完整 commit、PR、GitHub PR/Actions 与 Pages；NJU GitLab 课程镜像尚未创建，创建后先保持 Private，检查前改为 Public，并以实际 GitLab Pipeline 作为独立证据。
+- 用户操作边界：GitLab 项目创建、remote、push、可见性设置、截图及所有 Git 命令均由用户执行；首次只同步 `main` 与 tags。
+- 部署边界：公网交互式 Web 后端与公开容器 registry 继续等待教师答复；本任务未部署服务、未发布镜像，也未修改 `REFLECTION.md`。
+- TDD GREEN：PR #21-#23 发布链、当前快照、跨材料一致性与双仓库职责 5 项聚焦契约结果为 `Ran 5 tests in 0.006s`、`OK`；完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 22 tests in 0.113s`、`OK`。
+- 未闭合外部证据：CI #59 与 Pages #34 的精确 run URL 仍需用户从已登录的私有 GitHub 页面提供；在此之前只保留截图中的真实运行编号与成功状态，不构造 URL。
