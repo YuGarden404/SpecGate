@@ -1,7 +1,7 @@
 # NJU SE Hub 真实 LLM 兼容性验证设计
 
-日期：2026-07-17  
-状态：已由用户分段确认
+日期：2026-07-17
+状态：已完成真实验证
 
 ## 1. 背景
 
@@ -16,6 +16,15 @@ SpecGate 已实现 OpenAI-compatible Chat Completions 接入，并分别提供 C
 - `deepseek-v4-pro`
 
 API Key 已由用户持有，但不得进入聊天、命令历史、截图、仓库、测试夹具、Trace 或报告。
+
+### 1.1 实际执行结果
+
+- `qwen3.7-max`、`kimi-k2.7-code`、`glm-5.2` 和 `deepseek-v4-pro` 均通过 WebUI 完整真实 run。
+- 四次 run 均为 `completed` / `trusted`，各用 2 个 step、2 次逻辑 LLM 调用和 2 次工具调用完成；`parse_errors`、`blocked_actions`、`gate_failures` 和 `approval_requests` 均为 0，并各发布 2 个工件。
+- `qwen3.7-max` 通过 CLI 直接本地工作区验证，退出码为 0，`index.html`、Trace 和 HTML 报告均存在。
+- 首次 WebUI 连接测试暴露硬编码 10 秒 deadline 的客户端假超时；TDD 修复已通过 PR #22 合并，功能 commit 为 `a5861aa`，合并 commit 为 `3905e1e`。修复后使用 60 秒配置复测 `qwen3.7-max`，页面显示连接测试通过。
+- 当前审计分支最终回归为 `Ran 921 tests in 395.229s`、`OK (skipped=27)`；Python 编译检查和 Web JavaScript 语法检查均通过。
+- 本阶段未部署公网服务，API Key 与 Web 凭据主密钥未进入仓库或审计材料。
 
 ## 2. 目标
 
@@ -70,7 +79,7 @@ SpecGate 要求响应至少满足：
 choices[0].message.content 为字符串
 ```
 
-完整 run 中，该字符串还必须是一个不带 Markdown 围栏或自然语言前后缀的严格 JSON Action 对象。连接测试只验证请求能够完成并返回标准内容字段，不验证 Action 协议。
+完整 run 中，该字符串还必须是一个不带 Markdown 围栏或自然语言前后缀的严格 JSON Action 对象。连接测试只验证请求能够完成并返回标准内容字段，不验证 Action 协议；而成功的完整真实 run 已实际经过同一接口、鉴权和响应结构，因此也足以证明接口兼容。
 
 ## 5. 方案选择
 
@@ -78,11 +87,12 @@ choices[0].message.content 为字符串
 
 未采用只发送原始 HTTP 请求的方案，因为它会绕过 SpecGate 的安全传输、Action 解析、权限、Gate 和审计。未采用只测 WebUI 的方案，因为 WebUI 修改的是导入后的隔离副本，不能证明 CLI 可以直接修改指定本地目录。
 
-验证顺序为：
+实际验证顺序为：
 
-1. WebUI 使用 `qwen3.7-max` 完成基线连接和完整 run。
-2. WebUI 依次验证 `kimi-k2.7-code`、`glm-5.2`、`deepseek-v4-pro`。
+1. 完成网络分层诊断，并确认首次 `qwen3.7-max` 连接按钮结果是 10 秒客户端假超时。
+2. WebUI 使用 `qwen3.7-max`、`kimi-k2.7-code`、`glm-5.2`、`deepseek-v4-pro` 分别完成完整真实 run。
 3. CLI 使用 `qwen3.7-max` 完成一次直接本地文件验证。
+4. 通过 TDD 修复连接测试 deadline，并在 PR #22 合并后使用 `qwen3.7-max` 复测连接按钮。
 
 ## 6. 凭据与隔离设计
 
@@ -116,15 +126,17 @@ https://njusehub.info/v1
 
 主机白名单只允许精确主机 `njusehub.info`，不使用通配符。Web 安全传输层继续执行 HTTPS、DNS 结果、公网地址、TLS 主机名、重定向和系统代理限制；不得为了通过学校接口而关闭这些保护。
 
-每个模型先执行一次连接测试。连接测试具有以下边界：
+初始版本的连接测试硬编码 10 秒总 deadline。`qwen3.7-max` 首次点击因此返回 `LLM request timed out`，但使用 60 秒 timeout 和相同 8-token 上限的脱敏诊断在 13.368 秒成功返回，证明这是客户端假超时，不是认证或协议失败。
 
-- 10 秒总超时。
+为避免继续产生假阴性，其余三个模型没有点击旧连接按钮，而是直接通过各自的完整真实 run 同时验证接口、Action 和完整流程。修复后的连接测试具有以下边界：
+
+- 总 deadline 读取 `LLMNetworkConfig.request_timeout_seconds`；本次复测配置为 60 秒。
 - 只尝试一次传输。
 - 最多请求 8 个输出 tokens。
 - 不创建项目或 run。
 - 只证明接口、鉴权、模型名和标准响应内容字段可用。
 
-连接测试失败后不立即连续点击。先按错误类型记录和排查，再决定是否重试一次。
+PR #22 修复后，`qwen3.7-max` 连接测试页面显示“模型服务连接测试通过”。连接测试失败后仍不得连续点击，应先按错误类型记录和排查，再决定是否重试一次。
 
 ## 8. 最小测试项目
 
@@ -183,7 +195,7 @@ trust: trusted
 
 | 等级 | 判断条件 |
 | --- | --- |
-| 接口兼容 | 连接测试成功 |
+| 接口兼容 | 连接测试成功，或完整真实 run 成功经过同一接口并取得标准响应结构 |
 | Action 兼容 | 完整 run 能返回并解析严格 JSON Action |
 | 完整兼容 | Run 完成、Gate 通过、产生工件且 Trust 为 `trusted` |
 
@@ -203,6 +215,8 @@ trust: trusted
 - 工件、Trace、报告和截图均不含 API Key。
 
 若模型需要额外一步自我修复，但最终在 4 步内完成，则记录为“完整兼容，但动作稳定性次于两步基线”。不得把它写成严格两步通过。
+
+实际四个模型均以两步基线完成，因此四次完整 run 都同时证明接口兼容、Action 兼容和完整兼容；只有 `qwen3.7-max` 在修复后额外完成了独立连接按钮复测。
 
 ## 11. CLI 直接工作区验证
 
@@ -271,7 +285,7 @@ docs/superpowers/audits/2026-07-17-njusehub-real-llm-compatibility.md
 - 测试日期和本机运行方式。
 - Base URL，仅记录公开地址。
 - 模型名。
-- Web 连接测试结果。
+- Web 连接诊断、完整 run 与修复后复测结果。
 - Run ID、状态和 Trust。
 - steps、llm_calls、tool_calls、parse_errors、gate_failures、finish_actions 和 approval_requests。
 - 工件存在性。
@@ -295,7 +309,7 @@ docs/superpowers/audits/2026-07-17-njusehub-real-llm-compatibility.md
 
 本设计的第一目标是运行验证，不预设生产代码一定需要变化。实施计划应先提供安全启动和人工操作步骤，再执行连接与完整 run。
 
-若全部模型兼容，代码可以保持不变，只新增脱敏审计材料以及必要的文档契约测试。若发现真实协议差异，则暂停矩阵中的后续付费调用，形成可复现失败，再单独设计和实施最小兼容性修复。
+四个模型均未暴露 Provider 协议差异，但运行验证暴露了 WebUI 连接测试的客户端 deadline 缺陷。该问题经根因分析和 TDD 修复，已通过 PR #22 合并；模型适配、Action 协议和正式示例没有因此重构。若未来发现真实协议差异，仍应暂停后续付费调用，形成可复现失败，再单独设计和实施最小兼容性修复。
 
 ## 16. 完成标准
 
@@ -308,3 +322,5 @@ docs/superpowers/audits/2026-07-17-njusehub-real-llm-compatibility.md
 - 没有凭据进入聊天、命令历史、截图、工件、Trace、报告或 Git。
 - 所有失败和重试均如实记录。
 - 如果发生代码修改，必须经过根因分析、TDD 和完整回归；没有观察到问题时不做适配性重构。
+
+以上标准均已满足，详细脱敏证据见 `docs/superpowers/audits/2026-07-17-njusehub-real-llm-compatibility.md`。

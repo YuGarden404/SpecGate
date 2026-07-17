@@ -18,6 +18,13 @@ COLD_START_AUDIT = (
     / "audits"
     / "2026-07-16-final-compliance-cold-start.md"
 )
+NJU_REAL_LLM_AUDIT = (
+    ROOT
+    / "docs"
+    / "superpowers"
+    / "audits"
+    / "2026-07-17-njusehub-real-llm-compatibility.md"
+)
 SCREENSHOTS = (
     ROOT / "docs" / "evidence" / "github-actions-web-runtime-and-credentials.png",
     ROOT / "docs" / "evidence" / "github-actions-runtime-config.png",
@@ -1001,6 +1008,61 @@ class FinalEvidenceTests(unittest.TestCase):
             with self.subTest(relative=relative):
                 self.assertTrue((ROOT / relative).is_file())
                 self.assertIn(f"`{relative}`", matrix)
+
+    def test_njusehub_real_llm_audit_is_complete_and_redacted(self):
+        audit = NJU_REAL_LLM_AUDIT.read_text(encoding="utf-8")
+
+        expected_rows = (
+            "| `qwen3.7-max` | #1 | `completed` | `trusted` | 2 | 2 | 2 | 0 | 0 | 0 | 1 | 0 | 2 | 完整兼容 |",
+            "| `kimi-k2.7-code` | #2 | `completed` | `trusted` | 2 | 2 | 2 | 0 | 0 | 0 | 1 | 0 | 2 | 完整兼容 |",
+            "| `glm-5.2` | #3 | `completed` | `trusted` | 2 | 2 | 2 | 0 | 0 | 0 | 1 | 0 | 2 | 完整兼容 |",
+            "| `deepseek-v4-pro` | #4 | `completed` | `trusted` | 2 | 2 | 2 | 0 | 0 | 0 | 1 | 0 | 2 | 完整兼容 |",
+        )
+        for row in expected_rows:
+            with self.subTest(row=row):
+                self.assertIn(row, audit)
+
+        required_phrases = (
+            "https://njusehub.info/v1",
+            "接口兼容",
+            "Action 兼容",
+            "完整兼容",
+            "WebUI",
+            "CLI",
+            "llm_mode",
+            "llm_calls",
+            "tool_calls",
+            "parse_errors",
+            "blocked_actions",
+            "gate_failures",
+            "finish_actions",
+            "approval_requests",
+            "artifact_count",
+            "13.368",
+            "CLI exit code: 0",
+            "passed=True, steps=2",
+            "PR #22",
+            "a5861aa",
+            "3905e1e",
+            "人工操作",
+            "未部署公网服务",
+        )
+        for phrase in required_phrases:
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, audit)
+
+        for forbidden in (
+            "TBD",
+            "TODO",
+            "待补充",
+            "Authorization: Bearer",
+            "OPENAI_COMPATIBLE_API_KEY=",
+            "SPECGATE_WEB_CREDENTIAL_KEY=",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, audit)
+
+        self.assertIsNone(re.search(r"\bsk-[A-Za-z0-9_-]{8,}", audit))
 
     def test_reflection_remains_student_owned(self):
         reflection = read_text("REFLECTION.md")

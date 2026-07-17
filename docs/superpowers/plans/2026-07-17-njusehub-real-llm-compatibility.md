@@ -10,6 +10,28 @@
 
 ---
 
+## 执行结果（2026-07-17）
+
+本节是事后执行记录。下方任务清单保留原始计划状态，不把未执行的步骤追记为已完成。
+
+- 实际分支与 worktree 为 `njusehub-real-llm-audit` 和 `.worktrees\njusehub-real-llm-audit`；规划提交为 `cef343d`。
+- 审计契约先因目标文档不存在得到 `FileNotFoundError` 红灯；写入真实审计后，单项测试得到 `Ran 1 test in 0.001s`、`OK`。
+- 四个 WebUI run 均为 `completed` / `trusted`，各用 2 个 step、2 次逻辑 LLM 调用和 2 次工具调用完成；所有 run 的 `parse_errors=0`、`blocked_actions=0`、`gate_failures=0`、`finish_actions=1`、`approval_requests=0`、`artifact_count=2`。
+- `qwen3.7-max` CLI 运行得到 `passed=True, steps=2`、退出码 0，`index.html`、Trace 和 HTML 报告均存在。
+- 原计划要求每个模型先执行连接测试。实际首次 `qwen3.7-max` 连接按钮因硬编码 10 秒 deadline 假超时；60 秒脱敏诊断在 13.368 秒成功。其余三个模型未继续点击不可靠的旧按钮，而是用完整真实 run 证明接口、Action 与完整兼容。
+- 连接测试问题经根因分析和 TDD 修复，功能 commit 为 `a5861aa`，PR #22 合并 commit 为 `3905e1e`；相关回归为 65 个测试，完整回归为 920 个测试。修复后使用 60 秒配置复测 `qwen3.7-max`，连接按钮通过。
+- 当前审计分支重新验证：审计契约 1 个测试通过，最终证据 20 个测试通过，相关回归 112 个测试通过（跳过 1 个），完整套件 921 个测试通过（跳过 27 个）；`python -m compileall -q src tests` 与 `node --check src/specgate/web_static/app.js` 均退出码 0。
+- API Key 已从 WebUI 和 CLI 会话清除，Web 服务已停止，敏感环境变量已删除；未部署公网服务。
+
+四模型实际指标：
+
+| 模型 | Run | 状态 | Trust | Steps | LLM calls | Tool calls | Parse errors | Blocked | Gate failures | Finish | Approvals | Artifacts |
+| --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `qwen3.7-max` | #1 | `completed` | `trusted` | 2 | 2 | 2 | 0 | 0 | 0 | 1 | 0 | 2 |
+| `kimi-k2.7-code` | #2 | `completed` | `trusted` | 2 | 2 | 2 | 0 | 0 | 0 | 1 | 0 | 2 |
+| `glm-5.2` | #3 | `completed` | `trusted` | 2 | 2 | 2 | 0 | 0 | 0 | 1 | 0 | 2 |
+| `deepseek-v4-pro` | #4 | `completed` | `trusted` | 2 | 2 | 2 | 0 | 0 | 0 | 1 | 0 | 2 |
+
 ## 执行约束
 
 - 所有 Git 命令均由用户执行，Agent 不得运行任何 Git 命令，包括只读命令。
@@ -58,10 +80,10 @@ Expected：状态中只看到本阶段两份未跟踪规划文档，`git diff --
 - [ ] **Step 2: 用户创建无 `codex/` 前缀的阶段分支**
 
 ```powershell
-git switch -c njusehub-real-llm-compatibility
+git switch -c njusehub-real-llm-audit
 ```
 
-Expected：切换到 `njusehub-real-llm-compatibility`。
+Expected：切换到 `njusehub-real-llm-audit`。
 
 - [ ] **Step 3: 用户提交规划文件**
 
@@ -82,14 +104,14 @@ Expected：缓存检查无输出，统计只包含两份规划文档，提交成
 ```powershell
 git switch main
 git worktree add `
-  .worktrees\njusehub-real-llm-compatibility `
-  njusehub-real-llm-compatibility
+  .worktrees\njusehub-real-llm-audit `
+  njusehub-real-llm-audit
 
-cd D:\code\NJU\SpecGate\.worktrees\njusehub-real-llm-compatibility
+cd D:\code\NJU\SpecGate\.worktrees\njusehub-real-llm-audit
 git status --short --branch
 ```
 
-Expected：worktree 位于指定目录，分支为 `njusehub-real-llm-compatibility`，工作区干净。
+Expected：worktree 位于指定目录，分支为 `njusehub-real-llm-audit`，工作区干净。
 
 ### Task 2: 建立审计文档契约红灯
 
@@ -538,7 +560,7 @@ Checklist 输入：
 - [ ] **Step 1: 用户在新的 PowerShell 窗口创建 CLI 临时工作区**
 
 ```powershell
-cd D:\code\NJU\SpecGate\.worktrees\njusehub-real-llm-compatibility
+cd D:\code\NJU\SpecGate\.worktrees\njusehub-real-llm-audit
 $env:PYTHONPATH="src"
 $cliRoot = Join-Path $env:TEMP "specgate-njusehub-cli-qwen"
 New-Item -ItemType Directory -Force -Path $cliRoot | Out-Null
@@ -829,7 +851,7 @@ Expected：工作区干净；阶段分支只包含规划提交和审计提交。
 - [ ] **Step 6: 用户推送无 `codex/` 前缀的分支**
 
 ```powershell
-git push -u origin njusehub-real-llm-compatibility
+git push -u origin njusehub-real-llm-audit
 ```
 
 Expected：远端创建同名分支。
