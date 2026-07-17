@@ -234,6 +234,32 @@ class WebLLMFactoryTests(unittest.TestCase):
         with closing(connect_db(self.db_path)) as conn:
             self.assertEqual(conn.execute("select count(*) from runs").fetchone()[0], 0)
 
+    def test_connection_test_uses_configured_request_timeout(self):
+        self.save_llm_settings("https://api.example.test/v1", "test-model")
+        self.credentials.put(self.user_id, "SENTINEL-secret")
+        network = load_llm_network_config(
+            {
+                "SPECGATE_LLM_ALLOWED_HOSTS": "api.example.test",
+                "SPECGATE_LLM_REQUEST_TIMEOUT_SECONDS": "47",
+            }
+        )
+        transport = RecordingTransport()
+        factory = WebLLMFactory(
+            self.db_path,
+            self.credentials,
+            network,
+            transport_factory=lambda _max_attempts: transport,
+            monotonic_clock=lambda: 100.0,
+        )
+        service = LLMConnectionTestService(
+            factory,
+            LLMConnectionTestLimiter(cooldown_seconds=0),
+        )
+
+        service.test(self.user_id)
+
+        self.assertEqual(transport.calls[0][3], 47.0)
+
     def test_connection_test_requires_real_configuration_and_enforces_cooldown(self):
         clock = [10.0]
         limiter = LLMConnectionTestLimiter(
