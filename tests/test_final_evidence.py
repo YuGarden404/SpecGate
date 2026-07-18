@@ -38,6 +38,9 @@ SCREENSHOTS = (
     ROOT / "docs" / "evidence" / "gitlab-kaniko-gcr-timeout.png",
     ROOT / "docs" / "evidence" / "gitlab-pipeline-buildkit-permission-failure.png",
     ROOT / "docs" / "evidence" / "gitlab-buildkit-rootless-permission-failure.png",
+    ROOT / "docs" / "evidence" / "gitlab-jobs-312806-success.png",
+    ROOT / "docs" / "evidence" / "gitlab-pipeline-312806-success.png",
+    ROOT / "docs" / "evidence" / "gitlab-unit-test-595758-success.png",
 )
 KEY_EVIDENCE_PATHS = (
     "src/specgate/runner.py",
@@ -847,7 +850,7 @@ class FinalEvidenceTests(unittest.TestCase):
         self.assertNotIn("公网交互式 Web 后端 | 已完成", combined)
         self.assertNotIn("公开容器 registry | 已完成", combined)
 
-    def test_nju_gitlab_initial_pipeline_failure_is_recorded_truthfully(self):
+    def test_nju_gitlab_pipeline_history_and_final_success_are_recorded_truthfully(self):
         combined = "\n".join(
             read_text(path)
             for path in (
@@ -865,6 +868,9 @@ class FinalEvidenceTests(unittest.TestCase):
             "Pipeline #312781",
             "Pipeline #312784",
             "Pipeline #312797",
+            "Pipeline #312806",
+            "job #595758",
+            "main@66ea825",
             "`unit-test` 已通过",
             "`docker-build` 失败",
             "Docker-in-Docker",
@@ -874,13 +880,17 @@ class FinalEvidenceTests(unittest.TestCase):
             "operation not permitted",
             "CLI-first",
             "只保留 `unit-test`",
-            "修复验证中",
+            "https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806",
+            "https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/595758",
+            "Ran 926 tests in 33.684s",
+            "OK (skipped=18)",
+            "GitLab Pipeline 已通过",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, combined)
 
         self.assertNotIn("NJU GitLab 课程镜像尚未创建", combined)
-        self.assertNotIn("GitLab Pipeline 已通过", combined)
+        self.assertNotIn("修复验证中", combined)
 
     def test_readme_has_required_delivery_sections(self):
         readme = read_text("README.md")

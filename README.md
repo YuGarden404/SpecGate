@@ -16,7 +16,7 @@ SpecGate 是 AI4SE 期末项目的 A 类选题：一个从零实现、以 GitHub
 - 知识图谱 demo：`https://yugarden404.github.io/SpecGate/demo/`
 - 运行报告：`https://yugarden404.github.io/SpecGate/report/`
 
-仓库交付采用双仓库分工：GitHub 开发主仓库保留完整 commit、PR、GitHub PR/Actions、Docker 构建与 Pages 证据；[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 已创建为 Private，检查前改为 Public。Pipeline #312781 的 Docker-in-Docker 因缺少 privileged 权限失败，Pipeline #312784 的 Kaniko 镜像因访问 `gcr.io` 时出现 `context deadline exceeded` 而失败，Pipeline #312797 成功拉取 BuildKit 镜像后又因 RootlessKit `operation not permitted` 失败；三次 `unit-test` 已通过。学校共享 Runner 不具备容器构建所需权限，因此 GitLab CI 只保留 `unit-test`，等待新 Pipeline 验证。GitHub 平台的 PR/Actions 元数据不会迁移到 GitLab。
+仓库交付采用双仓库分工：GitHub 开发主仓库保留完整 commit、PR、GitHub PR/Actions、Docker 构建与 Pages 证据；[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 已创建为 Private，检查前改为 Public。Pipeline #312781 的 Docker-in-Docker 因缺少 privileged 权限失败，Pipeline #312784 的 Kaniko 镜像因访问 `gcr.io` 时出现 `context deadline exceeded` 而失败，Pipeline #312797 成功拉取 BuildKit 镜像后又因 RootlessKit `operation not permitted` 失败；三次 `unit-test` 已通过。学校共享 Runner 不具备容器构建所需权限，因此 GitLab CI 只保留 `unit-test`；随后 [Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 在 `main@66ea825` 上通过。GitHub 平台的 PR/Actions 元数据不会迁移到 GitLab。
 
 推荐评审顺序：先看最终提交清单，再看项目讲解稿，然后运行本地测试或打开公开报告。
 
@@ -73,7 +73,7 @@ SpecGate 是 AI4SE 期末项目的 A 类选题：一个从零实现、以 GitHub
 - 固定 worker、有界队列、取消、超时和重启恢复。
 - schema v5 的 `runtime_config_json` / `llm_config_json` 不可变配置快照与 Debug/Audit 脱敏展示。
 - Web 默认使用 MockLLM；API key、Base URL、Model 完整后，新 run 可使用 OpenAI-compatible 真实模型，失败不会降级到 Mock。
-- Docker 本地与 GitHub Actions 构建、GitLab `unit-test`、GitHub Pages 和公开静态评审入口；NJU GitLab 三次真实 Pipeline 的 Python 测试均通过，unit-test-only 配置修复验证中；公网后端与公开 registry 尚未完成。
+- Docker 本地与 GitHub Actions 构建、GitLab `unit-test`、GitHub Pages 和公开静态评审入口；NJU GitLab unit-test-only Pipeline 已通过；公网后端与公开 registry 尚未完成。
 
 ## 安装
 
@@ -462,9 +462,11 @@ python -m unittest discover -s tests -v
 
 GitHub 是开发主仓库；`.github/workflows/ci.yml` 运行完整测试并执行 Docker 镜像构建检查，`.github/workflows/pages.yml` 发布静态评审入口。容器构建的权威 CI 证据来自 GitHub Actions。
 
-NJU GitLab 课程镜像从同一 `main` commit 独立运行 `.gitlab-ci.yml`。课程文件只保留 `unit-test`，安装项目、运行完整测试并执行 `specgate --help` CLI smoke；GitLab Pipeline 的成功必须由实际 Pipeline 证明，不能用 GitHub Actions 成功替代。
+NJU GitLab 课程镜像从同一 `main` commit 独立运行 `.gitlab-ci.yml`。课程文件只保留 `unit-test`，安装项目、运行完整测试并执行 `specgate --help` CLI smoke；GitLab Pipeline 的成功由实际 Pipeline 证明，不用 GitHub Actions 成功替代。
 
-NJU GitLab Pipeline #312781 在 `main@5fd86fa` 上运行：`unit-test` 已通过，`docker-build` 因共享 Runner 未启用 privileged 模式而失败。Pipeline #312784 中 `unit-test` 再次通过，但 `docker-build` 在拉取 `gcr.io/kaniko-project/executor` 时出现 `context deadline exceeded`。Pipeline #312797 成功拉取 `moby/buildkit:rootless` 并进入脚本，随后 RootlessKit 在 `fork/exec /proc/self/exe` 处返回 `operation not permitted`。三次结果共同证明学校共享 Runner 不适合容器构建，而不是 Dockerfile 或 Python 测试失败；GitLab 现只验证课程要求的 `unit-test`，新 Pipeline 通过前状态仍为修复验证中。
+NJU GitLab Pipeline #312781 在 `main@5fd86fa` 上运行：`unit-test` 已通过，`docker-build` 因共享 Runner 未启用 privileged 模式而失败。Pipeline #312784 中 `unit-test` 再次通过，但 `docker-build` 在拉取 `gcr.io/kaniko-project/executor` 时出现 `context deadline exceeded`。Pipeline #312797 成功拉取 `moby/buildkit:rootless` 并进入脚本，随后 RootlessKit 在 `fork/exec /proc/self/exe` 处返回 `operation not permitted`。三次结果共同证明学校共享 Runner 不适合容器构建，而不是 Dockerfile 或 Python 测试失败。
+
+最终 [Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 针对 `main@66ea825` 只运行 `unit-test` 并通过。[job #595758](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/595758) 完成 `Ran 926 tests in 33.684s`、`OK (skipped=18)`，随后 `specgate --help` 正常列出 CLI 子命令并以 `Job succeeded` 结束。GitLab Pipeline 已通过；Docker 构建继续由 GitHub Actions 的成功 job 独立覆盖。
 
 ## 已知限制
 

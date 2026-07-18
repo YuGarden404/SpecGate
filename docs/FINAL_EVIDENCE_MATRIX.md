@@ -11,7 +11,7 @@
 - 当前远端证据：PR #23 合并后的 [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258) 与 [Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 均成功；列表截图见 `docs/evidence/github-actions-pr23-final.png`，job 详情截图见 `docs/evidence/github-actions-pr23-ci-detail.png` 与 `docs/evidence/github-actions-pr23-pages-detail.png`。
 - 执行归属历史：PR #18、PR #19、PR #20 均已记录主开发 Agent 为 OpenAI Codex，并区分人工参与与 Mock/Fake/Stub 自动测试边界。
 - 历史远端证据：PR #20 的 `main@c39d101`、[CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)、[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 与 `docs/evidence/github-actions-pr20-final.png` 继续保留，完整 job 映射见第 6 节。
-- 双仓库边界：SpecGate 是 CLI-first Harness；GitHub 开发主仓库保留 commit、PR、完整 GitHub Actions、Docker 构建与 Pages 证据，[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 只保留 `unit-test`。Pipeline #312781、#312784、#312797 的三次 `unit-test` 已通过，`docker-build` 分别暴露 DinD 权限、`gcr.io` 网络和 RootlessKit 权限限制；当前仍处于修复验证中，检查前改为 Public。
+- 双仓库边界：SpecGate 是 CLI-first Harness；GitHub 开发主仓库保留 commit、PR、完整 GitHub Actions、Docker 构建与 Pages 证据，[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 只保留 `unit-test`。Pipeline #312781、#312784、#312797 的三次 `unit-test` 已通过，`docker-build` 分别暴露 DinD 权限、`gcr.io` 网络和 RootlessKit 权限限制；最终 [Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 在 `main@66ea825` 上通过，检查前改为 Public。
 - 公开入口：<https://yugarden404.github.io/SpecGate/>。
 
 ## 3. 课程交付物
@@ -25,7 +25,7 @@
 | 公开静态评审入口 | 已完成 | GitHub Pages 首页、demo、报告 | 打开 README 中的三个 Pages URL |
 | 本地交互式 WebUI | 已完成 | `Dockerfile`、Web 运行时与确定性测试 | Docker/本地启动与确定性测试 |
 | 公网交互式 Web 后端 | 待完成 | 后续独立部署阶段 | 任务 6 人工门禁之后另行部署与核验 |
-| Docker 本地与 CI 构建 | 已完成 | `Dockerfile`、`.gitlab-ci.yml` | Docker build/smoke 与 CI |
+| Docker 本地与 CI 构建 | 已完成 | `Dockerfile`、`.github/workflows/ci.yml` | Docker build/smoke 与 GitHub Actions |
 | 公开容器 registry | 待完成 | 后续 GHCR 分发阶段 | 发布后另行记录公开镜像地址与摘要 |
 | 学生反思 | 已由学生确认 | `REFLECTION.md`、`docs/REFLECTION_FACT_CHECK.md` | PR #17 与学生确认记录 |
 
@@ -119,7 +119,19 @@ Pipeline #312797 运行 BuildKit 修复版本：`unit-test` 已通过，`docker-
 
 ![NJU GitLab RootlessKit 权限失败日志](evidence/gitlab-buildkit-rootless-permission-failure.png)
 
-该 job 已成功从 Docker Hub 拉取 `moby/buildkit:rootless`、checkout `fbf2e83` 并执行 `buildctl-daemonless.sh`，随后 RootlessKit 报告 `fork/exec /proc/self/exe: operation not permitted`。因此第三次根因是共享 Runner 禁止 rootless user namespace，不是镜像网络、Dockerfile 或 Python 测试失败。容器构建继续由 GitHub Actions 的成功 `docker-build` job 覆盖；NJU GitLab CI 只保留 `unit-test`，在新 Pipeline 通过前状态保持修复验证中。
+该 job 已成功从 Docker Hub 拉取 `moby/buildkit:rootless`、checkout `fbf2e83` 并执行 `buildctl-daemonless.sh`，随后 RootlessKit 报告 `fork/exec /proc/self/exe: operation not permitted`。因此第三次根因是共享 Runner 禁止 rootless user namespace，不是镜像网络、Dockerfile 或 Python 测试失败。容器构建继续由 GitHub Actions 的成功 `docker-build` job 覆盖；NJU GitLab CI 随后收缩为只保留 `unit-test`。
+
+![NJU GitLab 最终 jobs 列表](evidence/gitlab-jobs-312806-success.png)
+
+列表显示 commit `66ea825` 对应的 Pipeline #312806 只有 `unit-test`，状态为已通过；三次容器构建失败继续作为共享 Runner 能力边界的历史证据保留。
+
+![NJU GitLab 最终 Pipeline #312806](evidence/gitlab-pipeline-312806-success.png)
+
+[Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 针对 `main@66ea825` 运行，页面显示整体已通过，且只有 test stage 的 `unit-test` job。
+
+![NJU GitLab 最终 unit-test job #595758](evidence/gitlab-unit-test-595758-success.png)
+
+[job #595758](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/595758) 显示 `Ran 926 tests in 33.684s`、`OK (skipped=18)`，随后执行 `specgate --help` 并以 `Job succeeded` 结束。GitLab Pipeline 已通过；该成功与 GitHub Actions 的 Docker 构建证据职责独立。
 
 主线程在本轮通过只读浏览器重新核对公开 Pages；本地验证 Subagent 没有亲自浏览远端：
 
@@ -163,7 +175,7 @@ git diff --check
 - Web 默认使用 MockLLM；完整配置后新 run 可使用真实模型，Provider 失败不会降级。
 - GitHub Pages 仅为静态展示，真实模式需要部署 Web 后端、持久化数据库、凭据主密钥与 `SPECGATE_LLM_ALLOWED_HOSTS` 网络策略。
 - 本地交互式 WebUI 已具备 Docker/本地启动与确定性测试；公网交互式 Web 后端和公开容器 registry 均待后续独立阶段完成。发布镜像不等于部署服务。
-- GitHub 是开发主仓库和完整测试、Docker 构建、Pages 的权威来源；NJU GitLab 课程镜像已创建为 Private，首次只同步 `main` 与 tags，检查前改为 Public。GitHub PR/Actions 不迁移为 GitLab 平台元数据；Pipeline #312781 的 DinD 权限失败、Pipeline #312784 的 `gcr.io` 超时和 Pipeline #312797 的 RootlessKit 权限失败均独立记录，GitLab 现只保留 `unit-test`。
+- GitHub 是开发主仓库和完整测试、Docker 构建、Pages 的权威来源；NJU GitLab 课程镜像已创建为 Private，首次只同步 `main` 与 tags，检查前改为 Public。GitHub PR/Actions 不迁移为 GitLab 平台元数据；Pipeline #312781 的 DinD 权限失败、Pipeline #312784 的 `gcr.io` 超时和 Pipeline #312797 的 RootlessKit 权限失败均独立记录，最终 Pipeline #312806 的 `unit-test` 已通过。
 - 不开放 shell，不执行同源模型生成 HTML。
 - CLI 持久化凭据使用 OS keyring；Web 使用独立主密钥和 AES-256-GCM。
 - `.env` 只作为被保护路径和威胁示例出现，SpecGate 不读写 `.env`。

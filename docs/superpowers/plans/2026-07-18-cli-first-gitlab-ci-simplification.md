@@ -192,7 +192,7 @@ Expected: `OK`，0 failures。
 
 Expected: 无命中。
 
-- [ ] **Step 4: 交给用户手动提交和推送**
+- [x] **Step 4: 交给用户手动提交和推送**
 
 建议中文 commit：
 
@@ -200,4 +200,4 @@ Expected: 无命中。
 fix(ci): 收缩 GitLab 流水线并突出 CLI 核心
 ```
 
-用户将 `final-submission-sync` 推送到 NJU GitLab `main`。新 Pipeline 产生前不声明成功；通过后再记录 Pipeline URL、job URL 与成功截图，并将完整分支推送到 GitHub 创建中文 PR。
+用户将 `final-submission-sync` 推送到 NJU GitLab `main`。Pipeline #312806 与 job #595758 已通过并归档 URL 和截图；完成本次成功证据提交后，将完整分支推送到 GitHub 创建中文 PR。
