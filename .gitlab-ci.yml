@@ -1,6 +1,5 @@
 stages:
   - test
-  - build
 
 unit-test:
   stage: test
@@ -9,21 +8,4 @@ unit-test:
     - python -m pip install -e .
     - export PYTHONPATH=src
     - python -m unittest discover -s tests -v
-    - specgate-web --help
-
-docker-build:
-  stage: build
-  image:
-    name: moby/buildkit:rootless
-    entrypoint: [""]
-  variables:
-    BUILDKITD_FLAGS: --oci-worker-no-process-sandbox
-  script:
-    - >-
-      buildctl-daemonless.sh build
-      --frontend dockerfile.v0
-      --local context=.
-      --local dockerfile=.
-      --output type=oci,dest=/tmp/specgate.tar
-  rules:
-    - if: $CI_COMMIT_BRANCH
+    - specgate --help

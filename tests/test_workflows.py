@@ -28,32 +28,26 @@ class WorkflowTests(unittest.TestCase):
             "Pages 必须在生成 mock demo 前安装项目依赖",
         )
 
-    def test_gitlab_docker_build_is_daemonless_on_shared_runner(self):
+    def test_gitlab_pipeline_is_unit_test_only_on_shared_runner(self):
         workflow = (ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8")
         normalized_lines = {line.strip() for line in workflow.splitlines()}
 
-        self.assertIn(
-            "moby/buildkit:rootless",
-            workflow,
-        )
-        self.assertIn('entrypoint: [""]', workflow)
-        self.assertIn("BUILDKITD_FLAGS: --oci-worker-no-process-sandbox", workflow)
-        self.assertIn("buildctl-daemonless.sh build", workflow)
-        self.assertIn("--frontend dockerfile.v0", workflow)
-        self.assertIn("--local context=.", workflow)
-        self.assertIn("--local dockerfile=.", workflow)
-        self.assertIn("--output type=oci,dest=/tmp/specgate.tar", workflow)
-        self.assertIn("- specgate-web --help", normalized_lines)
+        self.assertIn("unit-test:", workflow)
+        self.assertIn("python -m unittest discover -s tests -v", workflow)
+        self.assertIn("- specgate --help", normalized_lines)
 
-        for privileged_docker_dependency in (
+        for unsupported_build_dependency in (
+            "docker-build:",
             "docker:26-dind",
             "kaniko-project",
+            "moby/buildkit",
             "DOCKER_HOST",
             "docker build",
             "docker run",
+            "buildctl",
         ):
-            with self.subTest(dependency=privileged_docker_dependency):
-                self.assertNotIn(privileged_docker_dependency, workflow)
+            with self.subTest(dependency=unsupported_build_dependency):
+                self.assertNotIn(unsupported_build_dependency, workflow)
 
 
 if __name__ == "__main__":

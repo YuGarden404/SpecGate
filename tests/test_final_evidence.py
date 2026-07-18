@@ -36,6 +36,8 @@ SCREENSHOTS = (
     ROOT / "docs" / "evidence" / "gitlab-docker-build-dind-failure.png",
     ROOT / "docs" / "evidence" / "gitlab-pipeline-kaniko-registry-failure.png",
     ROOT / "docs" / "evidence" / "gitlab-kaniko-gcr-timeout.png",
+    ROOT / "docs" / "evidence" / "gitlab-pipeline-buildkit-permission-failure.png",
+    ROOT / "docs" / "evidence" / "gitlab-buildkit-rootless-permission-failure.png",
 )
 KEY_EVIDENCE_PATHS = (
     "src/specgate/runner.py",
@@ -862,13 +864,16 @@ class FinalEvidenceTests(unittest.TestCase):
             "main@5fd86fa",
             "Pipeline #312781",
             "Pipeline #312784",
+            "Pipeline #312797",
             "`unit-test` 已通过",
             "`docker-build` 失败",
             "Docker-in-Docker",
             "privileged",
             "gcr.io",
             "context deadline exceeded",
-            "moby/buildkit:rootless",
+            "operation not permitted",
+            "CLI-first",
+            "只保留 `unit-test`",
             "修复验证中",
         ):
             with self.subTest(phrase=phrase):

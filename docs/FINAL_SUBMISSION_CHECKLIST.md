@@ -4,7 +4,7 @@
 
 ## 1. 项目定位
 
-SpecGate 是 AI4SE 期末项目 A 类选题 `Coding Agent Harness`。项目目标不是做一个复杂网页应用，而是从零实现一个小型 coding agent harness，展示如何把 LLM 的输出约束在可控、可测、可追踪、可修复的工程闭环中。
+SpecGate 是 AI4SE 期末项目 A 类选题，是一个 CLI-first 的 `Coding Agent Harness`。`specgate` CLI 和自行实现的 Harness 内核是核心；WebUI 是配套评审与演示入口。项目目标不是做一个复杂网页应用，而是展示如何把 LLM 的输出约束在可控、可测、可追踪、可修复的工程闭环中。
 
 MVP 范围：
 
@@ -44,7 +44,7 @@ MVP 范围：
 | 历史 CI/Pages 截图（截至 PR #15/#17） | 已完成 | `docs/evidence/` 中的历史截图与第 5 节记录 |
 | PR #20 后 CI/Pages 与新截图 | 已完成 | [CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)、[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242)、`docs/evidence/github-actions-pr20-final.png` |
 | PR #23 后 CI/Pages 与新截图 | 已完成 | [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258)、[Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221)、`docs/evidence/github-actions-pr23-final.png` 及两张 job 详情截图 |
-| NJU GitLab 课程镜像 | 修复验证中 | [Private 项目](https://git.nju.edu.cn/YuyuanLiang/specgate)：Pipeline #312781 因 DinD 权限失败，Pipeline #312784 因 `gcr.io` 出现 `context deadline exceeded`；两次 `unit-test` 均通过、`docker-build` 均失败，正在验证 `moby/buildkit:rootless`；检查前改为 Public |
+| NJU GitLab 课程镜像 | 修复验证中 | [Private 项目](https://git.nju.edu.cn/YuyuanLiang/specgate)：Pipeline #312781、#312784、#312797 的三次 `unit-test` 已通过；容器构建分别受 DinD、`gcr.io` 和 RootlessKit 权限限制，GitLab 现只保留 `unit-test`，等待新 Pipeline；检查前改为 Public |
 | 公开静态评审入口 | 已完成 | GitHub Pages 首页、demo、报告 |
 | 本地交互式 WebUI | 已完成 | Docker/本地启动与确定性测试 |
 | 公网交互式 Web 后端 | 待完成 | 后续独立部署阶段 |
@@ -116,7 +116,7 @@ PR #23 合并后的当前来源链为：
 
 列表截图见 `docs/evidence/github-actions-pr23-final.png`；job 详情截图见 `docs/evidence/github-actions-pr23-ci-detail.png` 与 `docs/evidence/github-actions-pr23-pages-detail.png`。CI/Pages 页面显示的 Node.js 20 弃用 warning 不改变本次成功状态。
 
-双仓库交付采用“GitHub 开发主仓库 + NJU GitLab 课程镜像”：GitHub 保留完整 commit、PR、GitHub PR/Actions 与 Pages 证据；GitLab 项目已创建为 Private，检查前改为 Public。初始 Pipeline #312781 的 `unit-test` 已通过、`docker-build` 因学校共享 Runner 不支持 privileged Docker-in-Docker 而失败；Kaniko 修复对应的 Pipeline #312784 中 `unit-test` 再次通过，但 `docker-build` 在执行脚本前因访问 `gcr.io` 出现 `context deadline exceeded` 而失败。当前改用 `moby/buildkit:rootless`，仍处于修复验证中。GitLab Pipeline 是独立验证，不等同于迁移 GitHub Actions。
+双仓库交付采用“GitHub 开发主仓库 + NJU GitLab 课程镜像”：GitHub 保留完整 commit、PR、GitHub PR/Actions、Docker 构建与 Pages 证据；GitLab 项目已创建为 Private，检查前改为 Public。Pipeline #312781 的 `docker-build` 因学校共享 Runner 不支持 privileged Docker-in-Docker 而失败；Pipeline #312784 因访问 `gcr.io` 出现 `context deadline exceeded`；Pipeline #312797 已成功拉取 BuildKit 镜像，但 RootlessKit 因 `operation not permitted` 无法启动。三次 `unit-test` 已通过，GitLab CI 现只保留 `unit-test`，等待新 Pipeline 验证。GitLab Pipeline 是独立验证，不等同于迁移 GitHub Actions。
 
 ## 6. 本地复现命令
 
@@ -169,6 +169,6 @@ docker run --rm specgate:local
 - 有过程文档、计划、反思和日志。
 - 有上下文、安全、工具三条工程主线。
 - 有 Lab 10 Skill 与 Lab 9-12 取舍说明。
-- GitHub 开发主仓库证据已同步到 PR #23；NJU GitLab 课程镜像已创建并取得真实初始 Pipeline 结果，daemonless 构建修复、通过截图和检查前 Public 切换仍待完成。
+- GitHub 开发主仓库证据已同步到 PR #23；NJU GitLab 课程镜像已记录三次共享 Runner 构建限制，unit-test-only Pipeline 通过截图和检查前 Public 切换仍待完成。
 
 后续阶段包括公网交互式 Web 后端部署、GHCR 镜像分发、更多 Provider 的人工兼容性验证和 AgentPack 草案；发布镜像不等于部署服务。当前合规阶段不部署、不发布；CI #53 与 Pages #31 成功只证明自动测试、Docker CI 构建和静态 Pages 发布链，不代表公网交互式 Web 后端已经部署或镜像已发布到公开容器 registry。真实 LLM Web 接入代码已经完成，但课程自动验收仍使用 Mock/Fake/Stub，`REFLECTION.md` 继续由学生本人维护。
