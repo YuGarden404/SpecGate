@@ -1001,7 +1001,7 @@
 - TDD RED：先更新最终证据契约，要求 PR #21-#23 发布链、CI #59、Pages #34、`docs/evidence/github-actions-pr23-final.png` 与双仓库职责；聚焦测试因材料和截图尚未同步而按预期失败。
 - 截图核验：用户提供的 PR #23 Actions 截图显示 CI #59 与 Pages #34 均成功；PNG 校验结果为 2557x1441、300972 字节，未见 token、API key、密码或其他凭据。
 - 当前证据：用户随后从已登录页面提供 [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258) 与 [Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 精确 run URL，以及两张 job 详情截图。CI 的 `unit-test`、`docker-build` 和 Pages 的 `build-pages`、`deploy-pages` 均成功。
-- 双仓库职责：GitHub 开发主仓库继续保存完整 commit、PR、GitHub PR/Actions 与 Pages；NJU GitLab 课程镜像尚未创建，创建后先保持 Private，检查前改为 Public，并以实际 GitLab Pipeline 作为独立证据。
+- 双仓库职责：GitHub 开发主仓库继续保存完整 commit、PR、GitHub PR/Actions 与 Pages；NJU GitLab 课程镜像已创建为 Private 并同步 `main@5fd86fa`，检查前改为 Public，GitLab Pipeline 作为独立证据。
 - 用户操作边界：GitLab 项目创建、remote、push、可见性设置、截图及所有 Git 命令均由用户执行；首次只同步 `main` 与 tags。
 - 部署边界：公网交互式 Web 后端与公开容器 registry 继续等待教师答复；本任务未部署服务、未发布镜像，也未修改 `REFLECTION.md`。
 - TDD GREEN：PR #21-#23 发布链、当前快照、跨材料一致性与双仓库职责 5 项聚焦契约结果为 `Ran 5 tests in 0.006s`、`OK`；完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 22 tests in 0.113s`、`OK`。
@@ -1009,3 +1009,7 @@
 - 远端详情截图：`docs/evidence/github-actions-pr23-ci-detail.png` 为 2557x1310、132479 字节；`docs/evidence/github-actions-pr23-pages-detail.png` 为 2557x1402、156279 字节。两图 PNG 结构有效且未见凭据；Node.js 20 弃用 warning 如实保留，不影响本次成功状态。
 - 详情证据 TDD RED：新增两张截图和精确 run 映射契约后，3 项聚焦测试因文件不存在、图片未引用和两份材料缺少 URL/job 映射而产生 7 个预期失败与 2 个预期错误。
 - 详情证据与反思 GREEN：归档真实截图、同步 [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258) 和 [Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 后，反思署名/篇幅、远端结构、PNG 完整性与发布链 5 项聚焦测试通过；完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 24 tests in 0.136s`、`OK`。
+- GitLab 初始 Pipeline：用户创建 Private 项目 `https://git.nju.edu.cn/YuyuanLiang/specgate` 并只同步 `main@5fd86fa` 与 tags。Pipeline #312781 中 `unit-test` 已通过，`docker-build` 失败；两张失败截图经 PNG 校验后归档。
+- GitLab 根因：`docker:26-dind` 在学校共享 runner 上无法挂载 `/sys/kernel/security`，服务健康检查等待 2375/2376 超时，随后 `docker build` 无法连接 daemon。该 runner 未启用 privileged 模式，故障不来自 Dockerfile 或 Python 测试。
+- GitLab 修复 TDD：先增加 daemonless 工作流契约，单项测试因缺少 Kaniko 预期失败；随后把 `docker-build` 改为 `gcr.io/kaniko-project/executor:v1.23.2-debug --no-push`，并把 `specgate-web --help` smoke 放入 Python job，工作流测试 2 项通过。真实 Pipeline 仍待用户推送后验证。
+- GitLab 修复本地验证：失败状态、PNG、发布链与工作流 5 项聚焦契约通过；完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 26 tests in 0.132s`、`OK`。PyYAML 成功解析 `.gitlab-ci.yml`，确认 Kaniko 命令被折叠为单条 script，且不存在 DinD service。

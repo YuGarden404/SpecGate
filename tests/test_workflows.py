@@ -28,6 +28,30 @@ class WorkflowTests(unittest.TestCase):
             "Pages 必须在生成 mock demo 前安装项目依赖",
         )
 
+    def test_gitlab_docker_build_is_daemonless_on_shared_runner(self):
+        workflow = (ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8")
+        normalized_lines = {line.strip() for line in workflow.splitlines()}
+
+        self.assertIn(
+            "gcr.io/kaniko-project/executor:v1.23.2-debug",
+            workflow,
+        )
+        self.assertIn('entrypoint: [""]', workflow)
+        self.assertIn("/kaniko/executor", workflow)
+        self.assertIn('--context "$CI_PROJECT_DIR"', workflow)
+        self.assertIn('--dockerfile "$CI_PROJECT_DIR/Dockerfile"', workflow)
+        self.assertIn("--no-push", workflow)
+        self.assertIn("- specgate-web --help", normalized_lines)
+
+        for privileged_docker_dependency in (
+            "docker:26-dind",
+            "DOCKER_HOST",
+            "docker build",
+            "docker run",
+        ):
+            with self.subTest(dependency=privileged_docker_dependency):
+                self.assertNotIn(privileged_docker_dependency, workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

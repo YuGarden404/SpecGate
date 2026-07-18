@@ -11,7 +11,7 @@
 - 当前远端证据：PR #23 合并后的 [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258) 与 [Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 均成功；列表截图见 `docs/evidence/github-actions-pr23-final.png`，job 详情截图见 `docs/evidence/github-actions-pr23-ci-detail.png` 与 `docs/evidence/github-actions-pr23-pages-detail.png`。
 - 执行归属历史：PR #18、PR #19、PR #20 均已记录主开发 Agent 为 OpenAI Codex，并区分人工参与与 Mock/Fake/Stub 自动测试边界。
 - 历史远端证据：PR #20 的 `main@c39d101`、[CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)、[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 与 `docs/evidence/github-actions-pr20-final.png` 继续保留，完整 job 映射见第 6 节。
-- 双仓库边界：GitHub 开发主仓库保留 commit、PR、GitHub PR/Actions 和 Pages 证据；NJU GitLab 课程镜像尚未创建，创建后先保持 Private，检查前改为 Public，并以独立 GitLab Pipeline 作为课程镜像验证。
+- 双仓库边界：GitHub 开发主仓库保留 commit、PR、GitHub PR/Actions 和 Pages 证据；[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 已创建为 Private 并同步 `main@5fd86fa`。初始 Pipeline #312781 的 `unit-test` 已通过、`docker-build` 失败，daemonless 构建修复验证中；检查前改为 Public。
 - 公开入口：<https://yugarden404.github.io/SpecGate/>。
 
 ## 3. 课程交付物
@@ -97,6 +97,14 @@ CI 详情截图显示总状态 `Success`，`unit-test` 和 `docker-build` 均成
 
 Pages 详情截图显示总状态 `Success`，`build-pages` 和 `deploy-pages` 均成功，并产生 `github-pages` artifact。三张 PR #23 图片均通过 PNG 结构校验，未见 token、API key、密码或其他凭据。
 
+![NJU GitLab 初始 Pipeline 失败](evidence/gitlab-pipeline-initial-failure.png)
+
+NJU GitLab Pipeline #312781 针对 `main@5fd86fa` 运行：`unit-test` 已通过，`docker-build` 失败，整体状态为失败。该失败属于真实课程镜像证据，不使用 GitHub Actions 成功替代。
+
+![NJU GitLab Docker-in-Docker 权限失败日志](evidence/gitlab-docker-build-dind-failure.png)
+
+日志显示学校共享 runner 的 Docker executor 未启用 privileged 模式，`docker:26-dind` 因挂载权限不足未启动，最终报错无法连接 `tcp://docker:2375`。这不是 Dockerfile 或测试失败；`.gitlab-ci.yml` 已改用不依赖 Docker daemon 的 Kaniko 构建，当前状态为修复验证中。
+
 主线程在本轮通过只读浏览器重新核对公开 Pages；本地验证 Subagent 没有亲自浏览远端：
 
 - 首页：标题 `SpecGate WebUI`，主标题 `SpecGate 静态 HTML 生成与修复闭环`
@@ -139,7 +147,7 @@ git diff --check
 - Web 默认使用 MockLLM；完整配置后新 run 可使用真实模型，Provider 失败不会降级。
 - GitHub Pages 仅为静态展示，真实模式需要部署 Web 后端、持久化数据库、凭据主密钥与 `SPECGATE_LLM_ALLOWED_HOSTS` 网络策略。
 - 本地交互式 WebUI 已具备 Docker/本地启动与确定性测试；公网交互式 Web 后端和公开容器 registry 均待后续独立阶段完成。发布镜像不等于部署服务。
-- GitHub 是开发主仓库；NJU GitLab 课程镜像尚未创建。创建后仅同步 `main` 与 tags，先保持 Private，检查前改为 Public；GitHub PR/Actions 不迁移为 GitLab 平台元数据，GitLab Pipeline 必须独立通过。
+- GitHub 是开发主仓库；NJU GitLab 课程镜像已创建为 Private，首次只同步 `main` 与 tags，检查前改为 Public。GitHub PR/Actions 不迁移为 GitLab 平台元数据；Pipeline #312781 的真实失败与修复验证均独立记录。
 - 不开放 shell，不执行同源模型生成 HTML。
 - CLI 持久化凭据使用 OS keyring；Web 使用独立主密钥和 AES-256-GCM。
 - `.env` 只作为被保护路径和威胁示例出现，SpecGate 不读写 `.env`。

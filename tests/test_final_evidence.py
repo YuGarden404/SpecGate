@@ -32,6 +32,8 @@ SCREENSHOTS = (
     ROOT / "docs" / "evidence" / "github-actions-pr23-final.png",
     ROOT / "docs" / "evidence" / "github-actions-pr23-ci-detail.png",
     ROOT / "docs" / "evidence" / "github-actions-pr23-pages-detail.png",
+    ROOT / "docs" / "evidence" / "gitlab-pipeline-initial-failure.png",
+    ROOT / "docs" / "evidence" / "gitlab-docker-build-dind-failure.png",
 )
 KEY_EVIDENCE_PATHS = (
     "src/specgate/runner.py",
@@ -840,6 +842,34 @@ class FinalEvidenceTests(unittest.TestCase):
         self.assertNotIn("GitHub Actions 已迁移到 GitLab", combined)
         self.assertNotIn("公网交互式 Web 后端 | 已完成", combined)
         self.assertNotIn("公开容器 registry | 已完成", combined)
+
+    def test_nju_gitlab_initial_pipeline_failure_is_recorded_truthfully(self):
+        combined = "\n".join(
+            read_text(path)
+            for path in (
+                "README.md",
+                "docs/FINAL_EVIDENCE_MATRIX.md",
+                "docs/FINAL_SUBMISSION_CHECKLIST.md",
+                "docs/REFLECTION_FACT_CHECK.md",
+            )
+        )
+
+        for phrase in (
+            "https://git.nju.edu.cn/YuyuanLiang/specgate",
+            "Private",
+            "main@5fd86fa",
+            "Pipeline #312781",
+            "`unit-test` 已通过",
+            "`docker-build` 失败",
+            "Docker-in-Docker",
+            "privileged",
+            "修复验证中",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, combined)
+
+        self.assertNotIn("NJU GitLab 课程镜像尚未创建", combined)
+        self.assertNotIn("GitLab Pipeline 已通过", combined)
 
     def test_readme_has_required_delivery_sections(self):
         readme = read_text("README.md")
