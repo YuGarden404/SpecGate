@@ -6,6 +6,30 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_dockerfile_defaults_to_specgate_cli(self):
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+        self.assertIn("WORKDIR /workspace", dockerfile)
+        self.assertIn('ENTRYPOINT ["specgate"]', dockerfile)
+        self.assertIn('CMD ["--help"]', dockerfile)
+        self.assertNotIn('CMD ["specgate-web"', dockerfile)
+
+    def test_github_ci_smokes_cli_and_explicit_web_entrypoints(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "ci.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("docker run --rm specgate:ci --help", workflow)
+        self.assertIn(
+            "docker run --rm specgate:ci run-mock-demo "
+            "/opt/specgate/examples/knowledge_nav",
+            workflow,
+        )
+        self.assertIn(
+            "docker run --rm --entrypoint specgate-web specgate:ci --help",
+            workflow,
+        )
+
     def test_pages_installs_project_before_regenerating_mock_demo(self):
         workflow = (
             ROOT / ".github" / "workflows" / "pages.yml"

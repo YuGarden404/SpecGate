@@ -1,18 +1,17 @@
 FROM python:3.11-slim
 
-WORKDIR /app
+WORKDIR /opt/specgate
 
-COPY pyproject.toml README.md /app/
-COPY src /app/src
-COPY examples /app/examples
+COPY pyproject.toml README.md /opt/specgate/
+COPY src /opt/specgate/src
+COPY examples /opt/specgate/examples
 
-RUN python -m pip install --no-cache-dir -e .
+RUN python -m pip install --no-cache-dir -e . \
+    && mkdir -p /workspace /data/specgate-web
 
 ENV SPECGATE_WEB_DATA=/data/specgate-web
 
-RUN mkdir -p /data/specgate-web
+WORKDIR /workspace
 
-VOLUME ["/data/specgate-web"]
-EXPOSE 8000
-
-CMD ["specgate-web", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["specgate"]
+CMD ["--help"]
