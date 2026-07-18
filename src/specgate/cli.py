@@ -16,6 +16,7 @@ from specgate.approvals import (
 from specgate.benchmark import summarize_benchmark
 from specgate.config import WorkspaceConfig, load_workspace_config
 from specgate.context import VALID_CONTEXT_STRATEGIES
+from specgate.credential_store import CredentialStoreUnavailable
 from specgate.credentials import clear_credential, credential_status, read_credential, set_credential
 from specgate.eval_runner import run_eval_suite
 from specgate.gate import run_html_gate
@@ -24,6 +25,13 @@ from specgate.policy import WorkspacePolicy
 from specgate.report import generate_report
 from specgate.runner import AgentRunner
 from specgate.trace import redact
+from specgate.user_config import (
+    UserConfigError,
+    UserLLMConfig,
+    load_user_llm_config,
+    save_user_llm_config,
+    user_config_path,
+)
 from specgate.workspace_fs import WorkspacePathError
 
 
@@ -732,6 +740,67 @@ def run_benchmark(
     return 0 if all(suite.expected_matches == suite.total_cases for suite in suites) else 1
 
 
+def configure_user() -> int:
+    path = user_config_path()
+    try:
+        current = load_user_llm_config(path=path)
+    except UserConfigError:
+        print(
+            f"user config is invalid: {path}; "
+            "remove it and run: specgate configure"
+        )
+        return 1
+
+    base_default = current.base_url if current else ""
+    model_default = current.model if current else ""
+    base_prompt = (
+        f"Base URL [{base_default}]: " if base_default else "Base URL: "
+    )
+    model_prompt = f"Model [{model_default}]: " if model_default else "Model: "
+    base_url = input(base_prompt).strip() or base_default
+    model = input(model_prompt).strip() or model_default
+    if not base_url or not model:
+        print("Base URL and Model are required")
+        return 1
+
+    status = credential_status("openai-compatible")
+    prompt = (
+        "API key [configured; press Enter to keep]: "
+        if status.safe_to_run
+        else "API key: "
+    )
+    secret = getpass.getpass(prompt)
+    if secret:
+        try:
+            set_credential("openai-compatible", secret)
+        except CredentialStoreUnavailable:
+            print(
+                "credential store is unavailable; "
+                "set OPENAI_COMPATIBLE_API_KEY instead"
+            )
+            return 1
+        except ValueError:
+            print("API key is invalid")
+            return 1
+    elif not status.safe_to_run:
+        print(
+            "API key is required; alternatively set "
+            "OPENAI_COMPATIBLE_API_KEY"
+        )
+        return 1
+
+    try:
+        save_user_llm_config(
+            UserLLMConfig("openai-compatible", base_url, model),
+            path=path,
+        )
+    except UserConfigError as exc:
+        print(str(exc))
+        return 1
+    print(f"configuration saved: {path}; API key value hidden")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="specgate")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -777,6 +846,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     benchmark.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
     benchmark.add_argument("--suite")
+    sub.add_parser(
+        "configure",
+        help="保存默认 Base URL、Model 和隐藏的 API key",
+    )
     credentials = sub.add_parser("credentials")
     credentials_sub = credentials.add_subparsers(dest="credentials_command", required=True)
     for command in ("status", "clear"):
@@ -800,6 +873,8 @@ def main(argv: list[str] | None = None) -> int:
     approvals_deny.add_argument("approval_id")
     approvals_deny.add_argument("--reason")
     args = parser.parse_args(argv)
+    if args.command == "configure":
+        return configure_user()
     if args.command == "run-mock-demo":
         return run_mock_demo(Path(args.workspace), governance_profile=args.governance_profile)
     if args.command == "run":
