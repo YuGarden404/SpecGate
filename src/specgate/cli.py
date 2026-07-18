@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from specgate.user_config import (
     UserConfigError,
     UserLLMConfig,
     load_user_llm_config,
+    resolve_user_llm_config,
     save_user_llm_config,
     user_config_path,
 )
@@ -634,6 +636,9 @@ def run_real_llm(
         profile=result.profile,
     )
     print(f"SpecGate run finished: passed={result.passed}, steps={result.steps}")
+    print(f"HTML: {root / 'index.html'}")
+    print(f"Report: {root / 'reports' / 'latest' / 'index.html'}")
+    print(f"Trace: {root / 'runs' / 'latest' / 'trace.jsonl'}")
     return 0 if result.passed else 1
 
 
@@ -801,6 +806,37 @@ def configure_user() -> int:
     return 0
 
 
+def _validate_run_workspace(root: Path) -> str | None:
+    if not root.is_dir():
+        return f"workspace directory does not exist: {root}"
+    missing = [
+        name
+        for name in ("TASK_SPEC.md", "CHECKLIST.md")
+        if not (root / name).is_file()
+    ]
+    if missing:
+        return "workspace is missing required file(s): " + ", ".join(missing)
+    return None
+
+
+def _resolve_cli_run_config(
+    provider: str,
+    model: str | None,
+    base_url: str | None,
+) -> UserLLMConfig:
+    environment_model = os.environ.get("SPECGATE_LLM_MODEL")
+    environment_base_url = os.environ.get("SPECGATE_LLM_BASE_URL")
+    saved = None
+    if not (model or environment_model) or not (base_url or environment_base_url):
+        saved = load_user_llm_config()
+    return resolve_user_llm_config(
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        saved=saved,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="specgate")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -810,8 +846,8 @@ def main(argv: list[str] | None = None) -> int:
     real_run = sub.add_parser("run")
     real_run.add_argument("workspace")
     real_run.add_argument("--provider", default="openai-compatible")
-    real_run.add_argument("--model", required=True)
-    real_run.add_argument("--base-url", required=True)
+    real_run.add_argument("--model")
+    real_run.add_argument("--base-url")
     real_run.add_argument("--max-steps", type=int, default=5)
     real_run.add_argument("--user-agent", default="SpecGate/0.1 OpenAI-Compatible")
     real_run.add_argument("--timeout", type=float, default=60)
@@ -878,11 +914,25 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run-mock-demo":
         return run_mock_demo(Path(args.workspace), governance_profile=args.governance_profile)
     if args.command == "run":
+        root = Path(args.workspace)
+        workspace_error = _validate_run_workspace(root)
+        if workspace_error:
+            print(workspace_error)
+            return 1
+        try:
+            resolved = _resolve_cli_run_config(
+                args.provider,
+                args.model,
+                args.base_url,
+            )
+        except UserConfigError as exc:
+            print(str(exc))
+            return 1
         return run_real_llm(
-            root=Path(args.workspace),
-            provider=args.provider,
-            model=args.model,
-            base_url=args.base_url,
+            root=root,
+            provider=resolved.provider,
+            model=resolved.model,
+            base_url=resolved.base_url,
             max_steps=args.max_steps,
             user_agent=args.user_agent,
             timeout=args.timeout,
