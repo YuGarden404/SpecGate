@@ -26,7 +26,7 @@
 | 本地交互式 WebUI | 已完成 | `Dockerfile`、Web 运行时与确定性测试 | Docker/本地启动与确定性测试 |
 | 公网交互式 Web 后端 | 待完成 | 后续独立部署阶段 | 任务 6 人工门禁之后另行部署与核验 |
 | Docker 本地与 CI 构建 | 已完成 | `Dockerfile`、`.github/workflows/ci.yml` | Docker build/smoke 与 GitHub Actions |
-| 公开容器 registry | 待完成 | 后续 GHCR 分发阶段 | 发布后另行记录公开镜像地址与摘要 |
+| 公开容器 registry | 待完成 | `.github/workflows/ghcr.yml` 已实现版本发布，远端公开性待验证 | `v0.1.0` 发布、Package Public、匿名 pull 与 digest 均通过后再改为已完成 |
 | 学生反思 | 已由学生确认 | `REFLECTION.md`、`docs/REFLECTION_FACT_CHECK.md` | PR #17 与学生确认记录 |
 
 ## 4. 核心机制
@@ -174,10 +174,18 @@ git diff --check
 - 自动验收只使用 MockLLM/Fake/Stub，不访问真实 DNS、socket 或 Provider。
 - Web 默认使用 MockLLM；完整配置后新 run 可使用真实模型，Provider 失败不会降级。
 - GitHub Pages 仅为静态展示，真实模式需要部署 Web 后端、持久化数据库、凭据主密钥与 `SPECGATE_LLM_ALLOWED_HOSTS` 网络策略。
-- 本地交互式 WebUI 已具备 Docker/本地启动与确定性测试；公网交互式 Web 后端和公开容器 registry 均待后续独立阶段完成。发布镜像不等于部署服务。
+- 本地交互式 WebUI 已具备显式 Docker 入口与确定性测试；GHCR 发布工作流已实现，远端公开性待验证，公开容器 registry 仍为待完成。公网交互式 Web 后端未部署；发布镜像不等于部署服务。
 - GitHub 是开发主仓库和完整测试、Docker 构建、Pages 的权威来源；NJU GitLab 课程镜像已创建为 Private，首次只同步 `main` 与 tags，检查前改为 Public。GitHub PR/Actions 不迁移为 GitLab 平台元数据；Pipeline #312781 的 DinD 权限失败、Pipeline #312784 的 `gcr.io` 超时和 Pipeline #312797 的 RootlessKit 权限失败均独立记录，最终 Pipeline #312806 的 `unit-test` 已通过。
 - 不开放 shell，不执行同源模型生成 HTML。
 - CLI 持久化凭据使用 OS keyring；Web 使用独立主密钥和 AES-256-GCM。
 - `.env` 只作为被保护路径和威胁示例出现，SpecGate 不读写 `.env`。
 - 旧 HMAC 只作为迁移来源，迁移后要求重新录入。
 - `REFLECTION.md` 的观点和最终文字由学生本人负责。
+
+## 10. 2026-07-18 CLI 与 GHCR 发布前证据
+
+- CLI 用户配置：`src/specgate/user_config.py` 只保存 provider、Base URL 与 Model；API key 继续使用环境变量或操作系统 keyring。`specgate configure` 使用隐藏输入，`specgate run <工作区>` 自动解析命令行、环境变量和用户默认配置。
+- CLI-first 容器：`Dockerfile` 默认 `ENTRYPOINT ["specgate"]` 与 `CMD ["--help"]`；WebUI 通过 `--entrypoint specgate-web` 显式启动。常规 GitHub CI 同时定义 CLI help、Mock Demo 和 WebUI help smoke。
+- GHCR 工作流：`.github/workflows/ghcr.yml` 仅在版本标签或显式手动重发时推送 `ghcr.io/yugarden404/specgate`，使用 `contents: read` 与 `packages: write`，不读取 LLM API key。
+- 本地验证：实现前完整基线为 `Ran 926 tests in 228.716s`、`OK (skipped=27)`；配置/CLI 与 workflow 聚焦测试均已通过。本机 Docker 检查因 Docker daemon 未运行而无法执行真实 build/smoke，错误为 `docker_engine` named pipe 不存在；该项等待 GitHub `docker-build` job 验证。
+- 完成门禁：GHCR 发布工作流已实现，远端公开性待验证。版本标签、成功 Actions、Package Public、未登录页面、匿名 pull、CLI help、Mock Demo 和 digest 全部成立前，不得把公开容器 registry 标为已完成。

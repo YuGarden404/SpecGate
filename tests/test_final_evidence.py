@@ -1137,6 +1137,42 @@ class FinalEvidenceTests(unittest.TestCase):
             with self.subTest(stale=stale):
                 self.assertNotIn(stale, combined)
 
+    def test_cli_quickstart_and_ghcr_release_boundary_are_documented(self):
+        readme = read_text("README.md")
+        deployment = read_text("docs/DEPLOYMENT.md")
+        combined = "\n".join((readme, deployment))
+        for phrase in (
+            "specgate configure",
+            "specgate run <工作区>",
+            "SPECGATE_LLM_BASE_URL",
+            "SPECGATE_LLM_MODEL",
+            "OPENAI_COMPATIBLE_API_KEY",
+            "ghcr.io/yugarden404/specgate:0.1.0",
+            "--entrypoint specgate-web",
+            "发布镜像不等于部署服务",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, combined)
+
+        factual = "\n".join(
+            read_text(path)
+            for path in (
+                "PLAN.md",
+                "AGENT_LOG.md",
+                "docs/FINAL_EVIDENCE_MATRIX.md",
+                "docs/FINAL_SUBMISSION_CHECKLIST.md",
+                "docs/REFLECTION_FACT_CHECK.md",
+            )
+        )
+        self.assertIn(
+            "GHCR 发布工作流已实现，远端公开性待验证",
+            factual,
+        )
+        self.assertNotIn(
+            "GHCR 公开镜像已完成匿名拉取验证",
+            factual,
+        )
+
     def test_matrix_references_existing_implementation_and_test_paths(self):
         matrix = MATRIX.read_text(encoding="utf-8")
         for relative in KEY_EVIDENCE_PATHS:
