@@ -994,3 +994,35 @@
 - 否定作用域 GREEN：仅把“并且、且、同时、以及”加入既有分句边界，使每个短 clause 独立判断；全部既有正反例和四个新 mutation 结果为 `Ran 1 test in 0.001s`、`OK`。
 - 验证：两个聚焦测试组合结果为 `Ran 2 tests in 0.005s`、`OK`；完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 20 tests in 0.084s`、`OK`；`git diff --check` 退出码 0，仅有 Windows LF→CRLF 提示，没有 whitespace error。`.env` 继续由 `.gitignore:8` 忽略且提交历史为空；排除 `tests` 和实施计划后的 OpenAI、AWS、GitHub 疑似密钥模式扫描退出码 1 且无输出，表示没有命中。
 - 变更边界：本轮只修改 `tests/test_final_evidence.py`、`docs/REFLECTION_FACT_CHECK.md`、`AGENT_LOG.md` 与 `PLAN.md`；没有修改 `src/specgate/` 生产代码或 `REFLECTION.md` 正文，未部署、未发布镜像、未 push。
+
+## 2026-07-17 最终提交同步与双仓库交付
+
+- 当前基线：PR #23 已合并为 `main@5fd86fa`；真实 NJU SE Hub 兼容性审计完整回归为 `Ran 921 tests in 403.030s`、`OK (skipped=27)`。
+- TDD RED：先更新最终证据契约，要求 PR #21-#23 发布链、CI #59、Pages #34、`docs/evidence/github-actions-pr23-final.png` 与双仓库职责；聚焦测试因材料和截图尚未同步而按预期失败。
+- 截图核验：用户提供的 PR #23 Actions 截图显示 CI #59 与 Pages #34 均成功；PNG 校验结果为 2557x1441、300972 字节，未见 token、API key、密码或其他凭据。
+- 当前证据：用户随后从已登录页面提供 [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258) 与 [Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 精确 run URL，以及两张 job 详情截图。CI 的 `unit-test`、`docker-build` 和 Pages 的 `build-pages`、`deploy-pages` 均成功。
+- 双仓库职责：GitHub 开发主仓库继续保存完整 commit、PR、GitHub PR/Actions 与 Pages；NJU GitLab 课程镜像已创建为 Private 并同步 `main@5fd86fa`，检查前改为 Public，GitLab Pipeline 作为独立证据。
+- 用户操作边界：GitLab 项目创建、remote、push、可见性设置、截图及所有 Git 命令均由用户执行；首次只同步 `main` 与 tags。
+- 部署边界：公网交互式 Web 后端与公开容器 registry 继续等待教师答复；本任务未部署服务、未发布镜像，也未修改 `REFLECTION.md`。
+- TDD GREEN：PR #21-#23 发布链、当前快照、跨材料一致性与双仓库职责 5 项聚焦契约结果为 `Ran 5 tests in 0.006s`、`OK`；完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 22 tests in 0.113s`、`OK`。
+- 反思人工边界：用户先自行修改正文，再明确批准 AI 按中等强度仅做润色和结构整理；润色后保留原观点与案例，非空白字符为 2430，“未来 provider”已改为 NJU SE Hub 四模型真实验证后的实际认识。
+- 远端详情截图：`docs/evidence/github-actions-pr23-ci-detail.png` 为 2557x1310、132479 字节；`docs/evidence/github-actions-pr23-pages-detail.png` 为 2557x1402、156279 字节。两图 PNG 结构有效且未见凭据；Node.js 20 弃用 warning 如实保留，不影响本次成功状态。
+- 详情证据 TDD RED：新增两张截图和精确 run 映射契约后，3 项聚焦测试因文件不存在、图片未引用和两份材料缺少 URL/job 映射而产生 7 个预期失败与 2 个预期错误。
+- 详情证据与反思 GREEN：归档真实截图、同步 [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258) 和 [Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 后，反思署名/篇幅、远端结构、PNG 完整性与发布链 5 项聚焦测试通过；完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 24 tests in 0.136s`、`OK`。
+- GitLab 初始 Pipeline：用户创建 Private 项目 `https://git.nju.edu.cn/YuyuanLiang/specgate` 并只同步 `main@5fd86fa` 与 tags。Pipeline #312781 中 `unit-test` 已通过，`docker-build` 失败；两张失败截图经 PNG 校验后归档。
+- GitLab 根因：`docker:26-dind` 在学校共享 runner 上无法挂载 `/sys/kernel/security`，服务健康检查等待 2375/2376 超时，随后 `docker build` 无法连接 daemon。该 runner 未启用 privileged 模式，故障不来自 Dockerfile 或 Python 测试。
+- GitLab 修复 TDD：先增加 daemonless 工作流契约，单项测试因缺少 Kaniko 预期失败；随后把 `docker-build` 改为 `gcr.io/kaniko-project/executor:v1.23.2-debug --no-push`，并把 `specgate-web --help` smoke 放入 Python job，工作流测试 2 项通过。真实 Pipeline 仍待用户推送后验证。
+- GitLab 修复本地验证：失败状态、PNG、发布链与工作流 5 项聚焦契约通过；完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 26 tests in 0.132s`、`OK`。PyYAML 成功解析 `.gitlab-ci.yml`，确认 Kaniko 命令被折叠为单条 script，且不存在 DinD service。
+- GitLab 第二次 Pipeline：用户将 Kaniko 修复推送到 NJU GitLab `main@aacf164`。Pipeline #312784 的 `unit-test` 已通过，`docker-build` job #595714 在执行仓库脚本前失败；Runner 拉取 `gcr.io/kaniko-project/executor:v1.23.2-debug` 时出现 `context deadline exceeded`。故障位于学校 Runner 到 GCR 的网络边界，不是 Kaniko 命令或 Dockerfile 执行失败。
+- 第二次修复 TDD RED：工作流契约先要求 `moby/buildkit:rootless`、daemonless OCI 输出，并禁止 DinD、Kaniko、`DOCKER_HOST`、`docker build` 和 `docker run`；单项测试在旧 Kaniko 配置上因缺少 BuildKit 镜像按预期失败。证据契约随后要求 Pipeline #312784、`gcr.io` 超时和两张新截图，在材料同步前按预期失败。
+- 第二次修复实现：`.gitlab-ci.yml` 改用 Docker Hub 上的 `moby/buildkit:rootless`，通过 `buildctl-daemonless.sh` 和 `--oci-worker-no-process-sandbox` 生成 `/tmp/specgate.tar`，不依赖 privileged Runner、Docker daemon 或公开 registry push。两次 GitLab 失败历史继续保留，状态仍为修复验证中，等待新 Pipeline 实测。
+- 第二次修复本地验证：`docs/evidence/gitlab-pipeline-kaniko-registry-failure.png` 为 2242x866、144231 字节，`docs/evidence/gitlab-kaniko-gcr-timeout.png` 为 2267x812、237154 字节；两图 PNG 结构有效。工作流、失败事实、PNG 和发布链 5 项聚焦测试通过；完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 26 tests in 0.148s`、`OK`。PyYAML 成功解析 `.gitlab-ci.yml`；真实 GitLab BuildKit 结果仍待新 Pipeline。
+- GitLab 第三次 Pipeline：用户将 BuildKit 修复推送到 NJU GitLab `main@fbf2e83`。Pipeline #312797 的 `unit-test` 已通过；`docker-build` job #595746 已成功拉取 `moby/buildkit:rootless`、checkout 源码并进入脚本，随后 RootlessKit 在 `fork/exec /proc/self/exe` 处返回 `operation not permitted`。根因是学校共享 Runner 禁止 rootless user namespace，不是网络、Dockerfile 或 Python 测试。
+- CLI-first 决策：重新对照课程原文和仓库 SPEC 后，确认 `specgate` CLI 与自行实现的 Harness 内核是核心，WebUI 保留为课程要求的配套评审入口。GitHub 继续作为开发主仓库并承担完整测试、Docker 构建和 Pages；NJU GitLab 只承担课程镜像的 `unit-test`，不再尝试第四种容器构建器。
+- 第三次修复 TDD RED：工作流契约先要求 GitLab 只保留 `unit-test` 并执行 `specgate --help`，证据契约要求 Pipeline #312797、`operation not permitted`、CLI-first 定位和两张新 PNG；聚焦测试因旧 BuildKit job、旧 Web smoke、缺失截图与材料按预期失败。
+- 第三次修复实现：`.gitlab-ci.yml` 删除 `docker-build` stage/job，仅安装项目、运行完整测试并执行 `specgate --help`。`docs/evidence/gitlab-pipeline-buildkit-permission-failure.png` 为 1836x1012、143441 字节，`docs/evidence/gitlab-buildkit-rootless-permission-failure.png` 为 2217x1211、393853 字节；最终材料保留三次真实失败并等待新 Pipeline 验证。
+- 第三次修复本地验证：工作流、三次失败事实、PNG 与发布链 5 项聚焦测试通过；完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 26 tests in 0.166s`、`OK`。PyYAML 确认 `.gitlab-ci.yml` 顶层只有 `stages` 与 `unit-test`，`python -m specgate.cli --help` 正常列出 7 组 CLI 子命令，本轮文本文件尾随空格扫描无命中。真实 GitLab 成功仍待 unit-test-only 新 Pipeline。
+- GitLab 最终 Pipeline：用户将 unit-test-only 配置推送到 NJU GitLab `main@66ea825`。[Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 只有一个 test stage，整体已通过；[job #595758](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/595758) 运行 `Ran 926 tests in 33.684s`、`OK (skipped=18)`，随后 `specgate --help` 正常并以 `Job succeeded` 结束。GitLab Pipeline 已通过。
+- GitLab 最终证据：`docs/evidence/gitlab-jobs-312806-success.png` 为 2130x1131、169142 字节，`docs/evidence/gitlab-pipeline-312806-success.png` 为 2557x1491、320313 字节，`docs/evidence/gitlab-unit-test-595758-success.png` 为 2557x1488、742896 字节。三张 PNG 结构有效，地址栏、commit、Pipeline/job 编号、测试结果与 CLI smoke 均可核对。
+- GitLab 成功证据 TDD：契约先要求 Pipeline #312806、job #595758、`main@66ea825`、精确 URL、926 项 Linux 测试结果、三张 PNG 和“GitLab Pipeline 已通过”，并禁止权威材料残留“修复验证中”；同步前 3 项聚焦测试产生 10 个预期失败与 3 个预期错误，同步后 `Ran 3 tests`、`OK`。
+- GitLab 成功证据本地验证：完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 26 tests in 0.215s`、`OK`；PyYAML 确认 GitLab CI 只有 `unit-test`，精确 Pipeline/job URL 与结果映射检查通过，本轮文本文件尾随空格扫描无命中。

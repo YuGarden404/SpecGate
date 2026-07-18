@@ -6,12 +6,12 @@
 
 ## 2. 最终版本快照
 
-- 审查起点主线基线：`main@c39d101`。
-- 最近已合并功能修复：PR #20。
-- 审查起点完整回归：`Ran 908 tests in 210.559s`、`OK (skipped=27)`。
-- 当前最终验证（2026-07-16 最终交付合规 worktree）：`Ran 919 tests in 402.898s`、`OK (skipped=27)`，命令退出码为 0。
-- 远端证据：用户已更新 PR #18、PR #19、PR #20 的“执行归属”，三份描述均记录主开发 Agent 为 OpenAI Codex，并区分人工参与与 Mock/Fake/Stub 自动测试边界。
-- PR #20 合并后验证：主线程只读核验 `main@c39d101` 的 [CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238) 与 [Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 成功；四个 job 的映射见第 6 节，截图见 `docs/evidence/github-actions-pr20-final.png`。
+- 当前主线基线：`main@5fd86fa`，最近已合并阶段为 PR #23。
+- 当前最终验证（2026-07-17 NJU SE Hub 审计分支）：`Ran 921 tests in 403.030s`、`OK (skipped=27)`，命令退出码为 0。
+- 当前远端证据：PR #23 合并后的 [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258) 与 [Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 均成功；列表截图见 `docs/evidence/github-actions-pr23-final.png`，job 详情截图见 `docs/evidence/github-actions-pr23-ci-detail.png` 与 `docs/evidence/github-actions-pr23-pages-detail.png`。
+- 执行归属历史：PR #18、PR #19、PR #20 均已记录主开发 Agent 为 OpenAI Codex，并区分人工参与与 Mock/Fake/Stub 自动测试边界。
+- 历史远端证据：PR #20 的 `main@c39d101`、[CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)、[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 与 `docs/evidence/github-actions-pr20-final.png` 继续保留，完整 job 映射见第 6 节。
+- 双仓库边界：SpecGate 是 CLI-first Harness；GitHub 开发主仓库保留 commit、PR、完整 GitHub Actions、Docker 构建与 Pages 证据，[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 只保留 `unit-test`。Pipeline #312781、#312784、#312797 的三次 `unit-test` 已通过，`docker-build` 分别暴露 DinD 权限、`gcr.io` 网络和 RootlessKit 权限限制；最终 [Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 在 `main@66ea825` 上通过，检查前改为 Public。
 - 公开入口：<https://yugarden404.github.io/SpecGate/>。
 
 ## 3. 课程交付物
@@ -25,7 +25,7 @@
 | 公开静态评审入口 | 已完成 | GitHub Pages 首页、demo、报告 | 打开 README 中的三个 Pages URL |
 | 本地交互式 WebUI | 已完成 | `Dockerfile`、Web 运行时与确定性测试 | Docker/本地启动与确定性测试 |
 | 公网交互式 Web 后端 | 待完成 | 后续独立部署阶段 | 任务 6 人工门禁之后另行部署与核验 |
-| Docker 本地与 CI 构建 | 已完成 | `Dockerfile`、`.gitlab-ci.yml` | Docker build/smoke 与 CI |
+| Docker 本地与 CI 构建 | 已完成 | `Dockerfile`、`.github/workflows/ci.yml` | Docker build/smoke 与 GitHub Actions |
 | 公开容器 registry | 待完成 | 后续 GHCR 分发阶段 | 发布后另行记录公开镜像地址与摘要 |
 | 学生反思 | 已由学生确认 | `REFLECTION.md`、`docs/REFLECTION_FACT_CHECK.md` | PR #17 与学生确认记录 |
 
@@ -59,6 +59,9 @@
 | 后端审计加固 | `d3607c4` | `8d30ca5` | [#18](https://github.com/YuGarden404/SpecGate/pull/18) | PR “执行归属”已核对；OpenAI Codex、人工参与与自动测试边界已记录 |
 | Web 真实 LLM 接入 | `5279a7c` | `b98563a` | [#19](https://github.com/YuGarden404/SpecGate/pull/19) | PR “执行归属”已核对；OpenAI Codex、人工参与与自动测试边界已记录 |
 | 真实 LLM 生命周期修复 | `e35eb46` | `c39d101` | [#20](https://github.com/YuGarden404/SpecGate/pull/20) | PR “执行归属”已核对；[CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)、[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 与 `docs/evidence/github-actions-pr20-final.png` |
+| 最终交付合规 | `e34452c` | `2082fc9` | [#21](https://github.com/YuGarden404/SpecGate/pull/21) | 最终交付合规材料与完整验证 |
+| LLM 连接测试超时修复 | `a5861aa` | `3905e1e` | [#22](https://github.com/YuGarden404/SpecGate/pull/22) | 学校真实模型连接测试使用配置的请求超时 |
+| NJU SE Hub 真实 LLM 审计 | `5635ad2` | `5fd86fa` | [#23](https://github.com/YuGarden404/SpecGate/pull/23) | [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258)、[Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 与三张 PR #23 截图 |
 
 ## 6. CI 与截图说明
 
@@ -78,6 +81,57 @@
 - [Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) → `main@c39d101` → `build-pages`、`deploy-pages` → 成功
 
 截图无凭据或账户敏感信息。该证据只证明当前 main 的自动测试、Docker CI 构建与静态 Pages 发布链成功；公网交互式 Web 后端和公开容器 registry 仍待后续独立阶段完成。
+
+![PR #23 合并后的 main CI 与 Pages](evidence/github-actions-pr23-final.png)
+
+用户提供的列表截图显示 PR #23 合并标题、`main@5fd86fa`，以及 CI #59 与 Pages #34 均为绿色成功。精确来源链为：
+
+- [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258) → `main@5fd86fa` → `unit-test`、`docker-build` → 成功
+- [Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) → `main@5fd86fa` → `build-pages`、`deploy-pages` → 成功
+
+![PR #23 合并后的 CI job 详情](evidence/github-actions-pr23-ci-detail.png)
+
+CI 详情截图显示总状态 `Success`，`unit-test` 和 `docker-build` 均成功。页面同时显示 GitHub Actions 的 Node.js 20 弃用 warning；该 warning 不改变本次 job 成功状态，但作为真实远端输出保留。
+
+![PR #23 合并后的 Pages job 详情](evidence/github-actions-pr23-pages-detail.png)
+
+Pages 详情截图显示总状态 `Success`，`build-pages` 和 `deploy-pages` 均成功，并产生 `github-pages` artifact。三张 PR #23 图片均通过 PNG 结构校验，未见 token、API key、密码或其他凭据。
+
+![NJU GitLab 初始 Pipeline 失败](evidence/gitlab-pipeline-initial-failure.png)
+
+NJU GitLab Pipeline #312781 针对 `main@5fd86fa` 运行：`unit-test` 已通过，`docker-build` 失败，整体状态为失败。该失败属于真实课程镜像证据，不使用 GitHub Actions 成功替代。
+
+![NJU GitLab Docker-in-Docker 权限失败日志](evidence/gitlab-docker-build-dind-failure.png)
+
+日志显示学校共享 Runner 的 Docker executor 未启用 privileged 模式，`docker:26-dind` 因挂载权限不足未启动，最终报错无法连接 `tcp://docker:2375`。这不是 Dockerfile 或测试失败；第一次修复因此改为不依赖 Docker daemon 的 Kaniko 构建。
+
+![NJU GitLab Kaniko 修复 Pipeline 失败](evidence/gitlab-pipeline-kaniko-registry-failure.png)
+
+Pipeline #312784 运行 Kaniko 修复版本：`unit-test` 已通过，`docker-build` 失败，整体状态仍为失败。
+
+![NJU GitLab Kaniko 镜像拉取超时日志](evidence/gitlab-kaniko-gcr-timeout.png)
+
+该 job 在执行仓库脚本前拉取 `gcr.io/kaniko-project/executor:v1.23.2-debug`，访问 `gcr.io` 时出现 `context deadline exceeded`。因此第二次根因是学校 Runner 到 GCR 的网络可达性，不是 Kaniko 或 Dockerfile 执行失败。
+
+![NJU GitLab BuildKit 修复 Pipeline 失败](evidence/gitlab-pipeline-buildkit-permission-failure.png)
+
+Pipeline #312797 运行 BuildKit 修复版本：`unit-test` 已通过，`docker-build` 失败，整体状态仍为失败。
+
+![NJU GitLab RootlessKit 权限失败日志](evidence/gitlab-buildkit-rootless-permission-failure.png)
+
+该 job 已成功从 Docker Hub 拉取 `moby/buildkit:rootless`、checkout `fbf2e83` 并执行 `buildctl-daemonless.sh`，随后 RootlessKit 报告 `fork/exec /proc/self/exe: operation not permitted`。因此第三次根因是共享 Runner 禁止 rootless user namespace，不是镜像网络、Dockerfile 或 Python 测试失败。容器构建继续由 GitHub Actions 的成功 `docker-build` job 覆盖；NJU GitLab CI 随后收缩为只保留 `unit-test`。
+
+![NJU GitLab 最终 jobs 列表](evidence/gitlab-jobs-312806-success.png)
+
+列表显示 commit `66ea825` 对应的 Pipeline #312806 只有 `unit-test`，状态为已通过；三次容器构建失败继续作为共享 Runner 能力边界的历史证据保留。
+
+![NJU GitLab 最终 Pipeline #312806](evidence/gitlab-pipeline-312806-success.png)
+
+[Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 针对 `main@66ea825` 运行，页面显示整体已通过，且只有 test stage 的 `unit-test` job。
+
+![NJU GitLab 最终 unit-test job #595758](evidence/gitlab-unit-test-595758-success.png)
+
+[job #595758](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/595758) 显示 `Ran 926 tests in 33.684s`、`OK (skipped=18)`，随后执行 `specgate --help` 并以 `Job succeeded` 结束。GitLab Pipeline 已通过；该成功与 GitHub Actions 的 Docker 构建证据职责独立。
 
 主线程在本轮通过只读浏览器重新核对公开 Pages；本地验证 Subagent 没有亲自浏览远端：
 
@@ -105,11 +159,11 @@ node --check src/specgate/web_static/app.js
 git diff --check
 ```
 
-当前最终结果（2026-07-16 最终交付合规 worktree）：
+当前最终结果（2026-07-17 NJU SE Hub 审计分支）：
 
 - 文档与工作流契约：`Ran 20 tests in 0.065s`、`OK`，退出码 0。
 - 六项确定性机制：`Ran 6 tests in 47.709s`、`OK`，退出码 0。
-- 完整套件：`Ran 919 tests in 402.898s`、`OK (skipped=27)`，退出码 0。
+- 完整套件：`Ran 921 tests in 403.030s`、`OK (skipped=27)`，退出码 0。
 - `python -m compileall -q src tests`、`node --check src/specgate/web_static/app.js` 与 `git diff --check` 均退出码 0 且无错误输出。
 - `.env` 由 `.gitignore:8` 忽略，`.env` 提交历史为空；排除测试与实施计划后的疑似密钥模式扫描无命中。
 
@@ -121,6 +175,7 @@ git diff --check
 - Web 默认使用 MockLLM；完整配置后新 run 可使用真实模型，Provider 失败不会降级。
 - GitHub Pages 仅为静态展示，真实模式需要部署 Web 后端、持久化数据库、凭据主密钥与 `SPECGATE_LLM_ALLOWED_HOSTS` 网络策略。
 - 本地交互式 WebUI 已具备 Docker/本地启动与确定性测试；公网交互式 Web 后端和公开容器 registry 均待后续独立阶段完成。发布镜像不等于部署服务。
+- GitHub 是开发主仓库和完整测试、Docker 构建、Pages 的权威来源；NJU GitLab 课程镜像已创建为 Private，首次只同步 `main` 与 tags，检查前改为 Public。GitHub PR/Actions 不迁移为 GitLab 平台元数据；Pipeline #312781 的 DinD 权限失败、Pipeline #312784 的 `gcr.io` 超时和 Pipeline #312797 的 RootlessKit 权限失败均独立记录，最终 Pipeline #312806 的 `unit-test` 已通过。
 - 不开放 shell，不执行同源模型生成 HTML。
 - CLI 持久化凭据使用 OS keyring；Web 使用独立主密钥和 AES-256-GCM。
 - `.env` 只作为被保护路径和威胁示例出现，SpecGate 不读写 `.env`。
