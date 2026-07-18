@@ -34,6 +34,8 @@ SCREENSHOTS = (
     ROOT / "docs" / "evidence" / "github-actions-pr23-pages-detail.png",
     ROOT / "docs" / "evidence" / "gitlab-pipeline-initial-failure.png",
     ROOT / "docs" / "evidence" / "gitlab-docker-build-dind-failure.png",
+    ROOT / "docs" / "evidence" / "gitlab-pipeline-kaniko-registry-failure.png",
+    ROOT / "docs" / "evidence" / "gitlab-kaniko-gcr-timeout.png",
 )
 KEY_EVIDENCE_PATHS = (
     "src/specgate/runner.py",
@@ -859,10 +861,14 @@ class FinalEvidenceTests(unittest.TestCase):
             "Private",
             "main@5fd86fa",
             "Pipeline #312781",
+            "Pipeline #312784",
             "`unit-test` 已通过",
             "`docker-build` 失败",
             "Docker-in-Docker",
             "privileged",
+            "gcr.io",
+            "context deadline exceeded",
+            "moby/buildkit:rootless",
             "修复验证中",
         ):
             with self.subTest(phrase=phrase):

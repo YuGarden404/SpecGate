@@ -14,13 +14,16 @@ unit-test:
 docker-build:
   stage: build
   image:
-    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    name: moby/buildkit:rootless
     entrypoint: [""]
+  variables:
+    BUILDKITD_FLAGS: --oci-worker-no-process-sandbox
   script:
     - >-
-      /kaniko/executor
-      --context "$CI_PROJECT_DIR"
-      --dockerfile "$CI_PROJECT_DIR/Dockerfile"
-      --no-push
+      buildctl-daemonless.sh build
+      --frontend dockerfile.v0
+      --local context=.
+      --local dockerfile=.
+      --output type=oci,dest=/tmp/specgate.tar
   rules:
     - if: $CI_COMMIT_BRANCH

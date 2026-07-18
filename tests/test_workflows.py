@@ -33,18 +33,21 @@ class WorkflowTests(unittest.TestCase):
         normalized_lines = {line.strip() for line in workflow.splitlines()}
 
         self.assertIn(
-            "gcr.io/kaniko-project/executor:v1.23.2-debug",
+            "moby/buildkit:rootless",
             workflow,
         )
         self.assertIn('entrypoint: [""]', workflow)
-        self.assertIn("/kaniko/executor", workflow)
-        self.assertIn('--context "$CI_PROJECT_DIR"', workflow)
-        self.assertIn('--dockerfile "$CI_PROJECT_DIR/Dockerfile"', workflow)
-        self.assertIn("--no-push", workflow)
+        self.assertIn("BUILDKITD_FLAGS: --oci-worker-no-process-sandbox", workflow)
+        self.assertIn("buildctl-daemonless.sh build", workflow)
+        self.assertIn("--frontend dockerfile.v0", workflow)
+        self.assertIn("--local context=.", workflow)
+        self.assertIn("--local dockerfile=.", workflow)
+        self.assertIn("--output type=oci,dest=/tmp/specgate.tar", workflow)
         self.assertIn("- specgate-web --help", normalized_lines)
 
         for privileged_docker_dependency in (
             "docker:26-dind",
+            "kaniko-project",
             "DOCKER_HOST",
             "docker build",
             "docker run",

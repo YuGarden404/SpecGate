@@ -44,7 +44,7 @@ MVP 范围：
 | 历史 CI/Pages 截图（截至 PR #15/#17） | 已完成 | `docs/evidence/` 中的历史截图与第 5 节记录 |
 | PR #20 后 CI/Pages 与新截图 | 已完成 | [CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)、[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242)、`docs/evidence/github-actions-pr20-final.png` |
 | PR #23 后 CI/Pages 与新截图 | 已完成 | [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258)、[Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221)、`docs/evidence/github-actions-pr23-final.png` 及两张 job 详情截图 |
-| NJU GitLab 课程镜像 | 修复验证中 | [Private 项目](https://git.nju.edu.cn/YuyuanLiang/specgate) 已同步 `main@5fd86fa`；Pipeline #312781 的 `unit-test` 已通过、`docker-build` 失败，正在验证 daemonless 构建；检查前改为 Public |
+| NJU GitLab 课程镜像 | 修复验证中 | [Private 项目](https://git.nju.edu.cn/YuyuanLiang/specgate)：Pipeline #312781 因 DinD 权限失败，Pipeline #312784 因 `gcr.io` 出现 `context deadline exceeded`；两次 `unit-test` 均通过、`docker-build` 均失败，正在验证 `moby/buildkit:rootless`；检查前改为 Public |
 | 公开静态评审入口 | 已完成 | GitHub Pages 首页、demo、报告 |
 | 本地交互式 WebUI | 已完成 | Docker/本地启动与确定性测试 |
 | 公网交互式 Web 后端 | 待完成 | 后续独立部署阶段 |
@@ -116,7 +116,7 @@ PR #23 合并后的当前来源链为：
 
 列表截图见 `docs/evidence/github-actions-pr23-final.png`；job 详情截图见 `docs/evidence/github-actions-pr23-ci-detail.png` 与 `docs/evidence/github-actions-pr23-pages-detail.png`。CI/Pages 页面显示的 Node.js 20 弃用 warning 不改变本次成功状态。
 
-双仓库交付采用“GitHub 开发主仓库 + NJU GitLab 课程镜像”：GitHub 保留完整 commit、PR、GitHub PR/Actions 与 Pages 证据；GitLab 项目已创建为 Private，检查前改为 Public。初始 Pipeline #312781 的 `unit-test` 已通过、`docker-build` 失败；根因是学校共享 runner 不支持 privileged Docker-in-Docker，当前处于 Kaniko 修复验证中。GitLab Pipeline 是独立验证，不等同于迁移 GitHub Actions。
+双仓库交付采用“GitHub 开发主仓库 + NJU GitLab 课程镜像”：GitHub 保留完整 commit、PR、GitHub PR/Actions 与 Pages 证据；GitLab 项目已创建为 Private，检查前改为 Public。初始 Pipeline #312781 的 `unit-test` 已通过、`docker-build` 因学校共享 Runner 不支持 privileged Docker-in-Docker 而失败；Kaniko 修复对应的 Pipeline #312784 中 `unit-test` 再次通过，但 `docker-build` 在执行脚本前因访问 `gcr.io` 出现 `context deadline exceeded` 而失败。当前改用 `moby/buildkit:rootless`，仍处于修复验证中。GitLab Pipeline 是独立验证，不等同于迁移 GitHub Actions。
 
 ## 6. 本地复现命令
 

@@ -32,7 +32,7 @@
 - PR #23 合并后的远端证据已核验：[CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258) 的 `unit-test`、`docker-build` 与 [Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 的 `build-pages`、`deploy-pages` 均成功；列表截图为 `docs/evidence/github-actions-pr23-final.png`，两张详情截图也已归档。
 - 当前实现事实：Web 默认 Mock；API key、Base URL、Model 完整后新 run 使用真实模型；Provider 失败不会降级；课程自动测试仍使用 Fake/Stub 且不访问网络。
 - 历史证据继续保留：PR #20 合并后的 `main@c39d101` 对应 CI #53、Pages #31 与 `docs/evidence/github-actions-pr20-final.png`，状态均为已完成、已核验。
-- 双仓库边界：GitHub 开发主仓库保存 PR/Actions 历史；[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 已创建为 Private 并同步 `main@5fd86fa`。初始 Pipeline #312781 的 `unit-test` 已通过、`docker-build` 失败，Docker-in-Docker 需要 privileged runner；当前处于 daemonless 构建修复验证中，检查前再改为 Public。
+- 双仓库边界：GitHub 开发主仓库保存 PR/Actions 历史；[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 已创建为 Private。初始 Pipeline #312781 在 `main@5fd86fa` 上因 Docker-in-Docker 需要 privileged Runner 而失败；Kaniko 修复对应的 Pipeline #312784 中 `unit-test` 已通过，`docker-build` 因访问 `gcr.io` 时出现 `context deadline exceeded` 而失败。当前改用 `moby/buildkit:rootless`，仍处于修复验证中，检查前再改为 Public。
 - 部署边界：公网交互式 Web 后端与公开容器 registry 仍待完成；当前没有部署公网后端，也没有发布公开镜像。
 - PR #12 合并后一度出现 Pages 依赖失败，PR #13 修复；这是适合人工反思的“验证发现真实交付缺口”案例。
 - 当前机械检查：全文为 2430 个非空白字符，位于 1500–2500 要求内。
