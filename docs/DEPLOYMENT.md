@@ -4,6 +4,8 @@
 
 当前部署是 mock-first：默认使用 MockLLM，不需要 API key，也不会访问模型网络。只有用户保存 API key、Base URL 与 Model 的完整配置后，新 run 才使用真实模型；真实模式失败不会降级到 Mock。
 
+容器镜像是 CLI-first：默认入口为 `specgate`，默认参数为 `--help`。本文涉及 WebUI 的命令均显式使用 `--entrypoint specgate-web`。公开镜像分发不等于公网 Web 后端部署。
+
 ## 1. 推荐部署形态
 
 推荐使用单机 Docker：
@@ -64,10 +66,26 @@ $env:SPECGATE_LLM_REQUEST_TIMEOUT_SECONDS="30"
 
 ## 2. 本地 Docker 验证
 
+GHCR 发布完成并设为 Public 后，可以匿名拉取并验证 CLI：
+
+```powershell
+docker pull ghcr.io/yugarden404/specgate:0.1.0
+docker run --rm ghcr.io/yugarden404/specgate:0.1.0 --help
+docker run --rm `
+  --env-file "$HOME\.specgate.env" `
+  -v "D:\Projects\my-page:/workspace" `
+  ghcr.io/yugarden404/specgate:0.1.0 `
+  run /workspace
+```
+
+CLI 容器使用 `SPECGATE_LLM_BASE_URL`、`SPECGATE_LLM_MODEL` 与 `OPENAI_COMPATIBLE_API_KEY`。`--env-file` 是 Docker 的输入文件，应放在仓库外且不得提交；SpecGate 本身不读取 `.env`。仓库当前是“GHCR 发布工作流已实现，远端公开性待验证”，上述公开拉取命令要等版本标签 workflow 和 Package Public 设置完成后验收。
+
 在仓库根目录构建镜像：
 
 ```powershell
 docker build -t specgate:local .
+docker run --rm specgate:local --help
+docker run --rm specgate:local run-mock-demo /opt/specgate/examples/knowledge_nav
 ```
 
 在本机运行 WebUI：
@@ -83,13 +101,15 @@ try {
 $credentialKey = [Convert]::ToBase64String($bytes).Replace("+", "-").Replace("/", "_")
 
 docker run --rm -p 8000:8000 `
+  --entrypoint specgate-web `
   -e SPECGATE_WEB_CREDENTIAL_KEY="$credentialKey" `
   -e SPECGATE_WEB_WORKERS="4" `
   -e SPECGATE_WEB_QUEUE_CAPACITY="32" `
   -e SPECGATE_WEB_MAX_ACTIVE_RUNS_PER_USER="4" `
   -e SPECGATE_WEB_RUN_TIMEOUT_SECONDS="60" `
   -v "${PWD}\var\specgate_web_docker:/data/specgate-web" `
-  specgate:local
+  specgate:local `
+  --host 0.0.0.0 --port 8000
 ```
 
 `SPECGATE_WEB_CREDENTIAL_KEY` 必须是 32 个随机字节的 URL-safe Base64 编码。主密钥缺失时，WebUI 的 MockLLM、项目和运行功能仍可使用，但保存 API key 会失败关闭。
@@ -136,6 +156,7 @@ docker run -d \
   --name specgate-web \
   --restart unless-stopped \
   -p 8000:8000 \
+  --entrypoint specgate-web \
   -e SPECGATE_WEB_CREDENTIAL_KEY="<替换为上一步生成的主密钥>" \
   -e SPECGATE_WEB_DATA="/data/specgate-web" \
   -e SPECGATE_WEB_WORKERS="4" \
@@ -143,7 +164,8 @@ docker run -d \
   -e SPECGATE_WEB_MAX_ACTIVE_RUNS_PER_USER="4" \
   -e SPECGATE_WEB_RUN_TIMEOUT_SECONDS="60" \
   -v /opt/specgate/data:/data/specgate-web \
-  specgate:latest
+  specgate:latest \
+  --host 0.0.0.0 --port 8000
 ```
 
 查看日志：
@@ -227,10 +249,12 @@ docker run -d \
   --name specgate-web \
   --restart unless-stopped \
   -p 8000:8000 \
+  --entrypoint specgate-web \
   -e SPECGATE_WEB_CREDENTIAL_KEY="<原来的主密钥>" \
   -e SPECGATE_WEB_DATA="/data/specgate-web" \
   -v /opt/specgate/data:/data/specgate-web \
-  specgate:latest
+  specgate:latest \
+  --host 0.0.0.0 --port 8000
 ```
 
 备份数据：

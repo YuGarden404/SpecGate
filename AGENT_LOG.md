@@ -1026,3 +1026,13 @@
 - GitLab 最终证据：`docs/evidence/gitlab-jobs-312806-success.png` 为 2130x1131、169142 字节，`docs/evidence/gitlab-pipeline-312806-success.png` 为 2557x1491、320313 字节，`docs/evidence/gitlab-unit-test-595758-success.png` 为 2557x1488、742896 字节。三张 PNG 结构有效，地址栏、commit、Pipeline/job 编号、测试结果与 CLI smoke 均可核对。
 - GitLab 成功证据 TDD：契约先要求 Pipeline #312806、job #595758、`main@66ea825`、精确 URL、926 项 Linux 测试结果、三张 PNG 和“GitLab Pipeline 已通过”，并禁止权威材料残留“修复验证中”；同步前 3 项聚焦测试产生 10 个预期失败与 3 个预期错误，同步后 `Ran 3 tests`、`OK`。
 - GitLab 成功证据本地验证：完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 26 tests in 0.215s`、`OK`；PyYAML 确认 GitLab CI 只有 `unit-test`，精确 Pipeline/job URL 与结果映射检查通过，本轮文本文件尾随空格扫描无命中。
+
+## 2026-07-18 CLI 易用性与 GHCR 公开镜像分发
+
+- 基线：隔离 worktree `ghcr-cli-distribution` 在实现前运行完整测试，结果为 `Ran 926 tests in 228.716s`、`OK (skipped=27)`。
+- 用户配置 TDD：先因 `specgate.user_config` 缺失得到预期 RED，再实现跨平台路径、严格 JSON、非敏感原子写入和命令行/环境变量/用户配置优先级；8 项测试通过。
+- Configure TDD：4 项测试先因命令缺失失败；实现隐藏输入、旧值保留和失败关闭。调试确认 `CredentialStoreUnavailable` 继承 `ValueError`，专用异常分支前置后 6 项目标测试及 54 项 CLI/配置回归通过。
+- Run TDD：省略 Model/Base URL、工作区预检与产物路径断言先失败；实现后 16 项目标测试与 59 项 CLI/配置回归通过。显式参数或完整环境变量不会读取无关的损坏用户配置。
+- Docker/CI TDD：默认入口与 smoke 契约先对 WebUI-first Dockerfile 失败；实现 CLI-first Dockerfile 后 workflow 测试通过。本机 Docker daemon 未运行，`docker_engine` named pipe 不存在，另有 Docker config 访问拒绝 warning，因此未声称本地 build/smoke 成功，等待 GitHub `docker-build` 远端验证。
+- GHCR TDD：发布 workflow 文件缺失时得到预期 RED；新增版本校验、最小权限、`linux/amd64`、四类标签、OCI revision、push 后 smoke 与 digest summary，5 项 workflow 测试和 PyYAML 解析通过。
+- 当前边界：GHCR 发布工作流已实现，远端公开性待验证。尚未创建 `v0.1.0`、未把 Package 设置为 Public、未完成匿名 pull，也未部署公网交互式 Web 后端。

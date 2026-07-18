@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from specgate.approvals import (
 from specgate.benchmark import summarize_benchmark
 from specgate.config import WorkspaceConfig, load_workspace_config
 from specgate.context import VALID_CONTEXT_STRATEGIES
+from specgate.credential_store import CredentialStoreUnavailable
 from specgate.credentials import clear_credential, credential_status, read_credential, set_credential
 from specgate.eval_runner import run_eval_suite
 from specgate.gate import run_html_gate
@@ -24,6 +26,14 @@ from specgate.policy import WorkspacePolicy
 from specgate.report import generate_report
 from specgate.runner import AgentRunner
 from specgate.trace import redact
+from specgate.user_config import (
+    UserConfigError,
+    UserLLMConfig,
+    load_user_llm_config,
+    resolve_user_llm_config,
+    save_user_llm_config,
+    user_config_path,
+)
 from specgate.workspace_fs import WorkspacePathError
 
 
@@ -626,6 +636,9 @@ def run_real_llm(
         profile=result.profile,
     )
     print(f"SpecGate run finished: passed={result.passed}, steps={result.steps}")
+    print(f"HTML: {root / 'index.html'}")
+    print(f"Report: {root / 'reports' / 'latest' / 'index.html'}")
+    print(f"Trace: {root / 'runs' / 'latest' / 'trace.jsonl'}")
     return 0 if result.passed else 1
 
 
@@ -732,6 +745,98 @@ def run_benchmark(
     return 0 if all(suite.expected_matches == suite.total_cases for suite in suites) else 1
 
 
+def configure_user() -> int:
+    path = user_config_path()
+    try:
+        current = load_user_llm_config(path=path)
+    except UserConfigError:
+        print(
+            f"user config is invalid: {path}; "
+            "remove it and run: specgate configure"
+        )
+        return 1
+
+    base_default = current.base_url if current else ""
+    model_default = current.model if current else ""
+    base_prompt = (
+        f"Base URL [{base_default}]: " if base_default else "Base URL: "
+    )
+    model_prompt = f"Model [{model_default}]: " if model_default else "Model: "
+    base_url = input(base_prompt).strip() or base_default
+    model = input(model_prompt).strip() or model_default
+    if not base_url or not model:
+        print("Base URL and Model are required")
+        return 1
+
+    status = credential_status("openai-compatible")
+    prompt = (
+        "API key [configured; press Enter to keep]: "
+        if status.safe_to_run
+        else "API key: "
+    )
+    secret = getpass.getpass(prompt)
+    if secret:
+        try:
+            set_credential("openai-compatible", secret)
+        except CredentialStoreUnavailable:
+            print(
+                "credential store is unavailable; "
+                "set OPENAI_COMPATIBLE_API_KEY instead"
+            )
+            return 1
+        except ValueError:
+            print("API key is invalid")
+            return 1
+    elif not status.safe_to_run:
+        print(
+            "API key is required; alternatively set "
+            "OPENAI_COMPATIBLE_API_KEY"
+        )
+        return 1
+
+    try:
+        save_user_llm_config(
+            UserLLMConfig("openai-compatible", base_url, model),
+            path=path,
+        )
+    except UserConfigError as exc:
+        print(str(exc))
+        return 1
+    print(f"configuration saved: {path}; API key value hidden")
+    return 0
+
+
+def _validate_run_workspace(root: Path) -> str | None:
+    if not root.is_dir():
+        return f"workspace directory does not exist: {root}"
+    missing = [
+        name
+        for name in ("TASK_SPEC.md", "CHECKLIST.md")
+        if not (root / name).is_file()
+    ]
+    if missing:
+        return "workspace is missing required file(s): " + ", ".join(missing)
+    return None
+
+
+def _resolve_cli_run_config(
+    provider: str,
+    model: str | None,
+    base_url: str | None,
+) -> UserLLMConfig:
+    environment_model = os.environ.get("SPECGATE_LLM_MODEL")
+    environment_base_url = os.environ.get("SPECGATE_LLM_BASE_URL")
+    saved = None
+    if not (model or environment_model) or not (base_url or environment_base_url):
+        saved = load_user_llm_config()
+    return resolve_user_llm_config(
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        saved=saved,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="specgate")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -741,8 +846,8 @@ def main(argv: list[str] | None = None) -> int:
     real_run = sub.add_parser("run")
     real_run.add_argument("workspace")
     real_run.add_argument("--provider", default="openai-compatible")
-    real_run.add_argument("--model", required=True)
-    real_run.add_argument("--base-url", required=True)
+    real_run.add_argument("--model")
+    real_run.add_argument("--base-url")
     real_run.add_argument("--max-steps", type=int, default=5)
     real_run.add_argument("--user-agent", default="SpecGate/0.1 OpenAI-Compatible")
     real_run.add_argument("--timeout", type=float, default=60)
@@ -777,6 +882,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     benchmark.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
     benchmark.add_argument("--suite")
+    sub.add_parser(
+        "configure",
+        help="保存默认 Base URL、Model 和隐藏的 API key",
+    )
     credentials = sub.add_parser("credentials")
     credentials_sub = credentials.add_subparsers(dest="credentials_command", required=True)
     for command in ("status", "clear"):
@@ -800,14 +909,30 @@ def main(argv: list[str] | None = None) -> int:
     approvals_deny.add_argument("approval_id")
     approvals_deny.add_argument("--reason")
     args = parser.parse_args(argv)
+    if args.command == "configure":
+        return configure_user()
     if args.command == "run-mock-demo":
         return run_mock_demo(Path(args.workspace), governance_profile=args.governance_profile)
     if args.command == "run":
+        root = Path(args.workspace)
+        workspace_error = _validate_run_workspace(root)
+        if workspace_error:
+            print(workspace_error)
+            return 1
+        try:
+            resolved = _resolve_cli_run_config(
+                args.provider,
+                args.model,
+                args.base_url,
+            )
+        except UserConfigError as exc:
+            print(str(exc))
+            return 1
         return run_real_llm(
-            root=Path(args.workspace),
-            provider=args.provider,
-            model=args.model,
-            base_url=args.base_url,
+            root=root,
+            provider=resolved.provider,
+            model=resolved.model,
+            base_url=resolved.base_url,
             max_steps=args.max_steps,
             user_agent=args.user_agent,
             timeout=args.timeout,

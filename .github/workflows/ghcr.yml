@@ -1,0 +1,99 @@
+name: GHCR
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing release version without the v prefix
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/yugarden404/specgate
+
+jobs:
+  publish:
+    name: publish-ghcr
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/v{0}', inputs.version) || github.ref }}
+
+      - name: Validate release version
+        id: version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          project_version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          requested_version="$project_version"
+          if [ "$EVENT_NAME" = "push" ]; then
+            test "$REF_NAME" = "v$project_version"
+          else
+            test "$INPUT_VERSION" = "$project_version"
+            requested_version="$INPUT_VERSION"
+          fi
+          minor="${requested_version%.*}"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          echo "version=$requested_version" >> "$GITHUB_OUTPUT"
+          echo "minor=$minor" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "full_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push versioned image
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE }}:${{ steps.version.outputs.minor }}
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:sha-${{ steps.version.outputs.short_sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.version.outputs.full_sha }}
+            org.opencontainers.image.description=SpecGate CLI-first Coding Agent Harness
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test published image
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker pull $IMAGE:$VERSION
+          docker run --rm $IMAGE:$VERSION --help
+          docker run --rm $IMAGE:$VERSION run-mock-demo /opt/specgate/examples/knowledge_nav
+          docker run --rm --entrypoint specgate-web $IMAGE:$VERSION --help
+
+      - name: Record immutable digest
+        run: |
+          echo "Image: $IMAGE:${{ steps.version.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Digest: ${{ steps.push.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"

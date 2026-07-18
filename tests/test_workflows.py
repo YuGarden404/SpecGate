@@ -6,6 +6,65 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_dockerfile_defaults_to_specgate_cli(self):
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+        self.assertIn("WORKDIR /workspace", dockerfile)
+        self.assertIn('ENTRYPOINT ["specgate"]', dockerfile)
+        self.assertIn('CMD ["--help"]', dockerfile)
+        self.assertNotIn('CMD ["specgate-web"', dockerfile)
+
+    def test_github_ci_smokes_cli_and_explicit_web_entrypoints(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "ci.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("docker run --rm specgate:ci --help", workflow)
+        self.assertIn(
+            "docker run --rm specgate:ci run-mock-demo "
+            "/opt/specgate/examples/knowledge_nav",
+            workflow,
+        )
+        self.assertIn(
+            "docker run --rm --entrypoint specgate-web specgate:ci --help",
+            workflow,
+        )
+
+    def test_ghcr_release_is_versioned_minimal_and_cli_first(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "ghcr.yml"
+        ).read_text(encoding="utf-8")
+        required = (
+            'tags: ["v*.*.*"]',
+            "workflow_dispatch:",
+            "contents: read",
+            "packages: write",
+            "ghcr.io/yugarden404/specgate",
+            "docker/login-action@v3",
+            "docker/setup-buildx-action@v3",
+            "docker/build-push-action@v6",
+            "platforms: linux/amd64",
+            "push: true",
+            "${{ steps.version.outputs.version }}",
+            "${{ steps.version.outputs.minor }}",
+            "latest",
+            "sha-${{ steps.version.outputs.short_sha }}",
+            "org.opencontainers.image.revision=${{ steps.version.outputs.full_sha }}",
+            "docker run --rm $IMAGE:$VERSION --help",
+            "run-mock-demo /opt/specgate/examples/knowledge_nav",
+            "--entrypoint specgate-web",
+        )
+        for phrase in required:
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, workflow)
+
+        self.assertLess(
+            workflow.index("Validate release version"),
+            workflow.index("Log in to GHCR"),
+        )
+        self.assertNotIn("OPENAI_COMPATIBLE_API_KEY", workflow)
+        self.assertNotIn("pull_request:", workflow)
+
     def test_pages_installs_project_before_regenerating_mock_demo(self):
         workflow = (
             ROOT / ".github" / "workflows" / "pages.yml"

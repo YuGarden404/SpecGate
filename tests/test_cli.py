@@ -12,6 +12,7 @@ from unittest.mock import patch
 from specgate import cli
 from specgate.approvals import ApprovalQueue, GovernanceConfig, PendingApproval, approval_queue_path
 from specgate.cli import main, run_mock_demo, run_real_llm
+from specgate.credential_store import CredentialStoreUnavailable
 from specgate.llm import LLMProviderError
 from specgate.llm import MockLLM
 from specgate.policy import WorkspacePolicy
@@ -693,6 +694,149 @@ review_actions = ["replace_file"]
             self.assertNotIn("sk-test-secret", text)
             self.assertNotIn("Traceback", text)
 
+    def test_configure_saves_non_secret_defaults_and_hidden_credential(self):
+        store = MemoryCredentialStore()
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            with (
+                patch.dict(
+                    os.environ,
+                    {"SPECGATE_CONFIG_HOME": tmp},
+                    clear=True,
+                ),
+                patch(
+                    "specgate.credentials.KeyringCredentialStore",
+                    return_value=store,
+                ),
+                patch(
+                    "builtins.input",
+                    side_effect=["https://api.example.test/v1", "gpt-test"],
+                ),
+                patch(
+                    "specgate.cli.getpass.getpass",
+                    return_value="sk-configure-secret",
+                ) as secret_prompt,
+                redirect_stdout(io.StringIO()) as output,
+            ):
+                code = main(["configure"])
+
+            self.assertEqual(code, 0)
+            secret_prompt.assert_called_once()
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["model"], "gpt-test")
+            self.assertEqual(
+                payload["base_url"],
+                "https://api.example.test/v1",
+            )
+            self.assertNotIn("api_key", payload)
+            self.assertEqual(
+                store.values["openai-compatible"],
+                "sk-configure-secret",
+            )
+            self.assertNotIn("sk-configure-secret", output.getvalue())
+
+    def test_configure_keeps_existing_values_and_credential_on_empty_input(self):
+        store = MemoryCredentialStore()
+        store.set("openai-compatible", "sk-existing")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "provider": "openai-compatible",
+                        "base_url": "https://saved.test/v1",
+                        "model": "saved-model",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {"SPECGATE_CONFIG_HOME": tmp},
+                    clear=True,
+                ),
+                patch(
+                    "specgate.credentials.KeyringCredentialStore",
+                    return_value=store,
+                ),
+                patch("builtins.input", side_effect=["", ""]),
+                patch("specgate.cli.getpass.getpass", return_value=""),
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["configure"]), 0)
+
+            self.assertEqual(
+                store.values["openai-compatible"],
+                "sk-existing",
+            )
+            self.assertEqual(
+                json.loads(path.read_text(encoding="utf-8"))["model"],
+                "saved-model",
+            )
+
+    def test_configure_fails_closed_without_new_or_existing_credential(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.dict(
+                    os.environ,
+                    {"SPECGATE_CONFIG_HOME": tmp},
+                    clear=True,
+                ),
+                patch(
+                    "specgate.credentials.KeyringCredentialStore",
+                    return_value=MemoryCredentialStore(),
+                ),
+                patch(
+                    "builtins.input",
+                    side_effect=["https://api.example.test/v1", "gpt-test"],
+                ),
+                patch("specgate.cli.getpass.getpass", return_value=""),
+                redirect_stdout(io.StringIO()) as output,
+            ):
+                code = main(["configure"])
+
+            self.assertEqual(code, 1)
+            self.assertIn("API key", output.getvalue())
+            self.assertFalse((Path(tmp) / "config.json").exists())
+
+    def test_configure_handles_unavailable_keyring_without_traceback(self):
+        class UnavailableStore(MemoryCredentialStore):
+            def get(self, provider):
+                raise CredentialStoreUnavailable("unavailable")
+
+            def set(self, provider, secret):
+                raise CredentialStoreUnavailable("unavailable")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.dict(
+                    os.environ,
+                    {"SPECGATE_CONFIG_HOME": tmp},
+                    clear=True,
+                ),
+                patch(
+                    "specgate.credentials.KeyringCredentialStore",
+                    return_value=UnavailableStore(),
+                ),
+                patch(
+                    "builtins.input",
+                    side_effect=["https://api.example.test/v1", "gpt-test"],
+                ),
+                patch(
+                    "specgate.cli.getpass.getpass",
+                    return_value="sk-hidden",
+                ),
+                redirect_stdout(io.StringIO()) as output,
+            ):
+                code = main(["configure"])
+
+            self.assertEqual(code, 1)
+            self.assertIn("credential store is unavailable", output.getvalue())
+            self.assertNotIn("sk-hidden", output.getvalue())
+            self.assertFalse((Path(tmp) / "config.json").exists())
+
     def test_credentials_cli_status_set_and_clear(self):
         store = MemoryCredentialStore()
 
@@ -729,6 +873,176 @@ review_actions = ["replace_file"]
                     "--env-file",
                     ".env",
                 ]
+            )
+
+    def test_run_uses_saved_user_defaults_without_model_flags(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            tempfile.TemporaryDirectory() as config_tmp,
+        ):
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("- [ ] ok", encoding="utf-8")
+            Path(config_tmp, "config.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "provider": "openai-compatible",
+                        "base_url": "https://saved.test/v1",
+                        "model": "saved-model",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "SPECGATE_CONFIG_HOME": config_tmp,
+                        "OPENAI_COMPATIBLE_API_KEY": "sk-test",
+                    },
+                    clear=True,
+                ),
+                patch("specgate.cli.run_real_llm", return_value=0) as run,
+            ):
+                self.assertEqual(main(["run", str(root)]), 0)
+
+            self.assertEqual(run.call_args.kwargs["model"], "saved-model")
+            self.assertEqual(
+                run.call_args.kwargs["base_url"],
+                "https://saved.test/v1",
+            )
+
+    def test_run_environment_overrides_saved_defaults(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            tempfile.TemporaryDirectory() as config_tmp,
+        ):
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("- [ ] ok", encoding="utf-8")
+            Path(config_tmp, "config.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "provider": "openai-compatible",
+                        "base_url": "https://saved/v1",
+                        "model": "saved",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = {
+                "SPECGATE_CONFIG_HOME": config_tmp,
+                "OPENAI_COMPATIBLE_API_KEY": "sk-test",
+                "SPECGATE_LLM_BASE_URL": "https://env.test/v1",
+                "SPECGATE_LLM_MODEL": "env-model",
+            }
+            with (
+                patch.dict(os.environ, env, clear=True),
+                patch("specgate.cli.run_real_llm", return_value=0) as run,
+            ):
+                self.assertEqual(main(["run", str(root)]), 0)
+
+            self.assertEqual(run.call_args.kwargs["model"], "env-model")
+            self.assertEqual(
+                run.call_args.kwargs["base_url"],
+                "https://env.test/v1",
+            )
+
+    def test_run_fails_before_provider_when_workspace_inputs_are_missing(self):
+        cases = (
+            (False, False, "workspace directory"),
+            (True, False, "TASK_SPEC.md"),
+            (True, True, "CHECKLIST.md"),
+        )
+        for create_root, create_spec, expected in cases:
+            with (
+                self.subTest(expected=expected),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                root = Path(tmp) / "workspace"
+                if create_root:
+                    root.mkdir()
+                if create_spec:
+                    (root / "TASK_SPEC.md").write_text(
+                        "# task",
+                        encoding="utf-8",
+                    )
+                with (
+                    patch.dict(
+                        os.environ,
+                        {
+                            "SPECGATE_LLM_BASE_URL": "https://api.test/v1",
+                            "SPECGATE_LLM_MODEL": "m",
+                        },
+                        clear=True,
+                    ),
+                    patch("specgate.cli.run_real_llm") as run,
+                    redirect_stdout(io.StringIO()) as output,
+                ):
+                    code = main(["run", str(root)])
+
+                self.assertEqual(code, 1)
+                self.assertIn(expected, output.getvalue())
+                run.assert_not_called()
+
+    def test_run_incomplete_defaults_points_to_configure(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            tempfile.TemporaryDirectory() as config_tmp,
+        ):
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("- [ ] ok", encoding="utf-8")
+            with (
+                patch.dict(
+                    os.environ,
+                    {"SPECGATE_CONFIG_HOME": config_tmp},
+                    clear=True,
+                ),
+                patch("specgate.cli.run_real_llm") as run,
+                redirect_stdout(io.StringIO()) as output,
+            ):
+                code = main(["run", str(root)])
+
+            self.assertEqual(code, 1)
+            self.assertIn("specgate configure", output.getvalue())
+            run.assert_not_called()
+
+    def test_run_explicit_settings_ignore_malformed_saved_config(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            tempfile.TemporaryDirectory() as config_tmp,
+        ):
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("- [ ] ok", encoding="utf-8")
+            Path(config_tmp, "config.json").write_text("{", encoding="utf-8")
+            with (
+                patch.dict(
+                    os.environ,
+                    {"SPECGATE_CONFIG_HOME": config_tmp},
+                    clear=True,
+                ),
+                patch("specgate.cli.run_real_llm", return_value=0) as run,
+            ):
+                code = main(
+                    [
+                        "run",
+                        str(root),
+                        "--model",
+                        "cli-model",
+                        "--base-url",
+                        "https://cli.test/v1",
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(run.call_args.kwargs["model"], "cli-model")
+            self.assertEqual(
+                run.call_args.kwargs["base_url"],
+                "https://cli.test/v1",
             )
 
     def test_credentials_cli_never_echoes_invalid_secret(self):
@@ -1328,7 +1642,7 @@ review_actions = ["replace_file"]
                     clear=True,
                 ),
                 patch("specgate.cli.OpenAICompatibleLLM", FakeRealLLM),
-                redirect_stdout(io.StringIO()),
+                redirect_stdout(io.StringIO()) as output,
             ):
                 exit_code = run_real_llm(
                     root=root,
@@ -1343,6 +1657,15 @@ review_actions = ["replace_file"]
             self.assertEqual(exit_code, 0)
             self.assertTrue((root / "index.html").exists())
             self.assertTrue((root / "reports" / "latest" / "index.html").exists())
+            self.assertIn(f"HTML: {root / 'index.html'}", output.getvalue())
+            self.assertIn(
+                f"Report: {root / 'reports' / 'latest' / 'index.html'}",
+                output.getvalue(),
+            )
+            self.assertIn(
+                f"Trace: {root / 'runs' / 'latest' / 'trace.jsonl'}",
+                output.getvalue(),
+            )
             trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
             self.assertNotIn("sk-test-secret", trace_text)
 

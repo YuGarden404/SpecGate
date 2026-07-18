@@ -49,7 +49,7 @@ MVP 范围：
 | 本地交互式 WebUI | 已完成 | Docker/本地启动与确定性测试 |
 | 公网交互式 Web 后端 | 待完成 | 后续独立部署阶段 |
 | Docker 本地与 CI 构建 | 已完成 | `Dockerfile` 与 CI smoke |
-| 公开容器 registry | 待完成 | 后续 GHCR 分发阶段 |
+| 公开容器 registry | 待完成 | `.github/workflows/ghcr.yml` 已实现；等待 `v0.1.0`、Package Public、匿名 pull 与 digest |
 | AgentOS / Superpowers 对齐 | 已完成 | `skills/specgate-static-html-harness/SKILL.md`、`docs/AI4SE_Lab_9_12_Alignment.md` |
 | Lab 11 Hook sample | 已完成 | `hooks/pre-commit.sample`、`tests/test_hook_sample.py` |
 
@@ -154,7 +154,9 @@ python C:\Users\Lenovo\.codex\skills\.system\skill-creator\scripts\quick_validat
 
 ```powershell
 docker build -t specgate:local .
-docker run --rm specgate:local
+docker run --rm specgate:local --help
+docker run --rm specgate:local run-mock-demo /opt/specgate/examples/knowledge_nav
+docker run --rm --entrypoint specgate-web specgate:local --help
 ```
 
 ## 7. 当前完成度判断
@@ -165,10 +167,10 @@ docker run --rm specgate:local
 - 有可复现的 mock LLM 闭环。
 - 有单元测试和 CI。
 - 有 Dockerfile、本地交互式 WebUI 和确定性测试；这只证明本地与 CI 构建路径已完成。
-- 有公开静态 Pages 评审入口；公网交互式 Web 后端与公开容器 registry 待后续独立阶段完成。
+- 有公开静态 Pages 评审入口；GHCR 发布工作流已实现，远端公开性待验证，公开容器 registry 仍为待完成；公网交互式 Web 后端未部署。
 - 有过程文档、计划、反思和日志。
 - 有上下文、安全、工具三条工程主线。
 - 有 Lab 10 Skill 与 Lab 9-12 取舍说明。
 - GitHub 开发主仓库证据已同步到 PR #23；NJU GitLab 已记录三次共享 Runner 构建限制，unit-test-only Pipeline #312806 已通过并归档截图，只剩检查前 Public 切换。
 
-后续阶段包括公网交互式 Web 后端部署、GHCR 镜像分发、更多 Provider 的人工兼容性验证和 AgentPack 草案；发布镜像不等于部署服务。当前合规阶段不部署、不发布；CI #53 与 Pages #31 成功只证明自动测试、Docker CI 构建和静态 Pages 发布链，不代表公网交互式 Web 后端已经部署或镜像已发布到公开容器 registry。真实 LLM Web 接入代码已经完成，但课程自动验收仍使用 Mock/Fake/Stub，`REFLECTION.md` 继续由学生本人维护。
+后续阶段包括 GHCR 远端发布验证、公网交互式 Web 后端部署、更多 Provider 的人工兼容性验证和 AgentPack 草案；发布镜像不等于部署服务。当前已实现版本发布 workflow，但版本标签、Package Public 和匿名 pull 尚未验证，因此不能声称公开容器 registry 已完成；CI 与 Pages 成功也不代表公网交互式 Web 后端已经部署。真实 LLM Web 接入代码已经完成，但课程自动验收仍使用 Mock/Fake/Stub，`REFLECTION.md` 继续由学生本人维护。
