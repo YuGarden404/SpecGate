@@ -30,6 +30,8 @@ SCREENSHOTS = (
     ROOT / "docs" / "evidence" / "github-actions-runtime-config.png",
     ROOT / "docs" / "evidence" / "github-actions-pr20-final.png",
     ROOT / "docs" / "evidence" / "github-actions-pr23-final.png",
+    ROOT / "docs" / "evidence" / "github-actions-pr23-ci-detail.png",
+    ROOT / "docs" / "evidence" / "github-actions-pr23-pages-detail.png",
 )
 KEY_EVIDENCE_PATHS = (
     "src/specgate/runner.py",
@@ -573,6 +575,40 @@ class FinalEvidenceTests(unittest.TestCase):
         for document, section in current_delivery_sections.items():
             with self.subTest(document=document, boundary="deployment claims"):
                 self.assertEqual(find_affirmative_public_deployment_claims(section), ())
+
+    def test_pr23_remote_evidence_is_structurally_bound(self):
+        expected_images = (
+            "evidence/github-actions-pr23-ci-detail.png",
+            "evidence/github-actions-pr23-pages-detail.png",
+        )
+        image_targets = markdown_image_targets_in_section(
+            "docs/FINAL_EVIDENCE_MATRIX.md",
+            "## 6. CI 与截图说明",
+        )
+        for image_target in expected_images:
+            with self.subTest(image=image_target):
+                self.assertEqual(image_targets.count(image_target), 1)
+
+        expected_run_mappings = (
+            "[CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258)"
+            " → `main@5fd86fa` → `unit-test`、`docker-build` → 成功",
+            "[Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221)"
+            " → `main@5fd86fa` → `build-pages`、`deploy-pages` → 成功",
+        )
+        remote_sections = {
+            "matrix": markdown_section(
+                "docs/FINAL_EVIDENCE_MATRIX.md",
+                "## 6. CI 与截图说明",
+            ),
+            "checklist": markdown_section(
+                "docs/FINAL_SUBMISSION_CHECKLIST.md",
+                "## 5. Git / PR / CI 证据链",
+            ),
+        }
+        for document, section in remote_sections.items():
+            for mapping in expected_run_mappings:
+                with self.subTest(document=document, mapping=mapping):
+                    self.assertIn(mapping, section)
 
     def test_pr18_through_pr23_release_rows_are_exact_and_unique(self):
         matrix = MATRIX.read_text(encoding="utf-8")
@@ -1118,6 +1154,15 @@ class FinalEvidenceTests(unittest.TestCase):
         self.assertIn("本文件由学生本人完成", reflection)
         self.assertIn("不提供可直接替换的反思段落", guide)
         self.assertIn("由学生本人修改", guide)
+
+    def test_reflection_is_student_owned_in_range_and_factually_current(self):
+        reflection = read_text("REFLECTION.md")
+        compact = re.sub(r"\s+", "", reflection)
+
+        self.assertIn("本文件由学生本人完成", reflection)
+        self.assertGreaterEqual(len(compact), 1500)
+        self.assertLessEqual(len(compact), 2500)
+        self.assertNotIn("未来 provider", reflection)
 
 
 if __name__ == "__main__":

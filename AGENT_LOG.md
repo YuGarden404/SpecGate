@@ -1000,9 +1000,12 @@
 - 当前基线：PR #23 已合并为 `main@5fd86fa`；真实 NJU SE Hub 兼容性审计完整回归为 `Ran 921 tests in 403.030s`、`OK (skipped=27)`。
 - TDD RED：先更新最终证据契约，要求 PR #21-#23 发布链、CI #59、Pages #34、`docs/evidence/github-actions-pr23-final.png` 与双仓库职责；聚焦测试因材料和截图尚未同步而按预期失败。
 - 截图核验：用户提供的 PR #23 Actions 截图显示 CI #59 与 Pages #34 均成功；PNG 校验结果为 2557x1441、300972 字节，未见 token、API key、密码或其他凭据。
-- 当前证据：截图归档为 `docs/evidence/github-actions-pr23-final.png`。私有仓库的精确 run URL 未能从未登录的只读浏览器取得，因此未猜测链接。
+- 当前证据：用户随后从已登录页面提供 [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258) 与 [Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 精确 run URL，以及两张 job 详情截图。CI 的 `unit-test`、`docker-build` 和 Pages 的 `build-pages`、`deploy-pages` 均成功。
 - 双仓库职责：GitHub 开发主仓库继续保存完整 commit、PR、GitHub PR/Actions 与 Pages；NJU GitLab 课程镜像尚未创建，创建后先保持 Private，检查前改为 Public，并以实际 GitLab Pipeline 作为独立证据。
 - 用户操作边界：GitLab 项目创建、remote、push、可见性设置、截图及所有 Git 命令均由用户执行；首次只同步 `main` 与 tags。
 - 部署边界：公网交互式 Web 后端与公开容器 registry 继续等待教师答复；本任务未部署服务、未发布镜像，也未修改 `REFLECTION.md`。
 - TDD GREEN：PR #21-#23 发布链、当前快照、跨材料一致性与双仓库职责 5 项聚焦契约结果为 `Ran 5 tests in 0.006s`、`OK`；完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 22 tests in 0.113s`、`OK`。
-- 未闭合外部证据：CI #59 与 Pages #34 的精确 run URL 仍需用户从已登录的私有 GitHub 页面提供；在此之前只保留截图中的真实运行编号与成功状态，不构造 URL。
+- 反思人工边界：用户先自行修改正文，再明确批准 AI 按中等强度仅做润色和结构整理；润色后保留原观点与案例，非空白字符为 2430，“未来 provider”已改为 NJU SE Hub 四模型真实验证后的实际认识。
+- 远端详情截图：`docs/evidence/github-actions-pr23-ci-detail.png` 为 2557x1310、132479 字节；`docs/evidence/github-actions-pr23-pages-detail.png` 为 2557x1402、156279 字节。两图 PNG 结构有效且未见凭据；Node.js 20 弃用 warning 如实保留，不影响本次成功状态。
+- 详情证据 TDD RED：新增两张截图和精确 run 映射契约后，3 项聚焦测试因文件不存在、图片未引用和两份材料缺少 URL/job 映射而产生 7 个预期失败与 2 个预期错误。
+- 详情证据与反思 GREEN：归档真实截图、同步 [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258) 和 [Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 后，反思署名/篇幅、远端结构、PNG 完整性与发布链 5 项聚焦测试通过；完整 `tests.test_final_evidence tests.test_workflows` 结果为 `Ran 24 tests in 0.136s`、`OK`。
