@@ -301,8 +301,7 @@ def quarantine_parent_lock(binding: WorkspaceTreeBinding) -> Iterator[None]:
         create=True,
         _binding=root_binding,
     ) as handle:
-        _prepare_quarantine_lock_handle(handle)
-        _lock_quarantine_handle(handle)
+        _prepare_and_lock_quarantine_handle(handle)
         held[key] = 1
         try:
             _verify_workspace_tree_binding(binding)
@@ -319,12 +318,32 @@ def workspace_file_lock(
 ) -> Iterator[None]:
     """Acquire an exclusive cross-process lock backed by a safe workspace file."""
     with open_workspace_file(root, relative, "update", create=True) as handle:
-        _prepare_quarantine_lock_handle(handle)
-        _lock_quarantine_handle(handle)
+        _prepare_and_lock_quarantine_handle(handle)
         try:
             yield
         finally:
             _unlock_quarantine_handle(handle)
+
+
+def _prepare_and_lock_quarantine_handle(handle: BinaryIO) -> None:
+    try:
+        _prepare_quarantine_lock_handle(handle)
+    except PermissionError as exc:
+        if os.name != "nt" or exc.errno not in {errno.EACCES, errno.EAGAIN}:
+            raise
+
+        # Another process may have initialized and locked byte zero after our
+        # empty-file check. Wait for that lock, then validate preparation again.
+        handle.seek(0)
+        _lock_quarantine_handle(handle)
+        try:
+            _prepare_quarantine_lock_handle(handle)
+        except BaseException:
+            _unlock_quarantine_handle(handle)
+            raise
+        return
+
+    _lock_quarantine_handle(handle)
 
 
 def _prepare_quarantine_lock_handle(handle: BinaryIO) -> None:

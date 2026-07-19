@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import hashlib
 import io
 import os
@@ -104,6 +105,206 @@ class WorkspaceDirectChildTests(unittest.TestCase):
             (root / name).mkdir()
 
         self.assertEqual(workspace_fs.count_quarantine_entries(binding), 2)
+
+
+class WorkspaceFileLockTests(unittest.TestCase):
+    @staticmethod
+    def opened_handle():
+        handle = mock.MagicMock()
+        opened = mock.MagicMock()
+        opened.__enter__.return_value = handle
+        opened.__exit__.return_value = None
+        return handle, opened
+
+    def test_windows_initialization_contention_waits_then_prepares_under_lock(self):
+        handle, opened = self.opened_handle()
+        events = []
+        prepare_calls = 0
+
+        def prepare(actual_handle):
+            nonlocal prepare_calls
+            self.assertIs(actual_handle, handle)
+            prepare_calls += 1
+            if prepare_calls == 1:
+                events.append("prepare-contended")
+                raise PermissionError(errno.EACCES, "lock byte is already held")
+            events.append("prepare-after-lock")
+
+        handle.seek.side_effect = lambda offset: events.append(f"seek-{offset}")
+        with (
+            mock.patch.object(workspace_fs.os, "name", "nt"),
+            mock.patch.object(workspace_fs, "open_workspace_file", return_value=opened),
+            mock.patch.object(
+                workspace_fs,
+                "_prepare_quarantine_lock_handle",
+                side_effect=prepare,
+            ),
+            mock.patch.object(
+                workspace_fs,
+                "_lock_quarantine_handle",
+                side_effect=lambda actual: events.append("lock"),
+            ),
+            mock.patch.object(
+                workspace_fs,
+                "_unlock_quarantine_handle",
+                side_effect=lambda actual: events.append("unlock"),
+            ),
+        ):
+            with workspace_fs.workspace_file_lock("unused", "approval.lock"):
+                events.append("yield")
+
+        self.assertEqual(
+            events,
+            [
+                "prepare-contended",
+                "seek-0",
+                "lock",
+                "prepare-after-lock",
+                "yield",
+                "unlock",
+            ],
+        )
+
+    def test_windows_second_preparation_failure_releases_acquired_lock(self):
+        handle, opened = self.opened_handle()
+        events = []
+        prepare_errors = iter(
+            (
+                PermissionError(errno.EAGAIN, "lock byte is already held"),
+                RuntimeError("sentinel preparation failed"),
+            )
+        )
+
+        def prepare(actual_handle):
+            events.append("prepare")
+            raise next(prepare_errors)
+
+        handle.seek.side_effect = lambda offset: events.append(f"seek-{offset}")
+        with (
+            mock.patch.object(workspace_fs.os, "name", "nt"),
+            mock.patch.object(workspace_fs, "open_workspace_file", return_value=opened),
+            mock.patch.object(
+                workspace_fs,
+                "_prepare_quarantine_lock_handle",
+                side_effect=prepare,
+            ),
+            mock.patch.object(
+                workspace_fs,
+                "_lock_quarantine_handle",
+                side_effect=lambda actual: events.append("lock"),
+            ),
+            mock.patch.object(
+                workspace_fs,
+                "_unlock_quarantine_handle",
+                side_effect=lambda actual: events.append("unlock"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "sentinel preparation failed"):
+                with workspace_fs.workspace_file_lock("unused", "approval.lock"):
+                    self.fail("lock context yielded after failed preparation")
+
+        self.assertEqual(
+            events,
+            ["prepare", "seek-0", "lock", "prepare", "unlock"],
+        )
+
+    def test_windows_unexpected_preparation_permission_error_propagates(self):
+        handle, opened = self.opened_handle()
+        unexpected = PermissionError(errno.EPERM, "unexpected permission failure")
+        with (
+            mock.patch.object(workspace_fs.os, "name", "nt"),
+            mock.patch.object(workspace_fs, "open_workspace_file", return_value=opened),
+            mock.patch.object(
+                workspace_fs,
+                "_prepare_quarantine_lock_handle",
+                side_effect=unexpected,
+            ),
+            mock.patch.object(workspace_fs, "_lock_quarantine_handle") as acquire,
+            mock.patch.object(workspace_fs, "_unlock_quarantine_handle") as release,
+        ):
+            with self.assertRaises(PermissionError) as raised:
+                with workspace_fs.workspace_file_lock("unused", "approval.lock"):
+                    self.fail("lock context yielded after failed preparation")
+
+        self.assertIs(raised.exception, unexpected)
+        acquire.assert_not_called()
+        release.assert_not_called()
+
+    def test_non_windows_preparation_permission_error_propagates(self):
+        handle, opened = self.opened_handle()
+        contention = PermissionError(errno.EACCES, "permission failure")
+        with (
+            mock.patch.object(workspace_fs.os, "name", "posix"),
+            mock.patch.object(workspace_fs, "open_workspace_file", return_value=opened),
+            mock.patch.object(
+                workspace_fs,
+                "_prepare_quarantine_lock_handle",
+                side_effect=contention,
+            ),
+            mock.patch.object(workspace_fs, "_lock_quarantine_handle") as acquire,
+            mock.patch.object(workspace_fs, "_unlock_quarantine_handle") as release,
+        ):
+            with self.assertRaises(PermissionError) as raised:
+                with workspace_fs.workspace_file_lock("unused", "approval.lock"):
+                    self.fail("lock context yielded after failed preparation")
+
+        self.assertIs(raised.exception, contention)
+        acquire.assert_not_called()
+        release.assert_not_called()
+
+    def test_quarantine_parent_lock_uses_windows_contention_recovery(self):
+        handle, opened = self.opened_handle()
+        binding = types.SimpleNamespace(
+            path=Path("unused"),
+            trusted_path=Path("unused"),
+            identity=(1, 2),
+        )
+        events = []
+        prepare_calls = 0
+
+        def prepare(actual_handle):
+            nonlocal prepare_calls
+            prepare_calls += 1
+            if prepare_calls == 1:
+                events.append("prepare-contended")
+                raise PermissionError(errno.EACCES, "lock byte is already held")
+            events.append("prepare-after-lock")
+
+        handle.seek.side_effect = lambda offset: events.append(f"seek-{offset}")
+        with (
+            mock.patch.object(workspace_fs.os, "name", "nt"),
+            mock.patch.object(workspace_fs, "_verify_workspace_tree_binding"),
+            mock.patch.object(workspace_fs, "open_workspace_file", return_value=opened),
+            mock.patch.object(
+                workspace_fs,
+                "_prepare_quarantine_lock_handle",
+                side_effect=prepare,
+            ),
+            mock.patch.object(
+                workspace_fs,
+                "_lock_quarantine_handle",
+                side_effect=lambda actual: events.append("lock"),
+            ),
+            mock.patch.object(
+                workspace_fs,
+                "_unlock_quarantine_handle",
+                side_effect=lambda actual: events.append("unlock"),
+            ),
+        ):
+            with workspace_fs.quarantine_parent_lock(binding):
+                events.append("yield")
+
+        self.assertEqual(
+            events,
+            [
+                "prepare-contended",
+                "seek-0",
+                "lock",
+                "prepare-after-lock",
+                "yield",
+                "unlock",
+            ],
+        )
 
 
 class NormalizeWorkspaceRelativeTests(unittest.TestCase):
