@@ -1061,3 +1061,19 @@
 - 阶段 A 发布准备分支验证在同步证据后独立复跑为 `Ran 954 tests in 417.907s`、`OK (skipped=27)`，退出码 0；两次全量运行数量和跳过数一致，均未复现 Windows 子进程 `PermissionError`。
 - 发布边界：源码版本已准备为 `v0.1.1`，但阶段 A 不创建标签、不声称新镜像已发布。`v0.1.0` 仍是已验证的历史公开镜像，digest 为 `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d`。阶段 B 只在合并后通过真实 GHCR 与匿名 smoke 门禁。
 - 用户操作边界：所有 Git add、commit、push、tag、PR、合并、双仓库同步和远端截图仍由用户执行；Agent 不读取、记录或输出 API key，也没有修改 `REFLECTION.md`。
+
+## 2026-07-19 v0.1.1 发布证据同步
+
+- 隔离与计划：用户从 `main@9cf9093` 创建 `v011-evidence-sync` 工作树；本轮按 `docs/superpowers/plans/2026-07-19-v011-evidence-sync.md` 和 Superpowers Inline Execution 执行。所有 Git add、commit、push、PR、合并与远端同步仍由用户完成。
+- 当前源码链：PR #28 合并后的 `main@9cf9093` 已同步到 GitHub/NJU；CI #69 / run 29678498485、Pages #39 / run 29678498457 与 NJU Pipeline #313118 / job #596642 均成功。教师 PR #27 / `main@6dbaa75` 的 `Ran 954 tests in 213.679s` 干净克隆基线继续独立保存。
+- 标签核对：用户创建并向两个远端推送 annotated `v0.1.1`；GitHub/NJU tag object 都是 `adb74ca0586b20e3cb5e32767bb409370e70c2ef`，peeled commit 都是 `9cf909341cd1a5feb8ed2b244ce31f0495016c4c`。标签不因本证据分支产生的新提交而移动。
+- 镜像核对：[GHCR #2 / run 29679264248](https://github.com/YuGarden404/SpecGate/actions/runs/29679264248) 成功发布 `ghcr.io/yugarden404/specgate:0.1.1`；digest 为 `sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f`，OCI revision 为 `9cf909341cd1a5feb8ed2b244ce31f0495016c4c`。Package 页面显示 Public，并列出 `latest`、`sha-9cf909341cd1`、`0.1.1`、`0.1`。
+- 命令问题复盘：首次 OCI revision 检查使用嵌套 Go template，PowerShell 先处理内部双引号，Docker 因而把标签键错误解析成模板函数并报告 `function "org" not defined`；这是命令引用问题，不是镜像缺陷。随后改用 `docker image inspect` JSON 与 `ConvertFrom-Json`，成功取得 digest 和 OCI revision。
+- 匿名 smoke：一次性空 `DOCKER_CONFIG` 中 pull、CLI help、Mock Demo 与 Web help 均退出码 0；实际 digest、预期 digest、实际 revision、预期 revision 完全一致，finally 清理后 `Anonymous config exists: False`。`v0.1.1` 已完成匿名拉取验证。
+- 截图归档：原始附件只做二进制复制，生成 `docs/evidence/github-actions-ghcr-v0.1.1-success.png`、`docs/evidence/github-package-specgate-v0.1.1-public.png`、`docs/evidence/ghcr-v0.1.1-anonymous-smoke.png`；对应 SHA-256 为 `0093D19A993C1E692B5F7395C90920BEE69EB18E993C7C67F18661E18A5B102D`、`532ACA46AAAC39558F1595A98212D6F0E19B0C2868F1C979E60047B49C979C42`、`F442317D92DBA670098C32D7B0C8BB629C5AF580162BDE487B97728063BB7043`。PNG 聚焦测试 `Ran 2 tests in 0.296s`、`OK`。
+- TDD RED：先扩展最终证据契约，再运行 28 项测试，得到 `FAILED (failures=3, errors=3)`；失败来自当前材料仍记录 Stage A 状态、Stage B 标题/精确事实缺失及三张图片尚未归档，没有语法或导入错误。
+- TDD GREEN：同步当前材料后，最终证据套件得到 `Ran 28 tests in 0.416s`、`OK`；为记录新鲜全量结果，又先增加 Stage B 结果断言并确认 1 项聚焦测试按预期出现 5 个材料失败，再同步五份权威材料。
+- Stage B 证据同步分支验证：imports `Ran 1 test`、CLI `Ran 51 tests in 55.310s`、workflow `Ran 5 tests`、最终证据 `Ran 28 tests in 0.434s`，全部 `OK`；Python 编译与 JavaScript 语法退出码 0，疑似真实密钥模式扫描无命中。完整套件得到 `Ran 955 tests in 404.159s`、`OK (skipped=27)`，退出码 0；新增 1 项是发布事实与历史保留契约，不替换教师基线。
+- 独立审查修复：审查发现最终提交清单把 PR #23、PR #25 旧链仍称为“当前”，并把 Pipeline #313088 / job #596503 称为当前，造成同文件多重当前状态。先将清单加入过期当前状态扫描并加入三项反例，聚焦测试得到 3 个预期失败；再把 PR #23/#25 改为历史来源链，并明确 #313088 是教师基线、#313118 / #596642 才是当前链。
+- 历史边界：`v0.1.0` 的 `main@44b236f`、PR #25、GHCR #1、digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 与 `docs/evidence/github-actions-pr25-ci-success.png`、`docs/evidence/github-actions-pr25-pages-success.png`、`docs/evidence/github-actions-ghcr-v0.1.0-success.png`、`docs/evidence/github-package-specgate-public.png`、`docs/evidence/ghcr-anonymous-pull-smoke.png` 保持不变。
+- 部署边界：公网交互式 Web 后端未部署；发布公开 CLI 镜像不等于部署公网交互式 Web 后端。GHCR、Package、匿名 pull 与 `specgate-web --help` 不构成公网服务部署证据。

@@ -137,7 +137,7 @@ specgate credentials clear openai-compatible
 
 6. 打开 `docs/FINAL_EVIDENCE_MATRIX.md`，沿源码链说明 PR #27 修复了 Windows 两进程在“写入锁字节”和“获取锁”之间的竞态，并加入锁准备失败恢复分支回归测试。真实并发行为另由审批并发用例连续 30 轮和完整套件验证；这个案例说明单文件测试全绿不等于并发协议在真实全量调度下正确。
 
-7. 最后区分三个交付边界：当前源码可用 `docker build -t specgate:local .` 验证；`ghcr.io/yugarden404/specgate:0.1.0` 是已验证的历史公开镜像；源码版本 `0.1.1` 已准备，但 v0.1.1 尚未发布，必须等待标签 workflow 和匿名镜像 smoke 后才能更新发布证据。
+7. 最后展示发布链并区分部署边界：PR #28 合并后的 `main@9cf9093` 已由 [CI #69](https://github.com/YuGarden404/SpecGate/actions/runs/29678498485)、[Pages #39](https://github.com/YuGarden404/SpecGate/actions/runs/29678498457) 和 [GHCR #2](https://github.com/YuGarden404/SpecGate/actions/runs/29679264248) 验证；`v0.1.1` 已发布，`ghcr.io/yugarden404/specgate:0.1.1` 已完成匿名拉取验证，digest 为 `sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f`，OCI revision 为 `9cf909341cd1a5feb8ed2b244ce31f0495016c4c`。`v0.1.0` 的 `main@44b236f`、GHCR #1、历史 digest 与五张旧截图继续保留。公网交互式 Web 后端未部署；发布公开 CLI 镜像不等于部署公网交互式 Web 后端。
 
 8. 打开 `docs/AI4SE_Lab_9_12_Alignment.md`，说明 Lab 10 Skill 与 Lab 11 Hook sample 已接入，Lab 9/12 的取舍合理。
 
