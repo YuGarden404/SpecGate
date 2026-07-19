@@ -6,12 +6,16 @@
 
 ## 2. 最终版本快照
 
-- 当前主线基线：`main@44b236f`，最近已合并阶段为 PR #25。
-- 当前最终验证（2026-07-18 GHCR CLI 分发分支）：`Ran 947 tests in 227.115s`、`OK (skipped=27)`，命令退出码为 0。
-- 当前远端证据：PR #25 合并后的 [CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245)、[Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246) 与 `v0.1.0` 触发的 [GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933) 均成功；证据为 `docs/evidence/github-actions-pr25-ci-success.png`、`docs/evidence/github-actions-pr25-pages-success.png`、`docs/evidence/github-actions-ghcr-v0.1.0-success.png`、`docs/evidence/github-package-specgate-public.png` 与 `docs/evidence/ghcr-anonymous-pull-smoke.png`。
+- 教师已验证源码基线：PR #27 合并后的 `main@6dbaa75`。
+- 教师已验证源码基线（2026-07-19）：`Ran 954 tests in 213.679s`、`OK (skipped=27)`，退出码 0。
+- 阶段 A 发布准备分支验证（2026-07-19）：`Ran 954 tests in 418.617s`、`OK (skipped=27)`，退出码 0。该结果来自文档与 `0.1.1` 准备分支，不替换教师基线。
+- 阶段 A 发布准备分支验证的同步后独立复跑：`Ran 954 tests in 417.907s`、`OK (skipped=27)`，退出码 0。两次运行数量和跳过数一致。
+- 当前远端源码证据：PR #27 合并后的 CI #67、Pages #38 与 NJU Pipeline #313088 / job #596503 均成功。
+- 教师真实模型 smoke：使用 `glm-5.2` 完成 `passed=True, steps=2`，最终 Gate 通过、trust 为 `trusted`、`parse_errors=0`，随后已清除系统 keyring 凭据。
+- 发布边界：`v0.1.0` 是已验证的历史公开镜像；项目版本已准备为 `v0.1.1`，但阶段 A 不声明新镜像已发布。PR #25 合并后的 [CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245)、[Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246) 与 `v0.1.0` 触发的 [GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933) 均成功；历史发布证据继续使用 `docs/evidence/github-actions-pr25-ci-success.png`、`docs/evidence/github-actions-pr25-pages-success.png`、`docs/evidence/github-actions-ghcr-v0.1.0-success.png`、`docs/evidence/github-package-specgate-public.png` 与 `docs/evidence/ghcr-anonymous-pull-smoke.png`。
 - 执行归属历史：PR #18、PR #19、PR #20 均已记录主开发 Agent 为 OpenAI Codex，并区分人工参与与 Mock/Fake/Stub 自动测试边界。
 - 历史远端证据：PR #20 的 `main@c39d101`、[CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)、[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 与 `docs/evidence/github-actions-pr20-final.png` 继续保留，完整 job 映射见第 6 节。
-- 双仓库边界：SpecGate 是 CLI-first Harness；GitHub 开发主仓库保留 commit、PR、完整 GitHub Actions、Docker 构建与 Pages 证据，[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 只保留 `unit-test`。Pipeline #312781、#312784、#312797 的三次 `unit-test` 已通过，`docker-build` 分别暴露 DinD 权限、`gcr.io` 网络和 RootlessKit 权限限制；最终 [Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 在 `main@66ea825` 上通过，检查前改为 Public。
+- 双仓库边界：SpecGate 是 CLI-first Harness；GitHub 开发主仓库保留 commit、PR、完整 GitHub Actions、Docker 构建与 Pages 证据，[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 已公开并只保留 `unit-test`。Pipeline #312781、#312784、#312797 的三次 `unit-test` 已通过，`docker-build` 分别暴露 DinD 权限、`gcr.io` 网络和 RootlessKit 权限限制；历史 [Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 在 `main@66ea825` 上通过，教师源码基线由 Pipeline #313088 / job #596503 覆盖。
 - 公开入口：<https://yugarden404.github.io/SpecGate/>。
 
 ## 3. 课程交付物
@@ -64,6 +68,8 @@
 | NJU SE Hub 真实 LLM 审计 | `5635ad2` | `5fd86fa` | [#23](https://github.com/YuGarden404/SpecGate/pull/23) | [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258)、[Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 与三张 PR #23 截图 |
 | 最终提交同步与双仓库交付 | `9c25621` | `7cecbb1` | [#24](https://github.com/YuGarden404/SpecGate/pull/24) | GitHub 最终材料与 NJU GitLab 成功证据同步 |
 | CLI 易用性与 GHCR 分发 | `f8c5c7a` | `44b236f` | [#25](https://github.com/YuGarden404/SpecGate/pull/25) | [CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245)、[Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246) 与 [GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933) |
+| GHCR 公开镜像发布证据 | `ee97b3d` | `fce51a0` | [#26](https://github.com/YuGarden404/SpecGate/pull/26) | `v0.1.0` 公开性与历史发布证据同步 |
+| Windows 并发锁竞态修复与反思 | `2999599` | `6dbaa75` | [#27](https://github.com/YuGarden404/SpecGate/pull/27) | CI #67、Pages #38、Pipeline #313088 / job #596503 与教师空目录验证 |
 
 ## 6. CI 与截图说明
 
@@ -181,13 +187,11 @@ node --check src/specgate/web_static/app.js
 git diff --check
 ```
 
-当前最终结果（2026-07-18 GHCR CLI 分发分支）：
+教师已验证源码基线（2026-07-19，`main@6dbaa75`）：
 
-- 文档与工作流契约：`Ran 20 tests in 0.065s`、`OK`，退出码 0。
-- 六项确定性机制：`Ran 6 tests in 47.709s`、`OK`，退出码 0。
-- 完整套件：`Ran 947 tests in 227.115s`、`OK (skipped=27)`，退出码 0。
-- `python -m compileall -q src tests`、`node --check src/specgate/web_static/app.js` 与 `git diff --check` 均退出码 0 且无错误输出。
-- `.env` 由 `.gitignore:8` 忽略，`.env` 提交历史为空；排除测试与实施计划后的疑似密钥模式扫描无命中。
+- 完整套件：`Ran 954 tests in 213.679s`、`OK (skipped=27)`，退出码 0。
+
+阶段 A 发布准备分支验证：首次完整套件为 `Ran 954 tests in 418.617s`，同步证据后的独立复跑为 `Ran 954 tests in 417.907s`，两次均 `OK (skipped=27)` 且退出码 0；imports 1 项、CLI 51 项、workflow 5 项和最终证据 27 项聚焦套件均通过，Python 编译、JavaScript 语法与秘密模式扫描均通过。耗时是本次工作树的独立观测，不覆盖教师的 `Ran 954 tests in 213.679s`。
 
 历史阶段结果（2026-07-15 Web 真实 LLM 接入分支）：`Ran 896 tests in 216.620s`、`OK (skipped=27)`。该数字早于 PR #20 生命周期修复，不代表当前快照。非法 `unsafe` governance profile 的 argparse 输出来自预期拒绝测试，不是失败；跳过项主要来自 Windows 当前没有创建符号链接的权限和仓库既有平台条件。
 
@@ -197,7 +201,7 @@ git diff --check
 - Web 默认使用 MockLLM；完整配置后新 run 可使用真实模型，Provider 失败不会降级。
 - GitHub Pages 仅为静态展示，真实模式需要部署 Web 后端、持久化数据库、凭据主密钥与 `SPECGATE_LLM_ALLOWED_HOSTS` 网络策略。
 - 本地交互式 WebUI 已具备显式 Docker 入口与确定性测试；公开容器 registry 已完成，GHCR 公开镜像已完成匿名拉取验证。公网交互式 Web 后端未部署；发布镜像不等于部署服务。
-- GitHub 是开发主仓库和完整测试、Docker 构建、Pages 的权威来源；NJU GitLab 课程镜像已创建为 Private，首次只同步 `main` 与 tags，检查前改为 Public。GitHub PR/Actions 不迁移为 GitLab 平台元数据；Pipeline #312781 的 DinD 权限失败、Pipeline #312784 的 `gcr.io` 超时和 Pipeline #312797 的 RootlessKit 权限失败均独立记录，最终 Pipeline #312806 的 `unit-test` 已通过。
+- GitHub 是开发主仓库和完整测试、Docker 构建、Pages 的权威来源；NJU GitLab 课程镜像已经公开，可用于教师空目录克隆。GitHub PR/Actions 不迁移为 GitLab 平台元数据；Pipeline #312781 的 DinD 权限失败、Pipeline #312784 的 `gcr.io` 超时和 Pipeline #312797 的 RootlessKit 权限失败均独立记录，历史 Pipeline #312806 与当前 Pipeline #313088 / job #596503 的 `unit-test` 均已通过。
 - 不开放 shell，不执行同源模型生成 HTML。
 - CLI 持久化凭据使用 OS keyring；Web 使用独立主密钥和 AES-256-GCM。
 - `.env` 只作为被保护路径和威胁示例出现，SpecGate 不读写 `.env`。

@@ -1045,3 +1045,19 @@
 - 证据归档：`docs/evidence/github-actions-pr25-ci-success.png`、`docs/evidence/github-actions-pr25-pages-success.png`、`docs/evidence/github-actions-ghcr-v0.1.0-success.png`、`docs/evidence/github-package-specgate-public.png` 与 `docs/evidence/ghcr-anonymous-pull-smoke.png` 均与页面或终端输出匹配，未见 API key、token 或密码。
 - TDD RED：证据契约先要求 PR #24/#25 发布链、PR #25 三个 workflow 映射、Public registry、精确 digest 与五张图片；同步前 4 项聚焦测试按预期因旧状态和缺少当前证据失败。
 - 部署边界：公开容器 registry 已完成；公网交互式 Web 后端未部署，发布镜像不等于部署服务。证据 PR 合并后仍需由用户把最终 `main` 与 tags 同步到 NJU GitLab，并核对新的 unit-test Pipeline。
+
+## 2026-07-19 最终使用文档与 v0.1.1 发布准备
+
+- 设计与隔离：用户批准设计后，在 `final-docs-v011-prep` 隔离工作树编写并提交中文实施计划；本轮按 Superpowers Inline Execution 执行，不修改主工作树。
+- 当前源码事实：PR #27 合并后的 `main@6dbaa75` 包含 Windows 锁竞态修复。根因是两个 Windows 进程在“写入锁字节”和“获取锁”之间发生竞态，局部 `test_approvals.py` 的 53 项全绿不能替代全量调度验证；修复加入锁准备失败恢复分支回归测试，真实并发行为另由审批并发用例连续 30 轮和完整套件验证。
+- 教师验证：公开 NJU 仓库空目录克隆使用 Python 3.13.5，完整套件得到 `Ran 954 tests in 213.679s`、`OK (skipped=27)`，退出码 0；对应远端 CI #67、Pages #38、Pipeline #313088 与 job #596503 均成功。
+- 演示验证：固定 Mock Demo 在独立工作区中退出码 0、Gate 通过、trust 为 `trusted`。真实 CLI smoke 使用 `glm-5.2`，得到 `passed=True, steps=2`、最终 Gate 通过、`parse_errors=0`；运行结束后用户执行 `specgate credentials clear openai-compatible` 并确认 keyring 无有效凭据。
+- 版本 TDD：先把 `tests/test_imports.py` 的期望改为 `0.1.1`，确认实际 `0.1.0` 导致 RED；再同步 `pyproject.toml` 和 `src/specgate/__init__.py`，导入测试与双元数据检查 GREEN。版本提交为 `c9db3eb`。
+- 文档 TDD RED：扩展 `tests/test_final_evidence.py` 后运行 27 项，得到 `FAILED (failures=11)`；失败全部来自 PR #25 当前口径、缺少克隆安装流程、缺少 PR #26/#27 来源行以及缺少阶段 A 事实，没有语法或导入错误。
+- 文档同步：README 增加双仓库克隆、Windows 干净安装、准确工作区文件名、Mock/真实模型、凭据清除、WebUI 和 Docker 路径；部署与讲解稿同步 CLI 生命周期、教师演示脚本和 `v0.1.0`/`v0.1.1` 边界；证据矩阵、提交清单和反思事实清单推进到 PR #27，同时保留历史 GHCR #1 与五张截图。
+- 契约校准：测试中两项仍要求“Private、检查前改为 Public”的旧断言与公开可克隆事实冲突，因此改为要求“公开可克隆/已公开”，并明确拒绝旧待切换措辞；没有为了让测试通过而把过期事实写回文档。
+- 文档 TDD GREEN：完成入口、部署、讲解、证据和过程记录同步后，`python -m unittest discover -s tests -p "test_final_evidence.py" -v` 得到 `Ran 27 tests in 0.286s`、`OK`，退出码 0。
+- 阶段 A 发布准备分支验证：imports 1 项、CLI 51 项、workflow 5 项、最终证据 27 项均通过；`python -m compileall -q src tests` 与 `node --check src/specgate/web_static/app.js` 退出码 0；指定交付材料的疑似真实 API key 模式扫描无命中。完整套件得到 `Ran 954 tests in 418.617s`、`OK (skipped=27)`，退出码 0，没有复现 Windows 子进程 `PermissionError`。该耗时作为本工作树观测记录，不替换教师 `Ran 954 tests in 213.679s` 基线。
+- 阶段 A 发布准备分支验证在同步证据后独立复跑为 `Ran 954 tests in 417.907s`、`OK (skipped=27)`，退出码 0；两次全量运行数量和跳过数一致，均未复现 Windows 子进程 `PermissionError`。
+- 发布边界：源码版本已准备为 `v0.1.1`，但阶段 A 不创建标签、不声称新镜像已发布。`v0.1.0` 仍是已验证的历史公开镜像，digest 为 `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d`。阶段 B 只在合并后通过真实 GHCR 与匿名 smoke 门禁。
+- 用户操作边界：所有 Git add、commit、push、tag、PR、合并、双仓库同步和远端截图仍由用户执行；Agent 不读取、记录或输出 API key，也没有修改 `REFLECTION.md`。
