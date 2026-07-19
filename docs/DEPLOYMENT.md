@@ -85,21 +85,23 @@ specgate credentials clear openai-compatible
 
 ## 3. 本地 Docker 验证
 
-v0.1.0 是已验证的历史公开镜像，已经完成匿名拉取、CLI help、Mock Demo、RepoDigest 和 OCI revision 核对：
+`v0.1.1` 已发布并完成匿名拉取验证。当前公开 CLI 镜像的验证命令为：
 
 ```powershell
-docker pull ghcr.io/yugarden404/specgate:0.1.0
-docker run --rm ghcr.io/yugarden404/specgate:0.1.0 --help
+docker pull ghcr.io/yugarden404/specgate:0.1.1
+docker run --rm ghcr.io/yugarden404/specgate:0.1.1 --help
 docker run --rm `
   --env-file "$HOME\.specgate.env" `
   -v "D:\Projects\my-page:/workspace" `
-  ghcr.io/yugarden404/specgate:0.1.0 `
+  ghcr.io/yugarden404/specgate:0.1.1 `
   run /workspace
 ```
 
-CLI 容器使用 `SPECGATE_LLM_BASE_URL`、`SPECGATE_LLM_MODEL` 与 `OPENAI_COMPATIBLE_API_KEY`。`--env-file` 是 Docker 的输入文件，应放在仓库外且不得提交；SpecGate 本身不读取 `.env`。公开镜像的不可变 digest 为 `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d`。
+CLI 容器使用 `SPECGATE_LLM_BASE_URL`、`SPECGATE_LLM_MODEL` 与 `OPENAI_COMPATIBLE_API_KEY`。`--env-file` 是 Docker 的输入文件，应放在仓库外且不得提交；SpecGate 本身不读取 `.env`。
 
-源码版本 `0.1.1` 已进入阶段 A 发布准备，但 v0.1.1 尚未发布。在标签 workflow、Package Public、匿名 smoke、RepoDigest 和 OCI revision 全部成功之前，应从当前源码执行本地构建来验证 PR #27，不能把尚不存在的 `0.1.1`、`0.1` 或 `latest` 镜像描述为已发布。
+当前发布链是 PR #28 合并后的 `main@9cf9093`、[CI #69](https://github.com/YuGarden404/SpecGate/actions/runs/29678498485)、[Pages #39](https://github.com/YuGarden404/SpecGate/actions/runs/29678498457) 和 [GHCR #2](https://github.com/YuGarden404/SpecGate/actions/runs/29679264248)。镜像 `ghcr.io/yugarden404/specgate:0.1.1` 的不可变 RepoDigest 为 `sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f`，OCI revision 为 `9cf909341cd1a5feb8ed2b244ce31f0495016c4c`。一次性空 Docker 配置中的 pull、CLI help、Mock Demo 与 Web help 均退出码 0，临时配置已删除。
+
+`v0.1.0` 是已验证的历史公开镜像，其 `main@44b236f`、GHCR #1、digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 和五张历史证据图保持不变。公网交互式 Web 后端未部署；发布公开 CLI 镜像不等于部署公网交互式 Web 后端，使用 `--entrypoint specgate-web` 在本机启动也不构成公网部署。
 
 在仓库根目录构建镜像：
 
