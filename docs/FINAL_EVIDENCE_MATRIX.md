@@ -6,9 +6,9 @@
 
 ## 2. 最终版本快照
 
-- 当前主线基线：`main@5fd86fa`，最近已合并阶段为 PR #23。
-- 当前最终验证（2026-07-17 NJU SE Hub 审计分支）：`Ran 921 tests in 403.030s`、`OK (skipped=27)`，命令退出码为 0。
-- 当前远端证据：PR #23 合并后的 [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258) 与 [Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 均成功；列表截图见 `docs/evidence/github-actions-pr23-final.png`，job 详情截图见 `docs/evidence/github-actions-pr23-ci-detail.png` 与 `docs/evidence/github-actions-pr23-pages-detail.png`。
+- 当前主线基线：`main@44b236f`，最近已合并阶段为 PR #25。
+- 当前最终验证（2026-07-18 GHCR CLI 分发分支）：`Ran 947 tests in 227.115s`、`OK (skipped=27)`，命令退出码为 0。
+- 当前远端证据：PR #25 合并后的 [CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245)、[Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246) 与 `v0.1.0` 触发的 [GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933) 均成功；证据为 `docs/evidence/github-actions-pr25-ci-success.png`、`docs/evidence/github-actions-pr25-pages-success.png`、`docs/evidence/github-actions-ghcr-v0.1.0-success.png`、`docs/evidence/github-package-specgate-public.png` 与 `docs/evidence/ghcr-anonymous-pull-smoke.png`。
 - 执行归属历史：PR #18、PR #19、PR #20 均已记录主开发 Agent 为 OpenAI Codex，并区分人工参与与 Mock/Fake/Stub 自动测试边界。
 - 历史远端证据：PR #20 的 `main@c39d101`、[CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)、[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 与 `docs/evidence/github-actions-pr20-final.png` 继续保留，完整 job 映射见第 6 节。
 - 双仓库边界：SpecGate 是 CLI-first Harness；GitHub 开发主仓库保留 commit、PR、完整 GitHub Actions、Docker 构建与 Pages 证据，[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 只保留 `unit-test`。Pipeline #312781、#312784、#312797 的三次 `unit-test` 已通过，`docker-build` 分别暴露 DinD 权限、`gcr.io` 网络和 RootlessKit 权限限制；最终 [Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 在 `main@66ea825` 上通过，检查前改为 Public。
@@ -26,7 +26,7 @@
 | 本地交互式 WebUI | 已完成 | `Dockerfile`、Web 运行时与确定性测试 | Docker/本地启动与确定性测试 |
 | 公网交互式 Web 后端 | 待完成 | 后续独立部署阶段 | 任务 6 人工门禁之后另行部署与核验 |
 | Docker 本地与 CI 构建 | 已完成 | `Dockerfile`、`.github/workflows/ci.yml` | Docker build/smoke 与 GitHub Actions |
-| 公开容器 registry | 待完成 | `.github/workflows/ghcr.yml` 已实现版本发布，远端公开性待验证 | `v0.1.0` 发布、Package Public、匿名 pull 与 digest 均通过后再改为已完成 |
+| 公开容器 registry | 已完成 | `ghcr.io/yugarden404/specgate:0.1.0`、Public Package 与三张 GHCR 证据图 | 匿名 pull、CLI help、Mock Demo 与 RepoDigest 均已核验 |
 | 学生反思 | 已由学生确认 | `REFLECTION.md`、`docs/REFLECTION_FACT_CHECK.md` | PR #17 与学生确认记录 |
 
 ## 4. 核心机制
@@ -62,6 +62,8 @@
 | 最终交付合规 | `e34452c` | `2082fc9` | [#21](https://github.com/YuGarden404/SpecGate/pull/21) | 最终交付合规材料与完整验证 |
 | LLM 连接测试超时修复 | `a5861aa` | `3905e1e` | [#22](https://github.com/YuGarden404/SpecGate/pull/22) | 学校真实模型连接测试使用配置的请求超时 |
 | NJU SE Hub 真实 LLM 审计 | `5635ad2` | `5fd86fa` | [#23](https://github.com/YuGarden404/SpecGate/pull/23) | [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258)、[Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 与三张 PR #23 截图 |
+| 最终提交同步与双仓库交付 | `9c25621` | `7cecbb1` | [#24](https://github.com/YuGarden404/SpecGate/pull/24) | GitHub 最终材料与 NJU GitLab 成功证据同步 |
+| CLI 易用性与 GHCR 分发 | `f8c5c7a` | `44b236f` | [#25](https://github.com/YuGarden404/SpecGate/pull/25) | [CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245)、[Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246) 与 [GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933) |
 
 ## 6. CI 与截图说明
 
@@ -80,7 +82,7 @@
 - [CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238) → `main@c39d101` → `unit-test`、`docker-build` → 成功
 - [Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) → `main@c39d101` → `build-pages`、`deploy-pages` → 成功
 
-截图无凭据或账户敏感信息。该证据只证明当前 main 的自动测试、Docker CI 构建与静态 Pages 发布链成功；公网交互式 Web 后端和公开容器 registry 仍待后续独立阶段完成。
+截图无凭据或账户敏感信息。该历史证据在 PR #20 阶段只证明当时 main 的自动测试、Docker CI 构建与静态 Pages 发布链成功；当时公网交互式 Web 后端和公开容器 registry 均尚未完成。
 
 ![PR #23 合并后的 main CI 与 Pages](evidence/github-actions-pr23-final.png)
 
@@ -96,6 +98,26 @@ CI 详情截图显示总状态 `Success`，`unit-test` 和 `docker-build` 均成
 ![PR #23 合并后的 Pages job 详情](evidence/github-actions-pr23-pages-detail.png)
 
 Pages 详情截图显示总状态 `Success`，`build-pages` 和 `deploy-pages` 均成功，并产生 `github-pages` artifact。三张 PR #23 图片均通过 PNG 结构校验，未见 token、API key、密码或其他凭据。
+
+![PR #25 合并后的 CI #63](evidence/github-actions-pr25-ci-success.png)
+
+- [CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245) → `main@44b236f` → `unit-test`、`docker-build` → 成功
+
+![PR #25 合并后的 Pages #36](evidence/github-actions-pr25-pages-success.png)
+
+- [Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246) → `main@44b236f` → `build-pages`、`deploy-pages` → 成功
+
+![v0.1.0 GHCR workflow 成功](evidence/github-actions-ghcr-v0.1.0-success.png)
+
+[GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933) 由 `v0.1.0` 触发，绑定 `main@44b236f`，`publish-ghcr` 成功并输出镜像 `ghcr.io/yugarden404/specgate:0.1.0` 与 digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d`。
+
+![SpecGate GHCR Package 为 Public](evidence/github-package-specgate-public.png)
+
+[Package 页面](https://github.com/YuGarden404/SpecGate/pkgs/container/specgate) 显示 `specgate` 为 Public，并列出 `latest`、`0.1`、`0.1.0` 与 commit SHA 标签。
+
+![匿名拉取、CLI help、Mock Demo 与 digest](evidence/ghcr-anonymous-pull-smoke.png)
+
+一次性空 Docker 配置下，`docker pull`、CLI help 与 Mock Demo 的退出码均为 0，RepoDigest 与 GHCR Actions 输出完全一致。GHCR 公开镜像已完成匿名拉取验证；五张 PR #25/GHCR 图片均未见 token、API key、密码或其他凭据。公网交互式 Web 后端未部署。
 
 ![NJU GitLab 初始 Pipeline 失败](evidence/gitlab-pipeline-initial-failure.png)
 
@@ -159,11 +181,11 @@ node --check src/specgate/web_static/app.js
 git diff --check
 ```
 
-当前最终结果（2026-07-17 NJU SE Hub 审计分支）：
+当前最终结果（2026-07-18 GHCR CLI 分发分支）：
 
 - 文档与工作流契约：`Ran 20 tests in 0.065s`、`OK`，退出码 0。
 - 六项确定性机制：`Ran 6 tests in 47.709s`、`OK`，退出码 0。
-- 完整套件：`Ran 921 tests in 403.030s`、`OK (skipped=27)`，退出码 0。
+- 完整套件：`Ran 947 tests in 227.115s`、`OK (skipped=27)`，退出码 0。
 - `python -m compileall -q src tests`、`node --check src/specgate/web_static/app.js` 与 `git diff --check` 均退出码 0 且无错误输出。
 - `.env` 由 `.gitignore:8` 忽略，`.env` 提交历史为空；排除测试与实施计划后的疑似密钥模式扫描无命中。
 
@@ -174,7 +196,7 @@ git diff --check
 - 自动验收只使用 MockLLM/Fake/Stub，不访问真实 DNS、socket 或 Provider。
 - Web 默认使用 MockLLM；完整配置后新 run 可使用真实模型，Provider 失败不会降级。
 - GitHub Pages 仅为静态展示，真实模式需要部署 Web 后端、持久化数据库、凭据主密钥与 `SPECGATE_LLM_ALLOWED_HOSTS` 网络策略。
-- 本地交互式 WebUI 已具备显式 Docker 入口与确定性测试；GHCR 发布工作流已实现，远端公开性待验证，公开容器 registry 仍为待完成。公网交互式 Web 后端未部署；发布镜像不等于部署服务。
+- 本地交互式 WebUI 已具备显式 Docker 入口与确定性测试；公开容器 registry 已完成，GHCR 公开镜像已完成匿名拉取验证。公网交互式 Web 后端未部署；发布镜像不等于部署服务。
 - GitHub 是开发主仓库和完整测试、Docker 构建、Pages 的权威来源；NJU GitLab 课程镜像已创建为 Private，首次只同步 `main` 与 tags，检查前改为 Public。GitHub PR/Actions 不迁移为 GitLab 平台元数据；Pipeline #312781 的 DinD 权限失败、Pipeline #312784 的 `gcr.io` 超时和 Pipeline #312797 的 RootlessKit 权限失败均独立记录，最终 Pipeline #312806 的 `unit-test` 已通过。
 - 不开放 shell，不执行同源模型生成 HTML。
 - CLI 持久化凭据使用 OS keyring；Web 使用独立主密钥和 AES-256-GCM。
@@ -182,10 +204,10 @@ git diff --check
 - 旧 HMAC 只作为迁移来源，迁移后要求重新录入。
 - `REFLECTION.md` 的观点和最终文字由学生本人负责。
 
-## 10. 2026-07-18 CLI 与 GHCR 发布前证据
+## 10. 2026-07-18 CLI 与 GHCR 发布证据
 
 - CLI 用户配置：`src/specgate/user_config.py` 只保存 provider、Base URL 与 Model；API key 继续使用环境变量或操作系统 keyring。`specgate configure` 使用隐藏输入，`specgate run <工作区>` 自动解析命令行、环境变量和用户默认配置。
 - CLI-first 容器：`Dockerfile` 默认 `ENTRYPOINT ["specgate"]` 与 `CMD ["--help"]`；WebUI 通过 `--entrypoint specgate-web` 显式启动。常规 GitHub CI 同时定义 CLI help、Mock Demo 和 WebUI help smoke。
 - GHCR 工作流：`.github/workflows/ghcr.yml` 仅在版本标签或显式手动重发时推送 `ghcr.io/yugarden404/specgate`，使用 `contents: read` 与 `packages: write`，不读取 LLM API key。
-- 本地验证：实现前完整基线为 `Ran 926 tests in 228.716s`、`OK (skipped=27)`；配置/CLI 与 workflow 聚焦测试均已通过。本机 Docker 检查因 Docker daemon 未运行而无法执行真实 build/smoke，错误为 `docker_engine` named pipe 不存在；该项等待 GitHub `docker-build` job 验证。
-- 完成门禁：GHCR 发布工作流已实现，远端公开性待验证。版本标签、成功 Actions、Package Public、未登录页面、匿名 pull、CLI help、Mock Demo 和 digest 全部成立前，不得把公开容器 registry 标为已完成。
+- 本地验证：实现前完整基线为 `Ran 926 tests in 228.716s`、`OK (skipped=27)`；配置/CLI 与 workflow 聚焦测试均已通过。实现阶段本机 Docker daemon 未运行，曾因 `docker_engine` named pipe 不存在而无法执行真实 build/smoke；该缺口随后由 CI #63 的 `docker-build` 成功和匿名 GHCR smoke 补齐。
+- 完成门禁：`v0.1.0`、成功 Actions、Package Public、匿名 pull、CLI help、Mock Demo 和 digest 已全部成立，公开容器 registry 因而标为已完成。镜像分发不包含常驻服务，公网交互式 Web 后端未部署。

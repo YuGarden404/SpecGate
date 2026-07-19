@@ -1,6 +1,6 @@
 # SpecGate 最终提交检查清单
 
-当前证据口径：当前主线为 PR #23 合并后的 `main@5fd86fa`；当前最终验证为 `Ran 921 tests in 403.030s`、`OK (skipped=27)`，退出码 0。[CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258) 与 [Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 的精确链接和 job 详情截图已录入；PR #20 的历史运行链接和截图继续保留。
+当前证据口径：当前主线为 PR #25 合并后的 `main@44b236f`；当前最终验证为 `Ran 947 tests in 227.115s`、`OK (skipped=27)`，退出码 0。[CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245)、[Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246) 与 [GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933) 均成功；当前证据包为 `docs/evidence/github-actions-pr25-ci-success.png`、`docs/evidence/github-actions-pr25-pages-success.png`、`docs/evidence/github-actions-ghcr-v0.1.0-success.png`、`docs/evidence/github-package-specgate-public.png` 与 `docs/evidence/ghcr-anonymous-pull-smoke.png`。PR #20/#23 的历史运行链接和截图继续保留。
 
 ## 1. 项目定位
 
@@ -44,12 +44,13 @@ MVP 范围：
 | 历史 CI/Pages 截图（截至 PR #15/#17） | 已完成 | `docs/evidence/` 中的历史截图与第 5 节记录 |
 | PR #20 后 CI/Pages 与新截图 | 已完成 | [CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)、[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242)、`docs/evidence/github-actions-pr20-final.png` |
 | PR #23 后 CI/Pages 与新截图 | 已完成 | [CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258)、[Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221)、`docs/evidence/github-actions-pr23-final.png` 及两张 job 详情截图 |
+| PR #25 后 CI/Pages/GHCR 与新截图 | 已完成 | CI #63、Pages #36、GHCR #1、Public Package、匿名 pull 与五张当前截图 |
 | NJU GitLab 课程镜像 | CI 已通过 | [Private 项目](https://git.nju.edu.cn/YuyuanLiang/specgate)：[Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 在 `main@66ea825` 上只运行 `unit-test` 并通过；检查前改为 Public |
 | 公开静态评审入口 | 已完成 | GitHub Pages 首页、demo、报告 |
 | 本地交互式 WebUI | 已完成 | Docker/本地启动与确定性测试 |
 | 公网交互式 Web 后端 | 待完成 | 后续独立部署阶段 |
 | Docker 本地与 CI 构建 | 已完成 | `Dockerfile` 与 CI smoke |
-| 公开容器 registry | 待完成 | `.github/workflows/ghcr.yml` 已实现；等待 `v0.1.0`、Package Public、匿名 pull 与 digest |
+| 公开容器 registry | 已完成 | `ghcr.io/yugarden404/specgate:0.1.0` 已公开，匿名 pull/smoke 与 digest 已核验 |
 | AgentOS / Superpowers 对齐 | 已完成 | `skills/specgate-static-html-harness/SKILL.md`、`docs/AI4SE_Lab_9_12_Alignment.md` |
 | Lab 11 Hook sample | 已完成 | `hooks/pre-commit.sample`、`tests/test_hook_sample.py` |
 
@@ -101,6 +102,8 @@ MVP 范围：
 | 最终交付合规 | `e34452c` | `2082fc9` | [#21](https://github.com/YuGarden404/SpecGate/pull/21) |
 | LLM 连接测试超时修复 | `a5861aa` | `3905e1e` | [#22](https://github.com/YuGarden404/SpecGate/pull/22) |
 | NJU SE Hub 真实 LLM 审计 | `5635ad2` | `5fd86fa` | [#23](https://github.com/YuGarden404/SpecGate/pull/23) |
+| 最终提交同步与双仓库交付 | `9c25621` | `7cecbb1` | [#24](https://github.com/YuGarden404/SpecGate/pull/24) |
+| CLI 易用性与 GHCR 分发 | `f8c5c7a` | `44b236f` | [#25](https://github.com/YuGarden404/SpecGate/pull/25) |
 
 PR #12 合并后 Pages 曾因依赖缺失失败，PR #13 修复后恢复通过；该失败—修复历史保留在 `docs/FINAL_EVIDENCE_MATRIX.md` 和 `docs/evidence/` 中。用户已更新并核对 PR #18、PR #19、PR #20 的“执行归属”：三份描述均记录主开发 Agent 为 OpenAI Codex，并区分人工参与与自动测试边界。PR #20 合并后的来源链为：
 
@@ -116,6 +119,14 @@ PR #23 合并后的当前来源链为：
 
 列表截图见 `docs/evidence/github-actions-pr23-final.png`；job 详情截图见 `docs/evidence/github-actions-pr23-ci-detail.png` 与 `docs/evidence/github-actions-pr23-pages-detail.png`。CI/Pages 页面显示的 Node.js 20 弃用 warning 不改变本次成功状态。
 
+PR #25 合并与 `v0.1.0` 发布后的当前来源链为：
+
+- [CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245) → `main@44b236f` → `unit-test`、`docker-build` → 成功
+- [Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246) → `main@44b236f` → `build-pages`、`deploy-pages` → 成功
+- [GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933) → `v0.1.0@44b236f` → `publish-ghcr` → 成功
+
+GHCR 公开镜像已完成匿名拉取验证；镜像为 `ghcr.io/yugarden404/specgate:0.1.0`，digest 为 `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d`。五张证据图见本清单开头的当前证据包；公网交互式 Web 后端未部署。
+
 双仓库交付采用“GitHub 开发主仓库 + NJU GitLab 课程镜像”：GitHub 保留完整 commit、PR、GitHub PR/Actions、Docker 构建与 Pages 证据；GitLab 项目已创建为 Private，检查前改为 Public。Pipeline #312781 的 `docker-build` 因学校共享 Runner 不支持 privileged Docker-in-Docker 而失败；Pipeline #312784 因访问 `gcr.io` 出现 `context deadline exceeded`；Pipeline #312797 已成功拉取 BuildKit 镜像，但 RootlessKit 因 `operation not permitted` 无法启动。三次 `unit-test` 已通过，GitLab CI 随后只保留 `unit-test`。[Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 在 `main@66ea825` 上通过；[job #595758](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/595758) 记录 `Ran 926 tests in 33.684s`、`OK (skipped=18)`、CLI help 与 `Job succeeded`。GitLab Pipeline 已通过，且不等同于迁移 GitHub Actions。
 
 ## 6. 本地复现命令
@@ -127,11 +138,11 @@ $env:PYTHONPATH="src"
 python -m unittest discover -s tests -v
 ```
 
-2026-07-17 当前最终验证：
+2026-07-18 当前最终验证：
 
 - 文档与工作流契约：`Ran 20 tests in 0.065s`、`OK`，退出码 0。
 - 六项确定性机制：`Ran 6 tests in 47.709s`、`OK`，退出码 0。
-- 完整套件：`Ran 921 tests in 403.030s`、`OK (skipped=27)`，退出码 0。
+- 完整套件：`Ran 947 tests in 227.115s`、`OK (skipped=27)`，退出码 0。
 - Python 编译、JavaScript 语法和 Git 空白检查均退出码 0 且无错误输出。
 - `.env` 已被忽略且无提交历史；排除测试与实施计划后的疑似密钥模式扫描无命中。
 - 主线程只读浏览器复核首页、demo 和 report 均正常加载并显示预期标题与主标题；本地验证 Subagent 没有亲自浏览远端。
@@ -167,10 +178,10 @@ docker run --rm --entrypoint specgate-web specgate:local --help
 - 有可复现的 mock LLM 闭环。
 - 有单元测试和 CI。
 - 有 Dockerfile、本地交互式 WebUI 和确定性测试；这只证明本地与 CI 构建路径已完成。
-- 有公开静态 Pages 评审入口；GHCR 发布工作流已实现，远端公开性待验证，公开容器 registry 仍为待完成；公网交互式 Web 后端未部署。
+- 有公开静态 Pages 评审入口；GHCR 公开镜像已完成匿名拉取验证，公开容器 registry 已完成；公网交互式 Web 后端未部署。
 - 有过程文档、计划、反思和日志。
 - 有上下文、安全、工具三条工程主线。
 - 有 Lab 10 Skill 与 Lab 9-12 取舍说明。
-- GitHub 开发主仓库证据已同步到 PR #23；NJU GitLab 已记录三次共享 Runner 构建限制，unit-test-only Pipeline #312806 已通过并归档截图，只剩检查前 Public 切换。
+- GitHub 开发主仓库证据已同步到 PR #25；NJU GitLab 已记录三次共享 Runner 构建限制，unit-test-only Pipeline #312806 已通过并归档截图，只剩检查前 Public 切换与最终 main/tags 同步核验。
 
-后续阶段包括 GHCR 远端发布验证、公网交互式 Web 后端部署、更多 Provider 的人工兼容性验证和 AgentPack 草案；发布镜像不等于部署服务。当前已实现版本发布 workflow，但版本标签、Package Public 和匿名 pull 尚未验证，因此不能声称公开容器 registry 已完成；CI 与 Pages 成功也不代表公网交互式 Web 后端已经部署。真实 LLM Web 接入代码已经完成，但课程自动验收仍使用 Mock/Fake/Stub，`REFLECTION.md` 继续由学生本人维护。
+后续阶段包括公网交互式 Web 后端部署、更多 Provider 的人工兼容性验证和 AgentPack 草案；发布镜像不等于部署服务。当前公开容器 registry 已完成，但 CI、Pages 与 GHCR 成功都不代表公网交互式 Web 后端已经部署。真实 LLM Web 接入代码已经完成，但课程自动验收仍使用 Mock/Fake/Stub，`REFLECTION.md` 继续由学生本人维护。

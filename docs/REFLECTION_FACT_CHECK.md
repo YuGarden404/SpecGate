@@ -28,15 +28,15 @@
 
 ## 5. 最终证据
 
-- 截至 2026-07-17，当前主线为 PR #23 合并后的 `main@5fd86fa`；当前最终验证为 `Ran 921 tests in 403.030s`、`OK (skipped=27)`。
-- PR #23 合并后的远端证据已核验：[CI #59](https://github.com/YuGarden404/SpecGate/actions/runs/29566219258) 的 `unit-test`、`docker-build` 与 [Pages #34](https://github.com/YuGarden404/SpecGate/actions/runs/29566219221) 的 `build-pages`、`deploy-pages` 均成功；列表截图为 `docs/evidence/github-actions-pr23-final.png`，两张详情截图也已归档。
+- 截至 2026-07-18，当前主线为 PR #25 合并后的 `main@44b236f`；当前最终验证为 `Ran 947 tests in 227.115s`、`OK (skipped=27)`。
+- PR #25 合并与版本发布证据已核验：[CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245)、[Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246) 与 [GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933) 均成功；当前证据为 `docs/evidence/github-actions-pr25-ci-success.png`、`docs/evidence/github-actions-pr25-pages-success.png`、`docs/evidence/github-actions-ghcr-v0.1.0-success.png`、`docs/evidence/github-package-specgate-public.png` 与 `docs/evidence/ghcr-anonymous-pull-smoke.png`。
 - 当前实现事实：Web 默认 Mock；API key、Base URL、Model 完整后新 run 使用真实模型；Provider 失败不会降级；课程自动测试仍使用 Fake/Stub 且不访问网络。
 - 历史证据继续保留：PR #20 合并后的 `main@c39d101` 对应 CI #53、Pages #31 与 `docs/evidence/github-actions-pr20-final.png`，状态均为已完成、已核验。
 - 双仓库边界：SpecGate 是 CLI-first Harness；GitHub 开发主仓库保存 PR/Actions、Docker 构建与 Pages 历史，[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 已创建为 Private。Pipeline #312781、#312784、#312797 的三次 `unit-test` 已通过；容器构建分别受 DinD privileged、`gcr.io` 超时和 RootlessKit `operation not permitted` 限制。GitLab CI 随后只保留 `unit-test`；[Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 在 `main@66ea825` 上通过，[job #595758](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/595758) 记录 `Ran 926 tests in 33.684s`、`OK (skipped=18)`。GitLab Pipeline 已通过，检查前再改为 Public。
-- 部署边界：GHCR 发布工作流已实现，远端公开性待验证；版本标签、Package Public 与匿名 pull 完成前，公开容器 registry 仍为待完成。公网交互式 Web 后端未部署，发布镜像不等于部署服务。
+- 部署边界：GHCR 公开镜像已完成匿名拉取验证；`ghcr.io/yugarden404/specgate:0.1.0` 的 digest 为 `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d`，公开容器 registry 已完成。公网交互式 Web 后端未部署，发布镜像不等于部署服务。
 - PR #12 合并后一度出现 Pages 依赖失败，PR #13 修复；这是适合人工反思的“验证发现真实交付缺口”案例。
 - 当前机械检查：全文为 2430 个非空白字符，位于 1500–2500 要求内。
 - 当前事实检查：“未来 provider”已经改为 NJU SE Hub 四模型真实验证后的实际理解。
 - 可选案例：PR #22 的连接测试假超时修复，或 GitHub/NJU GitLab 双仓库决策带来的判断变化。
-- 教师未回复前，不得声称公网交互式 Web 后端已获豁免或已经完成；公开容器 registry 也必须等远端证据成立后才能改为已完成。
+- 教师未回复前，不得声称公网交互式 Web 后端已获豁免或已经完成；公开 registry 的完成证据不能替代 Web 后端部署证据。
 - 请学生本人确认“AI 只参与润色和结构整理”的声明与实际使用方式一致。
