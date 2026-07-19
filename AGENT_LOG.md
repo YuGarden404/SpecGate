@@ -1036,3 +1036,12 @@
 - Docker/CI TDD：默认入口与 smoke 契约先对 WebUI-first Dockerfile 失败；实现 CLI-first Dockerfile 后 workflow 测试通过。本机 Docker daemon 未运行，`docker_engine` named pipe 不存在，另有 Docker config 访问拒绝 warning，因此未声称本地 build/smoke 成功，等待 GitHub `docker-build` 远端验证。
 - GHCR TDD：发布 workflow 文件缺失时得到预期 RED；新增版本校验、最小权限、`linux/amd64`、四类标签、OCI revision、push 后 smoke 与 digest summary，5 项 workflow 测试和 PyYAML 解析通过。
 - 当前边界：GHCR 发布工作流已实现，远端公开性待验证。尚未创建 `v0.1.0`、未把 Package 设置为 Public、未完成匿名 pull，也未部署公网交互式 Web 后端。
+
+## 2026-07-19 GHCR 发布后证据同步
+
+- 发布基线：PR #25 已合并到 `main@44b236f`，功能分支最终验证为 `Ran 947 tests in 227.115s`、`OK (skipped=27)`；`v0.1.0` 指向同一 merge commit。
+- 远端结果：[CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245) 的 `unit-test`、`docker-build`，[Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246) 的 `build-pages`、`deploy-pages`，以及 [GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933) 的 `publish-ghcr` 均成功。
+- 公开验证：GitHub Package 页面显示 Public；一次性空 Docker 配置下，`ghcr.io/yugarden404/specgate:0.1.0` 的匿名 pull、CLI help 与 Mock Demo 均以退出码 0 完成。Actions 与 RepoDigest 一致，均为 `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d`。GHCR 公开镜像已完成匿名拉取验证。
+- 证据归档：`docs/evidence/github-actions-pr25-ci-success.png`、`docs/evidence/github-actions-pr25-pages-success.png`、`docs/evidence/github-actions-ghcr-v0.1.0-success.png`、`docs/evidence/github-package-specgate-public.png` 与 `docs/evidence/ghcr-anonymous-pull-smoke.png` 均与页面或终端输出匹配，未见 API key、token 或密码。
+- TDD RED：证据契约先要求 PR #24/#25 发布链、PR #25 三个 workflow 映射、Public registry、精确 digest 与五张图片；同步前 4 项聚焦测试按预期因旧状态和缺少当前证据失败。
+- 部署边界：公开容器 registry 已完成；公网交互式 Web 后端未部署，发布镜像不等于部署服务。证据 PR 合并后仍需由用户把最终 `main` 与 tags 同步到 NJU GitLab，并核对新的 unit-test Pipeline。

@@ -41,6 +41,11 @@ SCREENSHOTS = (
     ROOT / "docs" / "evidence" / "gitlab-jobs-312806-success.png",
     ROOT / "docs" / "evidence" / "gitlab-pipeline-312806-success.png",
     ROOT / "docs" / "evidence" / "gitlab-unit-test-595758-success.png",
+    ROOT / "docs" / "evidence" / "github-actions-ghcr-v0.1.0-success.png",
+    ROOT / "docs" / "evidence" / "github-package-specgate-public.png",
+    ROOT / "docs" / "evidence" / "ghcr-anonymous-pull-smoke.png",
+    ROOT / "docs" / "evidence" / "github-actions-pr25-ci-success.png",
+    ROOT / "docs" / "evidence" / "github-actions-pr25-pages-success.png",
 )
 KEY_EVIDENCE_PATHS = (
     "src/specgate/runner.py",
@@ -78,8 +83,8 @@ def read_text(relative: str) -> str:
 
 def extract_current_final_run(snapshot: str) -> tuple[str, str, float]:
     pattern = re.compile(
-        r"^- 当前最终验证（2026-07-17 NJU SE Hub 审计分支）：`"
-        r"(?P<result>Ran 921 tests in (?P<duration>[0-9]+(?:\.[0-9]+)?)s)`、"
+        r"^- 当前最终验证（2026-07-18 GHCR CLI 分发分支）：`"
+        r"(?P<result>Ran 947 tests in (?P<duration>[0-9]+(?:\.[0-9]+)?)s)`、"
         r"`OK \(skipped=27\)`，命令退出码为 0。$",
         re.MULTILINE,
     )
@@ -508,6 +513,8 @@ class FinalEvidenceTests(unittest.TestCase):
             (21, "e34452c", "2082fc9"),
             (22, "a5861aa", "3905e1e"),
             (23, "5635ad2", "5fd86fa"),
+            (24, "9c25621", "7cecbb1"),
+            (25, "f8c5c7a", "44b236f"),
         )
         for pr, feature_commit, merge_commit in releases:
             with self.subTest(pr=pr):
@@ -583,7 +590,13 @@ class FinalEvidenceTests(unittest.TestCase):
         )
         for document, section in current_delivery_sections.items():
             with self.subTest(document=document, boundary="deployment claims"):
-                self.assertEqual(find_affirmative_public_deployment_claims(section), ())
+                claims = find_affirmative_public_deployment_claims(section)
+                for claim in claims:
+                    normalized = claim.lower()
+                    self.assertTrue(
+                        "registry" in normalized or "ghcr" in normalized,
+                        msg=f"unexpected public backend claim: {claim}",
+                    )
 
     def test_pr23_remote_evidence_is_structurally_bound(self):
         expected_images = (
@@ -619,7 +632,49 @@ class FinalEvidenceTests(unittest.TestCase):
                 with self.subTest(document=document, mapping=mapping):
                     self.assertIn(mapping, section)
 
-    def test_pr18_through_pr23_release_rows_are_exact_and_unique(self):
+    def test_pr25_remote_evidence_is_structurally_bound(self):
+        expected_images = (
+            "evidence/github-actions-ghcr-v0.1.0-success.png",
+            "evidence/github-package-specgate-public.png",
+            "evidence/ghcr-anonymous-pull-smoke.png",
+            "evidence/github-actions-pr25-ci-success.png",
+            "evidence/github-actions-pr25-pages-success.png",
+        )
+        image_targets = markdown_image_targets_in_section(
+            "docs/FINAL_EVIDENCE_MATRIX.md",
+            "## 6. CI 与截图说明",
+        )
+        for image_target in expected_images:
+            with self.subTest(image=image_target):
+                self.assertEqual(image_targets.count(image_target), 1)
+
+        expected_run_mappings = (
+            "[CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245)"
+            " → `main@44b236f` → `unit-test`、`docker-build` → 成功",
+            "[Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246)"
+            " → `main@44b236f` → `build-pages`、`deploy-pages` → 成功",
+        )
+        remote_sections = {
+            "matrix": markdown_section(
+                "docs/FINAL_EVIDENCE_MATRIX.md",
+                "## 6. CI 与截图说明",
+            ),
+            "checklist": markdown_section(
+                "docs/FINAL_SUBMISSION_CHECKLIST.md",
+                "## 5. Git / PR / CI 证据链",
+            ),
+        }
+        for document, section in remote_sections.items():
+            for mapping in expected_run_mappings:
+                with self.subTest(document=document, mapping=mapping):
+                    self.assertIn(mapping, section)
+            with self.subTest(document=document, mapping="GHCR #1"):
+                self.assertIn(
+                    "[GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933)",
+                    section,
+                )
+
+    def test_pr18_through_pr25_release_rows_are_exact_and_unique(self):
         matrix = MATRIX.read_text(encoding="utf-8")
         heading = "## 5. 最近阶段 Git / PR / CI"
         self.assertIn(heading, matrix)
@@ -703,6 +758,20 @@ class FinalEvidenceTests(unittest.TestCase):
                 23,
                 "https://github.com/YuGarden404/SpecGate/pull/23",
             ),
+            (
+                "最终提交同步与双仓库交付",
+                "9c25621",
+                "7cecbb1",
+                24,
+                "https://github.com/YuGarden404/SpecGate/pull/24",
+            ),
+            (
+                "CLI 易用性与 GHCR 分发",
+                "f8c5c7a",
+                "44b236f",
+                25,
+                "https://github.com/YuGarden404/SpecGate/pull/25",
+            ),
         )
         for expected in expected_releases:
             with self.subTest(pr=expected[3]):
@@ -714,15 +783,15 @@ class FinalEvidenceTests(unittest.TestCase):
                         msg=f"release field is not unique: {value}",
                     )
 
-    def test_final_snapshot_uses_pr23_main_and_latest_verification(self):
+    def test_final_snapshot_uses_pr25_main_and_latest_verification(self):
         matrix = MATRIX.read_text(encoding="utf-8")
         snapshot = matrix.split("## 3. 课程交付物", 1)[0]
-        self.assertIn("main@5fd86fa", snapshot)
-        self.assertIn("PR #23", snapshot)
+        self.assertIn("main@44b236f", snapshot)
+        self.assertIn("PR #25", snapshot)
         self.assertIn("当前最终验证", snapshot)
         current_line, current_run, duration = extract_current_final_run(snapshot)
         self.assertEqual(snapshot.count(current_line), 1)
-        self.assertEqual(current_run.split(" in ", 1)[0], "Ran 921 tests")
+        self.assertEqual(current_run, "Ran 947 tests in 227.115s")
         self.assertGreater(duration, 0)
         frozen_run_materials = {
             "checklist": read_text("docs/FINAL_SUBMISSION_CHECKLIST.md"),
@@ -738,9 +807,12 @@ class FinalEvidenceTests(unittest.TestCase):
             with self.subTest(document=document, boundary="same frozen final run"):
                 self.assertIn(current_run, section)
         self.assertNotIn("最终测试数字将在本阶段结束时刷新", snapshot)
-        self.assertIn("CI #59", snapshot)
-        self.assertIn("Pages #34", snapshot)
-        self.assertIn("github-actions-pr23-final.png", snapshot)
+        self.assertIn("CI #63", snapshot)
+        self.assertIn("Pages #36", snapshot)
+        self.assertIn("GHCR #1", snapshot)
+        self.assertIn("github-actions-pr25-ci-success.png", snapshot)
+        self.assertIn("github-actions-pr25-pages-success.png", snapshot)
+        self.assertIn("github-actions-ghcr-v0.1.0-success.png", snapshot)
         self.assertNotIn("最近已合并功能修复：PR #20", snapshot)
         self.assertNotIn("当前未提交分支", snapshot)
 
@@ -761,13 +833,18 @@ class FinalEvidenceTests(unittest.TestCase):
             )[1],
         }
         current_phrases = (
-            "main@5fd86fa",
-            "PR #23",
-            "Ran 921 tests in 403.030s",
+            "main@44b236f",
+            "PR #25",
+            "Ran 947 tests in 227.115s",
             "OK (skipped=27)",
-            "CI #59",
-            "Pages #34",
-            "docs/evidence/github-actions-pr23-final.png",
+            "CI #63",
+            "Pages #36",
+            "GHCR #1",
+            "docs/evidence/github-actions-pr25-ci-success.png",
+            "docs/evidence/github-actions-pr25-pages-success.png",
+            "docs/evidence/github-actions-ghcr-v0.1.0-success.png",
+            "docs/evidence/github-package-specgate-public.png",
+            "docs/evidence/ghcr-anonymous-pull-smoke.png",
         )
         for document, section in current_sections.items():
             for phrase in current_phrases:
@@ -824,7 +901,7 @@ class FinalEvidenceTests(unittest.TestCase):
             "已核验",
             "公网交互式 Web 后端",
             "公开容器 registry",
-            "待完成",
+            "公网交互式 Web 后端未部署",
         ):
             with self.subTest(document="reflection facts", phrase=phrase):
                 self.assertIn(phrase, reflection_facts)
@@ -848,7 +925,8 @@ class FinalEvidenceTests(unittest.TestCase):
 
         self.assertNotIn("GitHub Actions 已迁移到 GitLab", combined)
         self.assertNotIn("公网交互式 Web 后端 | 已完成", combined)
-        self.assertNotIn("公开容器 registry | 已完成", combined)
+        self.assertIn("公开容器 registry | 已完成", combined)
+        self.assertNotIn("公网交互式 Web 后端 | 已完成", combined)
 
     def test_nju_gitlab_pipeline_history_and_final_success_are_recorded_truthfully(self):
         combined = "\n".join(
@@ -1051,13 +1129,13 @@ class FinalEvidenceTests(unittest.TestCase):
                 self.assertIn(phrase, combined)
         self.assertNotIn("支持 `.env` fallback", combined)
 
-    def test_submission_docs_do_not_claim_public_backend_or_registry(self):
+    def test_submission_docs_distinguish_public_registry_from_backend(self):
         expected_delivery_statuses = {
             "公开静态评审入口": "已完成",
             "本地交互式 WebUI": "已完成",
             "公网交互式 Web 后端": "待完成",
             "Docker 本地与 CI 构建": "已完成",
-            "公开容器 registry": "待完成",
+            "公开容器 registry": "已完成",
         }
         tables = {
             "checklist": (
@@ -1165,13 +1243,36 @@ class FinalEvidenceTests(unittest.TestCase):
             )
         )
         self.assertIn(
-            "GHCR 发布工作流已实现，远端公开性待验证",
-            factual,
-        )
-        self.assertNotIn(
             "GHCR 公开镜像已完成匿名拉取验证",
             factual,
         )
+
+    def test_public_ghcr_evidence_is_bound_without_claiming_backend_deployment(self):
+        combined = "\n".join(
+            read_text(path)
+            for path in (
+                "README.md",
+                "PLAN.md",
+                "AGENT_LOG.md",
+                "docs/FINAL_EVIDENCE_MATRIX.md",
+                "docs/FINAL_SUBMISSION_CHECKLIST.md",
+                "docs/REFLECTION_FACT_CHECK.md",
+            )
+        )
+        for phrase in (
+            "ghcr.io/yugarden404/specgate:0.1.0",
+            "GHCR 公开镜像已完成匿名拉取验证",
+            "sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d",
+            "docs/evidence/github-actions-ghcr-v0.1.0-success.png",
+            "docs/evidence/github-package-specgate-public.png",
+            "docs/evidence/ghcr-anonymous-pull-smoke.png",
+            "docs/evidence/github-actions-pr25-ci-success.png",
+            "docs/evidence/github-actions-pr25-pages-success.png",
+            "公网交互式 Web 后端未部署",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, combined)
+        self.assertNotIn("公网交互式 Web 后端 | 已完成", combined)
 
     def test_matrix_references_existing_implementation_and_test_paths(self):
         matrix = MATRIX.read_text(encoding="utf-8")
