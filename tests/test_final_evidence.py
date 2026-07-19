@@ -81,22 +81,23 @@ def read_text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
-def extract_current_final_run(snapshot: str) -> tuple[str, str, float]:
+def extract_teacher_verified_run(snapshot: str) -> tuple[str, str, float]:
     pattern = re.compile(
-        r"^- 当前最终验证（2026-07-18 GHCR CLI 分发分支）：`"
-        r"(?P<result>Ran 947 tests in (?P<duration>[0-9]+(?:\.[0-9]+)?)s)`、"
-        r"`OK \(skipped=27\)`，命令退出码为 0。$",
+        r"^- 教师已验证源码基线（2026-07-19）：`"
+        r"(?P<result>Ran 954 tests in (?P<duration>[0-9]+(?:\.[0-9]+)?)s)`、"
+        r"`OK \(skipped=27\)`，退出码 0。$",
         re.MULTILINE,
     )
     matches = list(pattern.finditer(snapshot))
     if len(matches) != 1:
         raise AssertionError(
-            f"expected one current final run in matrix snapshot, found {len(matches)}"
+            "expected one teacher-verified run in matrix snapshot, "
+            f"found {len(matches)}"
         )
     match = matches[0]
     duration = float(match.group("duration"))
     if duration <= 0:
-        raise AssertionError("current final run duration must be positive")
+        raise AssertionError("teacher-verified run duration must be positive")
     return match.group(0), match.group("result"), duration
 
 
@@ -674,7 +675,7 @@ class FinalEvidenceTests(unittest.TestCase):
                     section,
                 )
 
-    def test_pr18_through_pr25_release_rows_are_exact_and_unique(self):
+    def test_pr18_through_pr27_release_rows_are_exact_and_unique(self):
         matrix = MATRIX.read_text(encoding="utf-8")
         heading = "## 5. 最近阶段 Git / PR / CI"
         self.assertIn(heading, matrix)
@@ -772,6 +773,20 @@ class FinalEvidenceTests(unittest.TestCase):
                 25,
                 "https://github.com/YuGarden404/SpecGate/pull/25",
             ),
+            (
+                "GHCR 公开镜像发布证据",
+                "ee97b3d",
+                "fce51a0",
+                26,
+                "https://github.com/YuGarden404/SpecGate/pull/26",
+            ),
+            (
+                "Windows 并发锁竞态修复与反思",
+                "2999599",
+                "6dbaa75",
+                27,
+                "https://github.com/YuGarden404/SpecGate/pull/27",
+            ),
         )
         for expected in expected_releases:
             with self.subTest(pr=expected[3]):
@@ -783,41 +798,66 @@ class FinalEvidenceTests(unittest.TestCase):
                         msg=f"release field is not unique: {value}",
                     )
 
-    def test_final_snapshot_uses_pr25_main_and_latest_verification(self):
+    def test_final_snapshot_uses_pr27_teacher_verified_baseline(self):
         matrix = MATRIX.read_text(encoding="utf-8")
         snapshot = matrix.split("## 3. 课程交付物", 1)[0]
-        self.assertIn("main@44b236f", snapshot)
-        self.assertIn("PR #25", snapshot)
-        self.assertIn("当前最终验证", snapshot)
-        current_line, current_run, duration = extract_current_final_run(snapshot)
-        self.assertEqual(snapshot.count(current_line), 1)
-        self.assertEqual(current_run, "Ran 947 tests in 227.115s")
+        self.assertIn("main@6dbaa75", snapshot)
+        self.assertIn("PR #27", snapshot)
+        teacher_line, teacher_run, duration = extract_teacher_verified_run(snapshot)
+        self.assertEqual(snapshot.count(teacher_line), 1)
+        self.assertEqual(teacher_run, "Ran 954 tests in 213.679s")
         self.assertGreater(duration, 0)
-        frozen_run_materials = {
+        plan = read_text("PLAN.md")
+        agent_log = read_text("AGENT_LOG.md")
+        plan_heading = "# 2026-07-19 最终使用文档与 v0.1.1 发布准备"
+        agent_log_heading = "## 2026-07-19 最终使用文档与 v0.1.1 发布准备"
+        self.assertIn(plan_heading, plan)
+        self.assertIn(agent_log_heading, agent_log)
+        teacher_baseline_materials = {
             "checklist": read_text("docs/FINAL_SUBMISSION_CHECKLIST.md"),
-            "plan": read_text("PLAN.md").split(
-                "# 2026-07-17 最终提交同步与双仓库交付", 1
-            )[1],
-            "agent log": read_text("AGENT_LOG.md").split(
-                "## 2026-07-17 最终提交同步与双仓库交付",
-                1,
-            )[1],
+            "plan": plan.split(plan_heading, 1)[1],
+            "agent log": agent_log.split(agent_log_heading, 1)[1],
         }
-        for document, section in frozen_run_materials.items():
-            with self.subTest(document=document, boundary="same frozen final run"):
-                self.assertIn(current_run, section)
+        for document, section in teacher_baseline_materials.items():
+            with self.subTest(document=document, boundary="teacher baseline"):
+                self.assertIn(teacher_run, section)
         self.assertNotIn("最终测试数字将在本阶段结束时刷新", snapshot)
-        self.assertIn("CI #63", snapshot)
-        self.assertIn("Pages #36", snapshot)
-        self.assertIn("GHCR #1", snapshot)
-        self.assertIn("github-actions-pr25-ci-success.png", snapshot)
-        self.assertIn("github-actions-pr25-pages-success.png", snapshot)
-        self.assertIn("github-actions-ghcr-v0.1.0-success.png", snapshot)
+        self.assertIn("CI #67", snapshot)
+        self.assertIn("Pages #38", snapshot)
+        self.assertIn("Pipeline #313088", snapshot)
+        self.assertIn("job #596503", snapshot)
         self.assertNotIn("最近已合并功能修复：PR #20", snapshot)
         self.assertNotIn("当前未提交分支", snapshot)
+        stage_a_result = "Ran 954 tests in 418.617s"
+        stage_a_rerun = "Ran 954 tests in 417.907s"
+        teacher_result = "Ran 954 tests in 213.679s"
+        materials = {
+            "matrix": read_text("docs/FINAL_EVIDENCE_MATRIX.md"),
+            "checklist": read_text("docs/FINAL_SUBMISSION_CHECKLIST.md"),
+            "reflection facts": read_text("docs/REFLECTION_FACT_CHECK.md"),
+            "plan": read_text("PLAN.md").split(
+                "# 2026-07-19 最终使用文档与 v0.1.1 发布准备", 1
+            )[1],
+            "agent log": read_text("AGENT_LOG.md").split(
+                "## 2026-07-19 最终使用文档与 v0.1.1 发布准备", 1
+            )[1],
+        }
+        for document, section in materials.items():
+            with self.subTest(document=document):
+                self.assertIn("阶段 A 发布准备分支验证", section)
+                self.assertIn(stage_a_result, section)
+                self.assertIn(stage_a_rerun, section)
+                self.assertIn("OK (skipped=27)", section)
+                self.assertIn(teacher_result, section)
 
     def test_current_release_status_is_consistent_across_factual_materials(self):
-        current_sections = {
+        plan = read_text("PLAN.md")
+        agent_log = read_text("AGENT_LOG.md")
+        plan_heading = "# 2026-07-19 最终使用文档与 v0.1.1 发布准备"
+        agent_log_heading = "## 2026-07-19 最终使用文档与 v0.1.1 发布准备"
+        self.assertIn(plan_heading, plan)
+        self.assertIn(agent_log_heading, agent_log)
+        teacher_sections = {
             "matrix": MATRIX.read_text(encoding="utf-8").split(
                 "## 3. 课程交付物", 1
             )[0],
@@ -825,33 +865,27 @@ class FinalEvidenceTests(unittest.TestCase):
             "reflection facts": read_text("docs/REFLECTION_FACT_CHECK.md").split(
                 "## 5. 最终证据", 1
             )[1],
-            "plan": read_text("PLAN.md").split(
-                "# 2026-07-17 最终提交同步与双仓库交付", 1
-            )[1],
-            "agent log": read_text("AGENT_LOG.md").split(
-                "## 2026-07-17 最终提交同步与双仓库交付", 1
-            )[1],
+            "plan": plan.split(plan_heading, 1)[1],
+            "agent log": agent_log.split(agent_log_heading, 1)[1],
         }
-        current_phrases = (
-            "main@44b236f",
-            "PR #25",
-            "Ran 947 tests in 227.115s",
+        teacher_facts = (
+            "main@6dbaa75",
+            "PR #27",
+            "Ran 954 tests in 213.679s",
             "OK (skipped=27)",
-            "CI #63",
-            "Pages #36",
-            "GHCR #1",
-            "docs/evidence/github-actions-pr25-ci-success.png",
-            "docs/evidence/github-actions-pr25-pages-success.png",
-            "docs/evidence/github-actions-ghcr-v0.1.0-success.png",
-            "docs/evidence/github-package-specgate-public.png",
-            "docs/evidence/ghcr-anonymous-pull-smoke.png",
+            "CI #67",
+            "Pages #38",
+            "Pipeline #313088",
+            "job #596503",
+            "glm-5.2",
+            "passed=True, steps=2",
+            "v0.1.1",
         )
-        for document, section in current_sections.items():
-            for phrase in current_phrases:
+        for document, section in teacher_sections.items():
+            for phrase in teacher_facts:
                 with self.subTest(document=document, phrase=phrase):
                     self.assertIn(phrase, section)
 
-        agent_log = read_text("AGENT_LOG.md")
         task_6_heading = "## 2026-07-16 最终交付合规修复：任务 6 远端证据门禁"
         self.assertIn(task_6_heading, agent_log)
         verified_sections = {
@@ -917,13 +951,14 @@ class FinalEvidenceTests(unittest.TestCase):
             "NJU GitLab 课程镜像",
             "GitHub PR/Actions",
             "GitLab Pipeline",
-            "Private",
-            "检查前改为 Public",
+            "公开可克隆",
+            "已公开",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, combined)
 
         self.assertNotIn("GitHub Actions 已迁移到 GitLab", combined)
+        self.assertNotIn("检查前改为 Public", combined)
         self.assertNotIn("公网交互式 Web 后端 | 已完成", combined)
         self.assertIn("公开容器 registry | 已完成", combined)
         self.assertNotIn("公网交互式 Web 后端 | 已完成", combined)
@@ -941,7 +976,7 @@ class FinalEvidenceTests(unittest.TestCase):
 
         for phrase in (
             "https://git.nju.edu.cn/YuyuanLiang/specgate",
-            "Private",
+            "已公开",
             "main@5fd86fa",
             "Pipeline #312781",
             "Pipeline #312784",
@@ -1220,17 +1255,52 @@ class FinalEvidenceTests(unittest.TestCase):
         deployment = read_text("docs/DEPLOYMENT.md")
         combined = "\n".join((readme, deployment))
         for phrase in (
+            "https://github.com/YuGarden404/SpecGate.git",
+            "https://git.nju.edu.cn/YuyuanLiang/specgate.git",
+            "python -m venv .venv",
+            ".\\.venv\\Scripts\\Activate.ps1",
+            "python -m pip install -e .",
+            "TASK_SPEC.md",
+            "CHECKLIST.md",
+            "specgate run-mock-demo",
             "specgate configure",
-            "specgate run <工作区>",
+            '$Workspace = Join-Path $env:TEMP "specgate-teacher-demo"',
+            "Copy-Item .\\examples\\knowledge_nav\\TASK_SPEC.md",
+            "Copy-Item .\\examples\\knowledge_nav\\CHECKLIST.md",
+            "specgate run $Workspace",
+            "specgate credentials clear openai-compatible",
+            "specgate-web --host 127.0.0.1 --port 8000",
+            "docker build -t specgate:local .",
             "SPECGATE_LLM_BASE_URL",
             "SPECGATE_LLM_MODEL",
             "OPENAI_COMPATIBLE_API_KEY",
             "ghcr.io/yugarden404/specgate:0.1.0",
+            "v0.1.1",
             "--entrypoint specgate-web",
             "发布镜像不等于部署服务",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, combined)
+        self.assertIn("v0.1.0 是已验证的历史公开镜像", combined)
+        self.assertIn("v0.1.1 尚未发布", combined)
+        self.assertNotIn("specgate run <工作区>", combined)
+        self.assertNotIn(r"D:\path\to\workspace", combined)
+        credential_section = readme.split("## CLI 凭据管理", 1)[1].split(
+            "\n## ", 1
+        )[0]
+        for phrase in (
+            '$Workspace = Join-Path $env:TEMP "specgate-teacher-demo"',
+            'Test-Path (Join-Path $Workspace "TASK_SPEC.md")',
+            "specgate run $Workspace",
+        ):
+            with self.subTest(section="CLI 凭据管理", phrase=phrase):
+                self.assertIn(phrase, credential_section)
+        for false_claim in (
+            "v0.1.1 已发布",
+            "v0.1.1 已完成匿名拉取验证",
+        ):
+            with self.subTest(false_claim=false_claim):
+                self.assertNotIn(false_claim, combined)
 
         factual = "\n".join(
             read_text(path)
@@ -1345,12 +1415,17 @@ class FinalEvidenceTests(unittest.TestCase):
 
     def test_reflection_is_student_owned_in_range_and_factually_current(self):
         reflection = read_text("REFLECTION.md")
+        guide = REFLECTION_GUIDE.read_text(encoding="utf-8")
         compact = re.sub(r"\s+", "", reflection)
 
         self.assertIn("本文件由学生本人完成", reflection)
         self.assertGreaterEqual(len(compact), 1500)
         self.assertLessEqual(len(compact), 2500)
         self.assertNotIn("未来 provider", reflection)
+        self.assertIn(
+            f"当前机械检查：全文为 {len(compact)} 个非空白字符",
+            guide,
+        )
 
 
 if __name__ == "__main__":

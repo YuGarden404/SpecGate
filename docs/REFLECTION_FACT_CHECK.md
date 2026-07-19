@@ -28,14 +28,18 @@
 
 ## 5. 最终证据
 
-- 截至 2026-07-18，当前主线为 PR #25 合并后的 `main@44b236f`；当前最终验证为 `Ran 947 tests in 227.115s`、`OK (skipped=27)`。
-- PR #25 合并与版本发布证据已核验：[CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245)、[Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246) 与 [GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933) 均成功；当前证据为 `docs/evidence/github-actions-pr25-ci-success.png`、`docs/evidence/github-actions-pr25-pages-success.png`、`docs/evidence/github-actions-ghcr-v0.1.0-success.png`、`docs/evidence/github-package-specgate-public.png` 与 `docs/evidence/ghcr-anonymous-pull-smoke.png`。
+- 截至 2026-07-19，教师已验证源码基线为 PR #27 合并后的 `main@6dbaa75`；空目录克隆全量验证为 `Ran 954 tests in 213.679s`、`OK (skipped=27)`，退出码 0。
+- 阶段 A 发布准备分支验证为 `Ran 954 tests in 418.617s`、`OK (skipped=27)`，退出码 0；这是文档与版本准备分支的独立观测，不替换教师基线。
+- 阶段 A 发布准备分支验证在同步证据后独立复跑为 `Ran 954 tests in 417.907s`、`OK (skipped=27)`，退出码 0；两次运行数量和跳过数一致。
+- PR #27 远端源码证据已核验：CI #67、Pages #38 与 NJU Pipeline #313088 / job #596503 均成功。
+- Mock 工作区 smoke 以退出码 0 完成，Gate 通过且 trust 为 `trusted`。真实 CLI smoke 使用 `glm-5.2`，结果为 `passed=True, steps=2`、最终 Gate 通过、`parse_errors=0`；测试后已清除 keyring 凭据。
+- 项目版本已经准备为 `v0.1.1`，但阶段 A 不声称新标签或镜像已发布。`v0.1.0` 是已验证的历史公开镜像；PR #25 合并与历史发布证据继续保留：[CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245)、[Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246) 与 [GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933) 均成功；证据为 `docs/evidence/github-actions-pr25-ci-success.png`、`docs/evidence/github-actions-pr25-pages-success.png`、`docs/evidence/github-actions-ghcr-v0.1.0-success.png`、`docs/evidence/github-package-specgate-public.png` 与 `docs/evidence/ghcr-anonymous-pull-smoke.png`。
 - 当前实现事实：Web 默认 Mock；API key、Base URL、Model 完整后新 run 使用真实模型；Provider 失败不会降级；课程自动测试仍使用 Fake/Stub 且不访问网络。
 - 历史证据继续保留：PR #20 合并后的 `main@c39d101` 对应 CI #53、Pages #31 与 `docs/evidence/github-actions-pr20-final.png`，状态均为已完成、已核验。
-- 双仓库边界：SpecGate 是 CLI-first Harness；GitHub 开发主仓库保存 PR/Actions、Docker 构建与 Pages 历史，[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 已创建为 Private。Pipeline #312781、#312784、#312797 的三次 `unit-test` 已通过；容器构建分别受 DinD privileged、`gcr.io` 超时和 RootlessKit `operation not permitted` 限制。GitLab CI 随后只保留 `unit-test`；[Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 在 `main@66ea825` 上通过，[job #595758](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/595758) 记录 `Ran 926 tests in 33.684s`、`OK (skipped=18)`。GitLab Pipeline 已通过，检查前再改为 Public。
+- 双仓库边界：SpecGate 是 CLI-first Harness；GitHub 开发主仓库保存 PR/Actions、Docker 构建与 Pages 历史，[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 已公开。Pipeline #312781、#312784、#312797 的三次 `unit-test` 已通过；容器构建分别受 DinD privileged、`gcr.io` 超时和 RootlessKit `operation not permitted` 限制。GitLab CI 随后只保留 `unit-test`；历史 Pipeline #312806 和教师源码基线 Pipeline #313088 / job #596503 均已通过。
 - 部署边界：GHCR 公开镜像已完成匿名拉取验证；`ghcr.io/yugarden404/specgate:0.1.0` 的 digest 为 `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d`，公开容器 registry 已完成。公网交互式 Web 后端未部署，发布镜像不等于部署服务。
 - PR #12 合并后一度出现 Pages 依赖失败，PR #13 修复；这是适合人工反思的“验证发现真实交付缺口”案例。
-- 当前机械检查：全文为 2430 个非空白字符，位于 1500–2500 要求内。
+- 当前机械检查：全文为 2499 个非空白字符，位于 1500–2500 要求内。
 - 当前事实检查：“未来 provider”已经改为 NJU SE Hub 四模型真实验证后的实际理解。
 - 可选案例：PR #22 的连接测试假超时修复，或 GitHub/NJU GitLab 双仓库决策带来的判断变化。
 - 教师未回复前，不得声称公网交互式 Web 后端已获豁免或已经完成；公开 registry 的完成证据不能替代 Web 后端部署证据。

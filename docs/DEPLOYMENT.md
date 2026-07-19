@@ -64,9 +64,28 @@ $env:SPECGATE_LLM_REQUEST_TIMEOUT_SECONDS="30"
 
 上述三个变量不是凭据，可以放入普通部署配置。`SPECGATE_WEB_CREDENTIAL_KEY` 是 AES-256-GCM 主密钥，必须通过平台 Secret、Docker Secret 或权限受限且不提交 Git 的环境文件注入；不要把明文主密钥或 Provider API key 写入命令历史。静态 GitHub Pages 没有 Web 后端、持久化数据库或主密钥，只用于公开评审，不能提供真实模型功能。
 
-## 2. 本地 Docker 验证
+## 2. CLI 真实模型凭据生命周期
 
-GHCR 发布完成并设为 Public 后，可以匿名拉取并验证 CLI：
+本地 editable install 后，使用交互式命令保存 OpenAI-compatible Base URL、Model 和 keyring 凭据。不要把 API key 写入仓库、普通配置文件或截图：
+
+```powershell
+$Workspace = Join-Path $env:TEMP "specgate-teacher-demo"
+New-Item -ItemType Directory -Force -Path $Workspace | Out-Null
+Copy-Item .\examples\knowledge_nav\TASK_SPEC.md $Workspace -Force
+Copy-Item .\examples\knowledge_nav\CHECKLIST.md $Workspace -Force
+specgate configure
+specgate credentials status openai-compatible
+specgate run $Workspace --max-steps 5 --timeout 120 --governance-profile strict
+specgate credentials clear openai-compatible
+```
+
+`specgate configure` 将 Base URL 与 Model 保存到当前用户配置，将隐藏输入的 API key 保存到系统 keyring。环境变量 `SPECGATE_LLM_BASE_URL`、`SPECGATE_LLM_MODEL` 和 `OPENAI_COMPATIBLE_API_KEY` 可用于一次性运行并具有更高优先级；`credentials clear` 只删除 keyring 值，不会删除环境变量。Provider 失败时运行失败关闭，不会降级为 MockLLM。
+
+服务器或容器中的 CLI 可以使用受权限保护、位于仓库外的 Docker `--env-file` 注入这三个变量。WebUI 仍使用独立的 `SPECGATE_WEB_CREDENTIAL_KEY` 与数据库密文，不能把 CLI keyring 或 Provider API key 当作 Web 主密钥。
+
+## 3. 本地 Docker 验证
+
+v0.1.0 是已验证的历史公开镜像，已经完成匿名拉取、CLI help、Mock Demo、RepoDigest 和 OCI revision 核对：
 
 ```powershell
 docker pull ghcr.io/yugarden404/specgate:0.1.0
@@ -78,7 +97,9 @@ docker run --rm `
   run /workspace
 ```
 
-CLI 容器使用 `SPECGATE_LLM_BASE_URL`、`SPECGATE_LLM_MODEL` 与 `OPENAI_COMPATIBLE_API_KEY`。`--env-file` 是 Docker 的输入文件，应放在仓库外且不得提交；SpecGate 本身不读取 `.env`。仓库当前是“GHCR 发布工作流已实现，远端公开性待验证”，上述公开拉取命令要等版本标签 workflow 和 Package Public 设置完成后验收。
+CLI 容器使用 `SPECGATE_LLM_BASE_URL`、`SPECGATE_LLM_MODEL` 与 `OPENAI_COMPATIBLE_API_KEY`。`--env-file` 是 Docker 的输入文件，应放在仓库外且不得提交；SpecGate 本身不读取 `.env`。公开镜像的不可变 digest 为 `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d`。
+
+源码版本 `0.1.1` 已进入阶段 A 发布准备，但 v0.1.1 尚未发布。在标签 workflow、Package Public、匿名 smoke、RepoDigest 和 OCI revision 全部成功之前，应从当前源码执行本地构建来验证 PR #27，不能把尚不存在的 `0.1.1`、`0.1` 或 `latest` 镜像描述为已发布。
 
 在仓库根目录构建镜像：
 
@@ -122,7 +143,7 @@ http://127.0.0.1:8000
 
 如果看到登录或注册页面，说明镜像可以启动 WebUI。
 
-## 3. 云服务器部署
+## 4. 云服务器部署
 
 以下命令以 Linux 服务器为例。先安装 Docker，并确保当前用户可以运行 `docker`。
 
@@ -174,7 +195,7 @@ docker run -d \
 docker logs -f specgate-web
 ```
 
-## 4. 获得真实 URL
+## 5. 获得真实 URL
 
 在云服务器控制台或防火墙中开放 TCP `8000` 端口。
 
@@ -186,7 +207,7 @@ http://<服务器公网IP>:8000
 
 这就是课程检查可以使用的真实 URL。检查期间保持服务器和容器运行即可。
 
-## 5. 可选：域名和 Nginx 反向代理
+## 6. 可选：域名和 Nginx 反向代理
 
 如果已经有域名，可以让 Nginx 代理到本机容器端口：
 
@@ -213,7 +234,7 @@ server {
 
 如果仍然使用 `http://公网IP:8000`，不要开启 secure cookies，否则浏览器不会在 HTTP 下发送登录 cookie。
 
-## 6. 常用运维命令
+## 7. 常用运维命令
 
 查看日志：
 
@@ -263,7 +284,7 @@ docker run -d \
 tar -czf specgate-data-backup.tar.gz -C /opt/specgate data
 ```
 
-## 7. 安全边界
+## 8. 安全边界
 
 - 不要把 `.env`、API key 或 `SPECGATE_WEB_CREDENTIAL_KEY` 提交到 Git。
 - 主密钥必须与 SQLite 备份分开保存；只有同时持有数据库和主密钥才能恢复已加密凭据。
