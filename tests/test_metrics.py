@@ -4,12 +4,32 @@ from specgate.metrics import (
     PermissionDecision,
     RunMetrics,
     TrustSummary,
+    add_run_metrics,
     build_trust_summary,
     classify_rule_family,
 )
 
 
 class MetricsTests(unittest.TestCase):
+    def test_add_run_metrics_adds_integer_counters(self):
+        current = RunMetrics(steps=2, llm_calls=3, tool_calls=4)
+        delta = RunMetrics(steps=5, llm_calls=7, tool_calls=11)
+
+        combined = add_run_metrics(current, delta)
+
+        self.assertEqual(combined.steps, 7)
+        self.assertEqual(combined.llm_calls, 10)
+        self.assertEqual(combined.tool_calls, 15)
+
+    def test_add_run_metrics_combines_boolean_fields_with_or(self):
+        current = RunMetrics(role_cycle_limit_reached=True)
+        delta = RunMetrics(max_steps_reached=True)
+
+        combined = add_run_metrics(current, delta)
+
+        self.assertTrue(combined.role_cycle_limit_reached)
+        self.assertTrue(combined.max_steps_reached)
+
     def test_classifies_rule_family_from_reason(self):
         self.assertEqual(classify_rule_family("unknown action: run_command"), "action")
         self.assertEqual(classify_rule_family("unimplemented action: network"), "action")

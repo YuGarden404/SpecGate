@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 
 
 @dataclass(frozen=True)
@@ -41,6 +41,24 @@ class RunMetrics:
 
     def to_dict(self) -> dict[str, int | bool]:
         return asdict(self)
+
+
+def add_run_metrics(current: RunMetrics, delta: RunMetrics) -> RunMetrics:
+    values: dict[str, int | bool] = {}
+    for metric_field in fields(RunMetrics):
+        current_value = getattr(current, metric_field.name)
+        delta_value = getattr(delta, metric_field.name)
+        if type(current_value) is bool and type(delta_value) is bool:
+            values[metric_field.name] = current_value or delta_value
+        elif type(current_value) is int and type(delta_value) is int:
+            values[metric_field.name] = current_value + delta_value
+        else:
+            raise TypeError(
+                "unsupported RunMetrics field type for additive merge: "
+                f"{metric_field.name} "
+                f"({type(current_value).__name__}, {type(delta_value).__name__})"
+            )
+    return RunMetrics(**values)
 
 
 @dataclass(frozen=True)
