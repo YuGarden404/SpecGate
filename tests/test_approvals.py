@@ -8,11 +8,13 @@ from unittest import mock
 from specgate import approvals as approvals_module
 from specgate.actions import Action
 from specgate.approvals import (
+    ApprovalRequester,
     ApprovalConflictError,
     ApprovalQueue,
     ApprovalStore,
     GovernanceConfig,
     PendingApproval,
+    WorkspaceApprovalRequester,
     capture_target_state,
     classify_action_risk,
     preview_args,
@@ -92,6 +94,66 @@ class ApprovalTests(unittest.TestCase):
             self.assertEqual(updated.schema_version, "2")
             self.assertEqual(updated.revision, 1)
             self.assertEqual(updated.approvals[0].id, "approval-step-1")
+
+    def test_workspace_requester_builds_unique_redacted_cas_approvals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queue_path = root / "pending_approvals.json"
+            ApprovalQueue().write(queue_path)
+            store = ApprovalStore(queue_path)
+            requester: ApprovalRequester = WorkspaceApprovalRequester(
+                root=root,
+                store=store,
+                profile="review",
+            )
+            action = Action(
+                "1",
+                "write_file",
+                {
+                    "path": "index.html",
+                    "content": "api_key=abcdef123456",
+                },
+            )
+
+            with mock.patch.object(
+                store,
+                "append",
+                wraps=store.append,
+            ) as append:
+                first = requester.request(
+                    action,
+                    step=2,
+                    reason="manual review",
+                )
+
+            second = requester.request(
+                action,
+                step=2,
+                reason="manual review",
+            )
+            queue = store.read()
+
+            self.assertEqual(first.id, "approval-step-2")
+            self.assertEqual(second.id, "approval-step-2-2")
+            self.assertEqual(queue.revision, 2)
+            self.assertEqual(
+                append.call_args.kwargs["expected_revision"],
+                0,
+            )
+            self.assertEqual(
+                first.arguments_preview["content"],
+                "api_key=[REDACTED]",
+            )
+            self.assertEqual(
+                first.target_state,
+                {
+                    "path": "index.html",
+                    "exists": False,
+                    "sha256": None,
+                },
+            )
+            self.assertEqual(first.action_payload["action"], "write_file")
+            self.assertEqual(first.profile, "review")
 
     def test_stale_revision_is_rejected_without_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:

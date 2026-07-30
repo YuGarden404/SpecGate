@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase
 import json
 import os
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Protocol
 
 import specgate.workspace_fs as workspace_fs
 from specgate.actions import Action
@@ -100,6 +101,16 @@ class PendingApproval:
             "resolved_at": self.resolved_at,
             "target_state": self.target_state,
         }
+
+
+class ApprovalRequester(Protocol):
+    def request(
+        self,
+        action: Action,
+        *,
+        step: int,
+        reason: str,
+    ) -> PendingApproval: ...
 
 
 @dataclass
@@ -347,6 +358,59 @@ class ApprovalStore:
             )
             updated.write(self.path)
             return updated
+
+
+@dataclass(frozen=True)
+class WorkspaceApprovalRequester:
+    root: Path
+    store: ApprovalStore
+    profile: str = "review"
+
+    def __post_init__(self) -> None:
+        if self.profile not in VALID_GOVERNANCE_PROFILES:
+            raise ValueError(f"invalid governance profile: {self.profile}")
+
+    def request(
+        self,
+        action: Action,
+        *,
+        step: int,
+        reason: str,
+    ) -> PendingApproval:
+        queue = self.store.read()
+        path = _action_path(action)
+        approval = PendingApproval(
+            id=_unique_approval_id(queue, step),
+            step=step,
+            action=action.action,
+            path=path,
+            risk_level="review",
+            reason=reason,
+            profile=self.profile,
+            arguments_preview=preview_args(action.args),
+            action_payload={
+                "schema_version": action.schema_version,
+                "action": action.action,
+                "args": deepcopy(action.args),
+            },
+            target_state=capture_target_state(self.root, path),
+        )
+        self.store.append(
+            approval,
+            expected_revision=queue.revision,
+        )
+        return approval
+
+
+def _unique_approval_id(queue: ApprovalQueue, step: int) -> str:
+    base = f"approval-step-{step}"
+    existing = {approval.id for approval in queue.approvals}
+    if base not in existing:
+        return base
+    suffix = 2
+    while f"{base}-{suffix}" in existing:
+        suffix += 1
+    return f"{base}-{suffix}"
 
 
 def _approval_queue_lock(path: Path):
