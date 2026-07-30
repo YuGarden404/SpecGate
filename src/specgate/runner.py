@@ -310,6 +310,41 @@ class AgentRunner:
             },
         )
 
+    def _record_tool_validation_failure(
+        self,
+        action: Action,
+        step: int,
+        metrics: RunMetrics,
+        runtime_feedback: list[dict],
+    ) -> tuple[RunMetrics, bool]:
+        failure = self.dispatcher.prepare(action).failure
+        if failure is None or failure.code != "tool_validation_failed":
+            return metrics, False
+
+        metrics = replace(
+            metrics,
+            tool_validation_failures=metrics.tool_validation_failures + 1,
+        )
+        self._record_tool_feedback(
+            runtime_feedback,
+            step,
+            action.action,
+            ok=False,
+            blocked=True,
+            message=failure.message,
+            data=failure.data,
+        )
+        self.trace.append(
+            "tool_validation_failed",
+            {
+                "step": step,
+                "action": action.action,
+                "code": failure.code,
+                "message": failure.message,
+            },
+        )
+        return metrics, True
+
     def _record_permission_decision(
         self,
         permission_decisions: list[PermissionDecision],
@@ -605,6 +640,15 @@ class AgentRunner:
             self.trace.append("parse_error", event)
             return latest_gate, metrics, False
 
+        metrics, validation_failed = self._record_tool_validation_failure(
+            action,
+            step,
+            metrics,
+            runtime_feedback,
+        )
+        if validation_failed:
+            return latest_gate, metrics, False
+
         summary_value = action.args.get("summary", "")
         summary = summary_value if isinstance(summary_value, str) else ""
         allowed_by_role = action_allowed_for_role(role, action.action)
@@ -799,6 +843,15 @@ class AgentRunner:
                 event = {"step": step, "type": "parse_error", "error": str(exc)}
                 runtime_feedback.append(redact(event))
                 self.trace.append("parse_error", event)
+                continue
+
+            metrics, validation_failed = self._record_tool_validation_failure(
+                action,
+                step,
+                metrics,
+                runtime_feedback,
+            )
+            if validation_failed:
                 continue
 
             action_path_value = action.args.get("path")
@@ -1183,6 +1236,9 @@ class AgentRunner:
             successful_tool_calls=1 if tool_result.ok else 0,
             blocked_actions=1 if tool_result.blocked else 0,
             finish_actions=1 if action.action == "finish" else 0,
+            tool_validation_failures=(
+                1 if tool_result.code == "tool_validation_failed" else 0
+            ),
         )
         decision = PermissionDecision(
             step=approval.step,

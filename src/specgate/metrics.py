@@ -12,6 +12,7 @@ class RunMetrics:
     successful_tool_calls: int = 0
     blocked_actions: int = 0
     parse_errors: int = 0
+    tool_validation_failures: int = 0
     gate_runs: int = 0
     gate_failures: int = 0
     finish_actions: int = 0
@@ -126,6 +127,8 @@ def build_trust_summary(final_gate_passed: bool, metrics: RunMetrics) -> TrustSu
         reasons.append("role_blocked_actions_present")
     if metrics.parse_errors:
         reasons.append("parse_errors_present")
+    if metrics.tool_validation_failures:
+        reasons.append("tool_validation_failures_present")
     if metrics.pending_approvals:
         reasons.append("pending_approvals_present")
     if metrics.denied_approvals:

@@ -5,7 +5,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from specgate.actions import ActionParseError, parse_action
 from specgate.context_lifecycle import CompressionConfig
 from specgate.gate import GateResult
 from specgate.llm import MockLLM
@@ -523,30 +522,6 @@ class RunnerTests(unittest.TestCase):
 
             gate.assert_not_called()
 
-    def test_write_actions_require_string_path_and_content(self):
-        invalid_args = (
-            {"path": "index.html"},
-            {"path": "index.html", "content": 3},
-            {"content": "page"},
-            {"path": 3, "content": "page"},
-        )
-
-        for action_name in ("write_file", "replace_file"):
-            for args in invalid_args:
-                with self.subTest(action=action_name, args=args):
-                    raw = json.dumps(
-                        {
-                            "schema_version": "1",
-                            "action": action_name,
-                            "args": args,
-                        }
-                    )
-                    with self.assertRaisesRegex(
-                        ActionParseError,
-                        "invalid_action_payload",
-                    ):
-                        parse_action(raw)
-
     def test_invalid_write_payload_never_enters_approval_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -581,7 +556,8 @@ class RunnerTests(unittest.TestCase):
                 governance_config=governance,
             ).run()
 
-            self.assertEqual(result.metrics.parse_errors, 1)
+            self.assertEqual(result.metrics.parse_errors, 0)
+            self.assertEqual(result.metrics.tool_validation_failures, 1)
             self.assertEqual(result.metrics.approval_requests, 0)
             self.assertEqual(ApprovalQueue.read(approval_queue_path(root)).approvals, [])
 
@@ -1743,7 +1719,8 @@ class RunnerTests(unittest.TestCase):
             self.assertIsNotNone(result.permission_decisions)
             self.assertEqual(result.permission_decisions, [])
             self.assertIsNotNone(result.metrics)
-            self.assertEqual(result.metrics.parse_errors, 1)
+            self.assertEqual(result.metrics.parse_errors, 0)
+            self.assertEqual(result.metrics.tool_validation_failures, 1)
             self.assertEqual(result.metrics.tool_calls, 0)
             self.assertEqual(result.metrics.successful_tool_calls, 0)
 

@@ -57,6 +57,7 @@ class MetricsTests(unittest.TestCase):
                 "successful_tool_calls": 0,
                 "blocked_actions": 0,
                 "parse_errors": 0,
+                "tool_validation_failures": 0,
                 "gate_runs": 0,
                 "gate_failures": 0,
                 "finish_actions": 0,
@@ -95,6 +96,7 @@ class MetricsTests(unittest.TestCase):
             successful_tool_calls=4,
             blocked_actions=3,
             parse_errors=2,
+            tool_validation_failures=1,
             gate_runs=2,
             gate_failures=1,
             finish_actions=1,
@@ -133,6 +135,7 @@ class MetricsTests(unittest.TestCase):
                 "successful_tool_calls": 4,
                 "blocked_actions": 3,
                 "parse_errors": 2,
+                "tool_validation_failures": 1,
                 "gate_runs": 2,
                 "gate_failures": 1,
                 "finish_actions": 1,
@@ -302,6 +305,15 @@ class MetricsTests(unittest.TestCase):
 
         self.assertEqual(trust.status, "warning")
         self.assertIn("parse_errors_present", trust.reasons)
+
+    def test_warning_summary_when_tool_validation_fails(self):
+        trust = build_trust_summary(
+            True,
+            RunMetrics(finish_actions=1, tool_validation_failures=1),
+        )
+
+        self.assertEqual(trust.status, "warning")
+        self.assertIn("tool_validation_failures_present", trust.reasons)
 
     def test_warning_summary_when_gate_passes_with_pending_approval(self):
         metrics = RunMetrics(steps=2, finish_actions=1, approval_requests=1, pending_approvals=1)
