@@ -1118,10 +1118,12 @@ class FinalEvidenceTests(unittest.TestCase):
             "fastapi": ("MIT", "https://github.com/fastapi/fastapi"),
             "httpx": ("BSD-3-Clause", "https://github.com/encode/httpx"),
             "keyring": ("MIT", "https://github.com/jaraco/keyring"),
+            "pydantic": ("MIT", "https://github.com/pydantic/pydantic"),
             "python-multipart": (
                 "Apache-2.0",
                 "https://github.com/Kludex/python-multipart",
             ),
+            "pyyaml": ("MIT", "https://github.com/yaml/pyyaml"),
             "uvicorn": (
                 "BSD-3-Clause",
                 "https://github.com/Kludex/uvicorn",

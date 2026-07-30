@@ -575,7 +575,9 @@ NJU GitLab Pipeline #312781 在 `main@5fd86fa` 上运行：`unit-test` 已通过
 | `fastapi` | `>=0.115,<1` | Web API 框架 | MIT | https://github.com/fastapi/fastapi |
 | `httpx` | `>=0.27,<1` | 测试与 HTTP 客户端支持 | BSD-3-Clause | https://github.com/encode/httpx |
 | `keyring` | `>=25,<26` | CLI 操作系统凭据存储 | MIT | https://github.com/jaraco/keyring |
+| `pydantic` | `>=2.10,<3` | Agent Runtime 工具参数与结果模型 | MIT | https://github.com/pydantic/pydantic |
 | `python-multipart` | `>=0.0.9,<1` | Web 表单与文件上传解析 | Apache-2.0 | https://github.com/Kludex/python-multipart |
+| `PyYAML` | `>=6,<7` | Skill 元数据安全解析 | MIT | https://github.com/yaml/pyyaml |
 | `uvicorn` | `>=0.30,<1` | ASGI Web 服务器 | BSD-3-Clause | https://github.com/Kludex/uvicorn |
 
 该表只覆盖直接运行时依赖，完整传递依赖以安装环境中的包元数据为准。
