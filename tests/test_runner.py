@@ -1617,7 +1617,7 @@ class RunnerTests(unittest.TestCase):
             root = Path(tmp)
             (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
             (root / "CHECKLIST.md").write_text("", encoding="utf-8")
-            llm = MockLLM(
+            llm = ContextRecordingMockLLM(
                 [
                     {
                         "schema_version": "1",
@@ -1643,6 +1643,8 @@ class RunnerTests(unittest.TestCase):
             result = AgentRunner(root, llm, policy, max_steps=3).run()
 
             self.assertTrue(result.passed)
+            self.assertEqual(result.outcome, "completed")
+            self.assertEqual(result.steps, 2)
             self.assertEqual(result.profile, "strict")
             self.assertIsNotNone(result.metrics)
             self.assertEqual(result.metrics.llm_calls, 2)
@@ -1651,8 +1653,159 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result.metrics.gate_runs, 2)
             self.assertEqual(result.metrics.gate_failures, 0)
             self.assertEqual(result.metrics.finish_actions, 1)
+            self.assertIsNotNone(result.permission_decisions)
+            self.assertEqual(
+                [(decision.action, decision.allowed) for decision in result.permission_decisions],
+                [("write_file", True), ("finish", True)],
+            )
+            self.assertIsNotNone(result.final_gate)
+            self.assertTrue(result.final_gate.passed)
+            self.assertIn(result.final_gate.summary, llm.contexts[1])
             self.assertIsNotNone(result.trust)
             self.assertEqual(result.trust.status, "trusted")
+
+            trace_path = root / "runs" / "latest" / "trace.jsonl"
+            self.assertTrue(trace_path.is_file())
+            trace_events = [
+                json.loads(line)["event_type"]
+                for line in trace_path.read_text(encoding="utf-8").splitlines()
+            ]
+            for legacy_event in (
+                "context_built",
+                "llm_response",
+                "permission_decision",
+                "tool_result",
+                "gate_result",
+                "run_summary",
+            ):
+                self.assertIn(legacy_event, trace_events)
+            unified_events = (
+                "RunStarted",
+                "ToolCompleted",
+                "GateCompleted",
+                "RunFinished",
+            )
+            unified_positions = [trace_events.index(event) for event in unified_events]
+            self.assertEqual(unified_positions, sorted(unified_positions))
+
+    def test_single_agent_context_metrics_match_legacy_loop(self):
+        for strategy in ("compressed-rag", "isolated-harness"):
+            with self.subTest(strategy=strategy), tempfile.TemporaryDirectory() as new_tmp, tempfile.TemporaryDirectory() as legacy_tmp:
+                results = []
+                for tmp, use_new_loop in ((new_tmp, True), (legacy_tmp, False)):
+                    root = Path(tmp)
+                    (root / "TASK_SPEC.md").write_text(
+                        "Build a searchable knowledge navigator.",
+                        encoding="utf-8",
+                    )
+                    (root / "CHECKLIST.md").write_text(
+                        "- include searchable knowledge navigation\n",
+                        encoding="utf-8",
+                    )
+                    (root / "notes.md").write_text(
+                        "searchable knowledge navigation " * 80,
+                        encoding="utf-8",
+                    )
+                    policy = WorkspacePolicy(
+                        root,
+                        {"write_file", "finish"},
+                        {"TASK_SPEC.md", "CHECKLIST.md", "notes.md", "index.html"},
+                        {"index.html"},
+                    )
+                    llm = MockLLM(
+                        [
+                            {
+                                "schema_version": "1",
+                                "action": "write_file",
+                                "args": {"path": "index.html", "content": FIXED_HTML},
+                            },
+                            {
+                                "schema_version": "1",
+                                "action": "finish",
+                                "args": {"summary": "done"},
+                            },
+                        ]
+                    )
+                    runner = AgentRunner(
+                        root,
+                        llm,
+                        policy,
+                        max_steps=3,
+                        context_strategy=strategy,
+                        context_budget_chars=1800,
+                        retrieval_config=RetrievalConfig(top_k=2, budget_chars=600),
+                        compression_config=CompressionConfig(
+                            max_tool_result_chars=120,
+                            summary_budget_chars=500,
+                        ),
+                    )
+                    result = (
+                        runner.run()
+                        if use_new_loop
+                        else runner._legacy_run_loop(reset_queue=True)
+                    )
+                    results.append(result)
+
+                self.assertEqual(results[0].outcome, results[1].outcome)
+                self.assertEqual(results[0].metrics, results[1].metrics)
+
+    def test_blocked_action_legacy_trace_payload_matches_legacy_loop(self):
+        traces = []
+        results = []
+        with tempfile.TemporaryDirectory() as new_tmp, tempfile.TemporaryDirectory() as legacy_tmp:
+            for tmp, use_new_loop in ((new_tmp, True), (legacy_tmp, False)):
+                root = Path(tmp)
+                (root / "TASK_SPEC.md").write_text("Keep files safe.", encoding="utf-8")
+                (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+                (root / "README.md").write_text("original", encoding="utf-8")
+                (root / "index.html").write_text(FIXED_HTML, encoding="utf-8")
+                policy = WorkspacePolicy(
+                    root,
+                    {"replace_file", "finish"},
+                    {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                    {"README.md"},
+                )
+                runner = AgentRunner(
+                    root,
+                    MockLLM(
+                        [
+                            {
+                                "schema_version": "1",
+                                "action": "replace_file",
+                                "args": {"path": "README.md", "content": "changed"},
+                            },
+                            {
+                                "schema_version": "1",
+                                "action": "finish",
+                                "args": {"summary": "done"},
+                            },
+                        ]
+                    ),
+                    policy,
+                    max_steps=2,
+                    governance_config=GovernanceConfig(
+                        profile="strict",
+                        review_paths={"README.md"},
+                    ),
+                )
+                result = (
+                    runner.run()
+                    if use_new_loop
+                    else runner._legacy_run_loop(reset_queue=True)
+                )
+                events = [
+                    json.loads(line)
+                    for line in (root / "runs" / "latest" / "trace.jsonl")
+                    .read_text(encoding="utf-8")
+                    .splitlines()
+                ]
+                traces.append(
+                    next(event["payload"] for event in events if event["event_type"] == "tool_result")
+                )
+                results.append(result)
+
+        self.assertEqual(traces[0], traces[1])
+        self.assertEqual(results[0].metrics, results[1].metrics)
 
     def test_blocked_env_write_records_permission_decision_and_summary(self):
         with tempfile.TemporaryDirectory() as tmp:

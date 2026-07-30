@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import html
 import json
 from pathlib import Path
+from typing import Callable
 
 import specgate.workspace_fs as workspace_fs
+from specgate.agent_loop import ContextBuild
 from specgate.context_lifecycle import CompressionConfig, compress_runtime_feedback, pin_critical_sections
 from specgate.context_selector import ContextSelection, select_context_files
 from specgate.gate import GateResult
@@ -13,6 +15,7 @@ from specgate.isolation import build_isolation_evidence, build_role_contexts, ro
 from specgate.memory import load_memory_summary
 from specgate.policy import WorkspacePolicy
 from specgate.retrieval import RetrievalConfig, build_query_terms, retrieve_chunks
+from specgate.run_state import RunState
 from specgate.tool_registry import render_tool_registry_for_context
 from specgate.trace import redact
 
@@ -28,6 +31,79 @@ VALID_CONTEXT_STRATEGIES = {
 }
 
 ISOLATED_HARNESS_STRATEGIES = {"isolated-harness", "multi-agent-isolated"}
+
+
+@dataclass(frozen=True)
+class LegacyContextBuilder:
+    root: Path
+    strategy: str
+    policy: WorkspacePolicy
+    context_budget_chars: int = 12000
+    retrieval_config: RetrievalConfig | None = None
+    compression_config: CompressionConfig | None = None
+    context_factory: Callable[..., tuple[str, dict]] | None = None
+    on_build: Callable[[RunState, ContextBuild], None] | None = None
+
+    def build(self, state: RunState) -> ContextBuild:
+        runtime_feedback = []
+        for observation in state.observations:
+            event_type = (
+                "parse_error"
+                if observation.kind == "action_parse_failed"
+                else (
+                    "approval_requested"
+                    if observation.kind == "approval_required"
+                    else observation.kind
+                )
+            )
+            payload = _legacy_feedback_payload(
+                observation.kind,
+                observation.payload,
+            )
+            event_step = payload.pop("step", state.step)
+            runtime_feedback.append(
+                redact(
+                    {
+                        "step": event_step,
+                        "type": event_type,
+                        **payload,
+                    }
+                )
+            )
+
+        context_factory = self.context_factory or build_context_pack_with_metadata
+        text, metadata = context_factory(
+            self.root,
+            state.latest_gate,
+            runtime_feedback,
+            strategy=self.strategy,
+            policy=self.policy,
+            context_budget_chars=self.context_budget_chars,
+            retrieval_config=self.retrieval_config,
+            compression_config=self.compression_config,
+        )
+        built = ContextBuild(text, metadata)
+        if self.on_build is not None:
+            self.on_build(state, built)
+        return built
+
+
+def _legacy_feedback_payload(kind: str, payload: dict) -> dict:
+    fields = {
+        "tool_result": (
+            "step",
+            "action",
+            "ok",
+            "blocked",
+            "message",
+            "data",
+        ),
+        "gate_result": ("step", "passed", "summary"),
+        "action_parse_failed": ("step", "error"),
+    }.get(kind)
+    if fields is None:
+        return dict(payload)
+    return {field: payload[field] for field in fields if field in payload}
 
 
 def _read_allowed(path: Path, policy: WorkspacePolicy | None) -> bool:

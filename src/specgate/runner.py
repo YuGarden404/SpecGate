@@ -8,31 +8,48 @@ from pathlib import Path
 from typing import Callable
 
 import specgate.workspace_fs as workspace_fs
+from specgate.action_pipeline import ActionPipeline, ExecutionOutcome, ExecutionStatus, PipelineExecutionContext
 from specgate.actions import Action, ActionParseError, parse_action
+from specgate.agent_loop import AgentLoop, ContextBuild
 from specgate.approvals import (
     ApprovalQueue,
     ApprovalStore,
     GovernanceConfig,
     PendingApproval,
+    WorkspaceApprovalRequester,
     approval_queue_path,
     capture_target_state,
     classify_action_risk,
     preview_args,
     target_state_matches,
 )
-from specgate.context import build_context_pack_with_metadata, build_role_context_pack_with_metadata
+from specgate.context import LegacyContextBuilder, build_context_pack_with_metadata, build_role_context_pack_with_metadata
 from specgate.context_lifecycle import CompressionConfig
-from specgate.gate import GateResult, run_html_gate
+from specgate.gate import GateContext, GateResult, run_html_gate
+from specgate.governance import GovernanceDecision, GovernanceDecisionKind, GovernanceEngine
+from specgate.hooks import AfterGate, AfterTool, HookBus
 from specgate.isolation import RoleExecution, action_allowed_for_role, build_isolation_evidence, role_context_for
-from specgate.llm import LLMClient
+from specgate.llm import LLMClient, LLMProviderError
 from specgate.memory import append_memory
-from specgate.metrics import PermissionDecision, RunMetrics, TrustSummary, build_trust_summary, classify_rule_family
+from specgate.metrics import PermissionDecision, RunMetrics, TrustSummary, add_run_metrics, build_trust_summary, classify_rule_family
 from specgate.multi_agent import MultiAgentState, phase_for_role, summary_requests_repair
 from specgate.policy import WorkspacePolicy
 from specgate.retrieval import RetrievalConfig
+from specgate.run_control import (
+    CallbackCancellationToken,
+    DefaultStopPolicy,
+    LoopDecision,
+    LoopDecisionKind,
+)
+from specgate.run_state import InMemoryRunStateStore, Observation, RunState, RunStatus, StateDelta
+from specgate.runtime_events import RunEventContext, RunEventSink, TraceRunEventSink
 from specgate.snapshot import FileSnapshot
+from specgate.tool_handlers import ToolExecutionContext
+from specgate.tool_registry import default_tool_registry
+from specgate.tool_runtime import ToolRuntime
 from specgate.tools import ToolDispatcher
 from specgate.trace import TraceStore, redact
+from specgate.validation import DefaultValidationPolicy
 
 
 def _utc_now_for_runner() -> str:
@@ -70,6 +87,472 @@ class RunResult:
     profile: str = "strict"
     outcome: str = "failed"
     pending_approval_id: str | None = None
+
+
+class _LegacyRunStateStore:
+    def __init__(self, trace: TraceStore) -> None:
+        self._store = InMemoryRunStateStore()
+        self._trace = trace
+        self._pending_context_metrics = RunMetrics()
+        self._pending_parse_error: str | None = None
+
+    def create(self, state: RunState) -> RunState:
+        return self._store.create(state)
+
+    def get(self, run_id: str) -> RunState:
+        return self._store.get(run_id)
+
+    def add_context_metrics(self, metrics: RunMetrics) -> None:
+        self._pending_context_metrics = add_run_metrics(
+            self._pending_context_metrics,
+            metrics,
+        )
+
+    def remember_parse_error(self, error: str) -> None:
+        self._pending_parse_error = str(redact(error))
+
+    def apply(
+        self,
+        run_id: str,
+        expected_revision: int,
+        delta: StateDelta,
+    ) -> RunState:
+        observations = []
+        for observation in delta.append_observations:
+            payload = {"step": delta.step, **observation.payload}
+            if (
+                observation.kind == "action_parse_failed"
+                and self._pending_parse_error is not None
+            ):
+                payload["error"] = self._pending_parse_error
+                self._trace.append(
+                    "parse_error",
+                    {"step": delta.step, "error": self._pending_parse_error},
+                )
+                self._pending_parse_error = None
+            observations.append(Observation(observation.kind, payload))
+
+        merged = replace(
+            delta,
+            append_observations=tuple(observations),
+            metrics=add_run_metrics(delta.metrics, self._pending_context_metrics),
+        )
+        self._pending_context_metrics = RunMetrics()
+        return self._store.apply(run_id, expected_revision, merged)
+
+
+class _LegacyRunEventSink:
+    def __init__(self, trace: TraceStore) -> None:
+        self._trace = trace
+        self._sink = TraceRunEventSink(trace)
+        self._last_llm_response: str | None = None
+
+    def remember_llm_response(self, response: str) -> None:
+        self._last_llm_response = response
+
+    def emit(
+        self,
+        context: RunEventContext,
+        event_type: str,
+        payload: dict,
+        *,
+        step: int = 0,
+        phase: str = "runtime",
+    ) -> None:
+        if event_type == "LLMCompleted" and self._last_llm_response is not None:
+            self._trace.append(
+                "llm_response",
+                {"step": step + 1, "text": self._last_llm_response},
+            )
+            self._last_llm_response = None
+        self._sink.emit(
+            context,
+            event_type,
+            payload,
+            step=step,
+            phase=phase,
+        )
+
+
+class _TracingLLM:
+    def __init__(self, llm: LLMClient, event_sink: _LegacyRunEventSink) -> None:
+        self._llm = llm
+        self._event_sink = event_sink
+
+    def complete(self, context: str) -> str:
+        try:
+            response = self._llm.complete(context)
+        except LLMProviderError as exc:
+            raise _LegacyProviderError(exc) from exc
+        self._event_sink.remember_llm_response(response)
+        return response
+
+
+class _LegacyProviderError(RuntimeError):
+    def __init__(self, original: Exception) -> None:
+        super().__init__("provider request failed")
+        self.original = original
+
+
+class _LegacyStopPolicy:
+    def __init__(self, max_steps: int) -> None:
+        self._default = DefaultStopPolicy(max_steps)
+
+    def decide(self, state: RunState) -> LoopDecision:
+        if (
+            state.finish_requested
+            and state.latest_gate is not None
+            and state.latest_gate.passed
+        ):
+            return LoopDecision(
+                LoopDecisionKind.TERMINATE,
+                outcome=RunStatus.COMPLETED,
+                reason="finish_accepted",
+            )
+        return self._default.decide(state)
+
+
+class _DispatcherRuntime(ToolRuntime):
+    def __init__(self, dispatcher: ToolDispatcher) -> None:
+        super().__init__(dispatcher.registry)
+        self._dispatcher = dispatcher
+
+    def execute_prepared(self, call, context):
+        del context
+        return self._dispatcher.dispatch(
+            Action(
+                "1",
+                call.definition.name,
+                call.args.model_dump(mode="python"),
+            )
+        )
+
+
+class _RunnerGateRunner:
+    def __init__(self, runner: AgentRunner) -> None:
+        self._runner = runner
+
+    def run(self, context: GateContext) -> GateResult:
+        del context
+        self._runner._check_stop()
+        result = self._runner._evaluate_gate()
+        self._runner._check_stop()
+        return result
+
+
+class _RunnerGovernanceEngine:
+    def __init__(self) -> None:
+        self._engine = GovernanceEngine()
+
+    def evaluate(
+        self,
+        call,
+        *,
+        capabilities: frozenset[str],
+        policy: WorkspacePolicy,
+        config: GovernanceConfig,
+    ) -> GovernanceDecision:
+        action = Action(
+            "1",
+            call.definition.name,
+            call.args.model_dump(mode="python"),
+        )
+        risk = classify_action_risk(action, policy, config)
+        if risk.level in {"review", "blocked"}:
+            kind = (
+                GovernanceDecisionKind.REQUIRE_APPROVAL
+                if risk.level == "review" and config.profile == "review"
+                else GovernanceDecisionKind.BLOCK
+            )
+            code = (
+                risk.rule_family
+                if risk.rule_family != "none"
+                else risk.level
+            )
+            return GovernanceDecision(
+                kind,
+                code,
+                risk.reason,
+                risk.rule_family,
+                risk,
+            )
+        return self._engine.evaluate(
+            call,
+            capabilities=capabilities,
+            policy=policy,
+            config=config,
+        )
+
+
+class _RunnerActionExecutor:
+    def __init__(
+        self,
+        runner: AgentRunner,
+        pipeline: ActionPipeline,
+        event_context: RunEventContext,
+        permission_decisions: list[PermissionDecision],
+    ) -> None:
+        self._runner = runner
+        self._pipeline = pipeline
+        self._event_context = event_context
+        self._permission_decisions = permission_decisions
+        self._approval_requester = WorkspaceApprovalRequester(
+            runner.root,
+            ApprovalStore(runner.approval_queue_file),
+            profile=runner.governance_profile,
+        )
+
+    def execute(self, action: Action, state: RunState) -> ExecutionOutcome:
+        step = state.step + 1
+        context = PipelineExecutionContext(
+            event_context=self._event_context,
+            step=step,
+            capabilities=frozenset(self._runner.policy.allowed_actions),
+            policy=self._runner.policy,
+            governance_config=self._runner.governance_config,
+            tool_context=ToolExecutionContext(
+                self._runner.policy,
+                self._runner.dispatcher.snapshot,
+            ),
+            gate_context=GateContext(self._runner.root, self._runner.policy),
+            approval_requester=self._approval_requester,
+        )
+        outcome = self._pipeline.execute(action, context)
+        outcome = self._normalize_unknown_tool(action, outcome)
+        outcome = self._restore_legacy_blocked_payload(action, outcome)
+        if outcome.tool_result is not None and outcome.gate_result is None:
+            if outcome.tool_result.code not in {
+                "tool_validation_failed",
+                "unknown_tool",
+            }:
+                self._runner._check_stop()
+
+        metrics = self._record_legacy_behavior(action, step, outcome)
+        return replace(
+            outcome,
+            state_delta=replace(
+                outcome.state_delta,
+                metrics=add_run_metrics(outcome.state_delta.metrics, metrics),
+            ),
+        )
+
+    def _restore_legacy_blocked_payload(
+        self,
+        action: Action,
+        outcome: ExecutionOutcome,
+    ) -> ExecutionOutcome:
+        if (
+            outcome.status is not ExecutionStatus.BLOCKED
+            or outcome.tool_result is not None
+            or outcome.feedback is None
+            or outcome.feedback.kind != "tool_result"
+        ):
+            return outcome
+        risk = classify_action_risk(
+            action,
+            self._runner.policy,
+            self._runner.governance_config,
+        )
+        if risk.level not in {"review", "blocked"}:
+            return outcome
+        feedback = Observation(
+            outcome.feedback.kind,
+            {
+                **outcome.feedback.payload,
+                "data": {"risk": risk.to_dict()},
+            },
+        )
+        observations = tuple(
+            feedback if item is outcome.feedback else item
+            for item in outcome.state_delta.append_observations
+        )
+        return replace(
+            outcome,
+            feedback=feedback,
+            state_delta=replace(
+                outcome.state_delta,
+                append_observations=observations,
+            ),
+        )
+
+    def _normalize_unknown_tool(
+        self,
+        action: Action,
+        outcome: ExecutionOutcome,
+    ) -> ExecutionOutcome:
+        result = outcome.tool_result
+        if result is None or result.code != "unknown_tool":
+            return outcome
+        message = f"unknown action: {action.action}"
+        normalized_result = replace(
+            result,
+            message=message,
+            rule_family="action",
+        )
+        normalized_observations = tuple(
+            Observation(
+                observation.kind,
+                {
+                    **observation.payload,
+                    "message": message,
+                    "rule_family": "action",
+                },
+            )
+            if observation.kind == "tool_result"
+            else observation
+            for observation in outcome.state_delta.append_observations
+        )
+        return replace(
+            outcome,
+            tool_result=normalized_result,
+            state_delta=replace(
+                outcome.state_delta,
+                append_observations=normalized_observations,
+            ),
+        )
+
+    def _record_legacy_behavior(
+        self,
+        action: Action,
+        step: int,
+        outcome: ExecutionOutcome,
+    ) -> RunMetrics:
+        result = outcome.tool_result
+        validation_failed = (
+            result is not None and result.code == "tool_validation_failed"
+        )
+        unknown_tool = result is not None and result.code == "unknown_tool"
+        action_path_value = action.args.get("path")
+        action_path = (
+            action_path_value if isinstance(action_path_value, str) else None
+        )
+
+        if validation_failed:
+            self._append_tool_trace(step, result)
+            self._runner.trace.append(
+                "tool_validation_failed",
+                {
+                    "step": step,
+                    "action": action.action,
+                    "code": result.code,
+                    "message": result.message,
+                },
+            )
+            metrics = RunMetrics(tool_validation_failures=1)
+        elif outcome.status is ExecutionStatus.APPROVAL_REQUIRED:
+            reason = str(outcome.feedback.payload.get("reason", ""))
+            rule_family = str(outcome.feedback.payload.get("code", "none"))
+            self._runner._record_permission_decision(
+                self._permission_decisions,
+                step,
+                action.action,
+                action_path,
+                ok=False,
+                blocked=False,
+                message=reason,
+                rule_family=rule_family,
+            )
+            approval = outcome.approval_request
+            assert approval is not None
+            queue = ApprovalQueue.read(self._runner.approval_queue_file)
+            event = {
+                "step": step,
+                "type": "approval_requested",
+                "approval": approval.to_dict(),
+                "queue_revision": queue.revision,
+            }
+            self._runner.trace.append("approval_requested", redact(event))
+            metrics = RunMetrics(approval_requests=1, pending_approvals=1)
+        elif result is None or unknown_tool:
+            feedback = outcome.feedback
+            payload = feedback.payload if feedback is not None else {}
+            message = (
+                result.message
+                if result is not None
+                else str(payload.get("message", "action blocked"))
+            )
+            rule_family = (
+                result.rule_family
+                if result is not None
+                else str(payload.get("rule_family", "none"))
+            )
+            self._runner._record_permission_decision(
+                self._permission_decisions,
+                step,
+                action.action,
+                action_path,
+                ok=False,
+                blocked=True,
+                message=message,
+                rule_family=rule_family,
+            )
+            self._append_blocked_feedback_trace(
+                step,
+                action.action,
+                message,
+                payload,
+            )
+            metrics = RunMetrics(blocked_actions=1)
+        else:
+            self._runner._record_permission_decision(
+                self._permission_decisions,
+                step,
+                action.action,
+                action_path,
+                ok=result.ok,
+                blocked=result.blocked,
+                message=result.message,
+                rule_family=result.rule_family,
+            )
+            self._append_tool_trace(step, result)
+            metrics = RunMetrics(
+                tool_calls=1,
+                successful_tool_calls=1 if result.ok else 0,
+                blocked_actions=1 if result.blocked else 0,
+                finish_actions=1 if action.action == "finish" else 0,
+            )
+
+        if outcome.gate_result is not None:
+            gate = outcome.gate_result
+            self._runner.trace.append(
+                "gate_result",
+                {"step": step, "passed": gate.passed, "summary": gate.summary},
+            )
+            metrics = add_run_metrics(
+                metrics,
+                RunMetrics(
+                    gate_runs=1,
+                    gate_failures=0 if gate.passed else 1,
+                ),
+            )
+        return metrics
+
+    def _append_tool_trace(self, step: int, result) -> None:
+        self._runner.trace.append(
+            "tool_result",
+            {"step": step, "result": result.__dict__},
+        )
+
+    def _append_blocked_feedback_trace(
+        self,
+        step: int,
+        action_name: str,
+        message: str,
+        payload: dict,
+    ) -> None:
+        self._runner.trace.append(
+            "tool_result",
+            {
+                "step": step,
+                "result": {
+                    "ok": False,
+                    "action": action_name,
+                    "message": message,
+                    "data": payload.get("data", {}),
+                    "blocked": True,
+                },
+            },
+        )
 
 
 class AgentRunner:
@@ -119,7 +602,181 @@ class AgentRunner:
         self._check_stop()
         if self.context_strategy == "multi-agent-isolated":
             return self._run_multi_agent_loop(reset_queue=True)
-        return self._run_loop(reset_queue=True)
+        return self._run_single_agent_loop()
+
+    def _run_single_agent_loop(self) -> RunResult:
+        self._reset_approval_queue()
+        run_seed = f"{self.root}:{_utc_now_for_runner()}"
+        run_id = "run-" + hashlib.sha256(run_seed.encode("utf-8")).hexdigest()[:12]
+        event_context = RunEventContext(run_id, f"agent-{run_id}")
+        event_sink = _LegacyRunEventSink(self.trace)
+        state_store = _LegacyRunStateStore(self.trace)
+        state_store.create(RunState(run_id))
+        permission_decisions: list[PermissionDecision] = []
+
+        def context_built(state: RunState, built: ContextBuild) -> None:
+            metrics = RunMetrics(
+                context_chars_max=max(
+                    0,
+                    len(built.text) - state.metrics.context_chars_max,
+                )
+            )
+            metrics = self._record_retrieval(metrics, built.metadata)
+            metrics = self._record_compression(metrics, built.metadata)
+            metrics = self._record_isolation(metrics, built.metadata)
+            metrics = replace(
+                metrics,
+                role_contexts=max(
+                    0,
+                    metrics.role_contexts - state.metrics.role_contexts,
+                ),
+                isolated_state_keys=max(
+                    0,
+                    metrics.isolated_state_keys
+                    - state.metrics.isolated_state_keys,
+                ),
+            )
+            state_store.add_context_metrics(metrics)
+            self.trace.append(
+                "context_built",
+                {
+                    "step": state.step + 1,
+                    "strategy": self.context_strategy,
+                    "context_chars": len(built.text),
+                },
+            )
+
+        context_builder = LegacyContextBuilder(
+            root=self.root,
+            strategy=self.context_strategy,
+            policy=self.policy,
+            context_budget_chars=self.context_budget_chars,
+            retrieval_config=self.retrieval_config,
+            compression_config=self.compression_config,
+            context_factory=build_context_pack_with_metadata,
+            on_build=context_built,
+        )
+        hooks = HookBus(event_sink)
+        hooks.register_after_tool(
+            lambda event: event_sink.emit(
+                event.context,
+                "ToolCompleted",
+                {
+                    "action": event.tool_result.action,
+                    "ok": event.tool_result.ok,
+                    "blocked": event.tool_result.blocked,
+                    "code": event.tool_result.code,
+                },
+                step=event.step,
+                phase="tool",
+            )
+        )
+        hooks.register_after_gate(
+            lambda event: event_sink.emit(
+                event.context,
+                "GateCompleted",
+                {
+                    "passed": event.gate_result.passed,
+                    "summary": event.gate_result.summary,
+                },
+                step=event.step,
+                phase="gate",
+            )
+        )
+        pipeline = ActionPipeline(
+            _DispatcherRuntime(self.dispatcher),
+            hooks,
+            _RunnerGovernanceEngine(),
+            DefaultValidationPolicy(),
+            _RunnerGateRunner(self),
+        )
+        executor = _RunnerActionExecutor(
+            self,
+            pipeline,
+            event_context,
+            permission_decisions,
+        )
+
+        def parse_for_legacy(raw: str) -> Action:
+            try:
+                return parse_action(raw)
+            except ActionParseError as exc:
+                state_store.remember_parse_error(str(exc))
+                raise
+
+        loop = AgentLoop(
+            context_builder=context_builder,
+            llm=_TracingLLM(self.llm, event_sink),
+            parse_action=parse_for_legacy,
+            action_executor=executor,
+            state_store=state_store,
+            stop_policy=_LegacyStopPolicy(self.max_steps),
+            cancel_token=CallbackCancellationToken(self._check_stop),
+            event_sink=event_sink,
+            event_context=event_context,
+        )
+        try:
+            state = loop.run(run_id)
+        except _LegacyProviderError as exc:
+            raise exc.original from exc.original
+        return self._run_result_from_state(
+            state,
+            permission_decisions,
+            event_sink,
+            event_context,
+        )
+
+    def _run_result_from_state(
+        self,
+        state: RunState,
+        permission_decisions: list[PermissionDecision],
+        event_sink: RunEventSink,
+        event_context: RunEventContext,
+    ) -> RunResult:
+        metrics = state.metrics
+        latest_gate = state.latest_gate
+        if state.status is RunStatus.NEEDS_APPROVAL:
+            approval_id = state.pending_approval_id
+            assert approval_id is not None
+            approval = ApprovalQueue.read(self.approval_queue_file).find(approval_id)
+            return self._pause_result(
+                state.step,
+                latest_gate,
+                metrics,
+                permission_decisions,
+                approval,
+            )
+
+        if latest_gate is None:
+            runtime_feedback = [
+                {"step": state.step, "type": item.kind, **item.payload}
+                for item in state.observations
+            ]
+            latest_gate, metrics = self._run_gate_with_feedback(
+                max(state.step, self.max_steps),
+                metrics,
+                runtime_feedback,
+            )
+            event_sink.emit(
+                event_context,
+                "GateCompleted",
+                {"passed": latest_gate.passed, "summary": latest_gate.summary},
+                step=state.step,
+                phase="gate",
+            )
+
+        if state.status is RunStatus.FAILED and state.step >= self.max_steps:
+            metrics = replace(metrics, max_steps_reached=True)
+        forced_outcome = (
+            None if state.status is RunStatus.COMPLETED else "failed"
+        )
+        return self._finish_result(
+            state.step,
+            latest_gate,
+            metrics,
+            permission_decisions,
+            forced_outcome=forced_outcome,
+        )
 
     def _check_stop(self) -> None:
         self._stop_check()
@@ -135,6 +792,21 @@ class AgentRunner:
 
     def _reset_approval_queue(self) -> None:
         ApprovalQueue().write(self.approval_queue_file)
+
+    def _evaluate_gate(self) -> GateResult:
+        if "index.html" not in self.policy.allowed_read_paths:
+            return GateResult(
+                False,
+                [],
+                [],
+                "Gate skipped: artifact inspection is not allowed by WorkspacePolicy",
+            )
+        checklist_path = (
+            self.root / "CHECKLIST.md"
+            if "CHECKLIST.md" in self.policy.allowed_read_paths
+            else None
+        )
+        return run_html_gate(self.root / "index.html", checklist_path)
 
     def _run_gate_with_feedback(
         self,
@@ -201,6 +873,7 @@ class AgentRunner:
         final_gate: GateResult,
         metrics: RunMetrics,
         permission_decisions: list[PermissionDecision],
+        forced_outcome: str | None = None,
     ) -> RunResult:
         trust = build_trust_summary(final_gate.passed, metrics)
         self.trace.append(
@@ -220,7 +893,9 @@ class AgentRunner:
             ),
             None,
         )
-        if pending_approval is not None:
+        if forced_outcome is not None:
+            outcome = forced_outcome
+        elif pending_approval is not None:
             outcome = "needs_approval"
         elif final_gate.passed and not metrics.max_steps_reached and not metrics.role_cycle_limit_reached:
             outcome = "completed"
@@ -792,7 +1467,7 @@ class AgentRunner:
             )
             state.repair_requested = False
 
-    def _run_loop(
+    def _legacy_run_loop(
         self,
         reset_queue: bool,
         initial_runtime_feedback: list[dict] | None = None,
@@ -1032,7 +1707,7 @@ class AgentRunner:
                     }
                 ),
             )
-            return self._run_loop(
+            return self._legacy_run_loop(
                 reset_queue=False,
                 initial_runtime_feedback=runtime_feedback,
                 initial_metrics=metrics,
@@ -1108,7 +1783,7 @@ class AgentRunner:
                     }
                 ),
             )
-            return self._run_loop(
+            return self._legacy_run_loop(
                 reset_queue=False,
                 initial_runtime_feedback=runtime_feedback,
                 initial_metrics=metrics,
@@ -1164,7 +1839,7 @@ class AgentRunner:
                     }
                 ),
             )
-            return self._run_loop(
+            return self._legacy_run_loop(
                 reset_queue=False,
                 initial_runtime_feedback=runtime_feedback,
                 initial_metrics=metrics,
@@ -1218,7 +1893,7 @@ class AgentRunner:
                     }
                 ),
             )
-            return self._run_loop(
+            return self._legacy_run_loop(
                 reset_queue=False,
                 initial_runtime_feedback=runtime_feedback,
                 initial_metrics=metrics,
@@ -1286,7 +1961,7 @@ class AgentRunner:
                 }
             ),
         )
-        return self._run_loop(
+        return self._legacy_run_loop(
             reset_queue=False,
             initial_runtime_feedback=runtime_feedback,
             initial_metrics=metrics,
