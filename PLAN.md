@@ -2294,12 +2294,28 @@ TDD 定向安全回归：`Ran 422 tests in 153.419s`、`OK (skipped=17)`。第�
 # 2026-07-31 v0.2.0 Agent Runtime 分层迁移
 
 - 目标：把集中式 Runner 迁移为角色无关 `AgentLoop`、唯一 `ActionPipeline`、类型化运行状态、统一事件流、渐进式 Skill、`AgentService` 与结构化 Workflow，同时保持 Gate、HITL、WorkspacePolicy、Windows 文件安全、CLI 和 Web 行为。
+- 设计基线：架构设计提交 `72b791a`；迁移计划提交 `fcd8026`。
+- [x] Task 1: 声明 Agent Runtime 直接依赖（`61add59`）。
+- [x] Task 2: 建立类型化运行状态协议（`b3526b9`）。
+- [x] Task 3: 统一停止、挂起与恢复语义（`02394f7`）。
+- [x] Task 4: 建立统一运行事件流（`7f6bffb`）。
+- [x] Task 5: 建立 ToolDefinition 与可执行 Handler（`9aff214`）。
+- [x] Task 6: 补充依赖许可证并统一 ToolRuntime（`556a5cb`、`8677fd5`）。
+- [x] Task 7: 增加生命周期 HookBus（`b2a030d`）。
+- [x] Task 8: 抽取不可绕过的 GovernanceEngine（`a179788`）。
+- [x] Task 9: 组合统一 ActionPipeline 与 Gate adapter（`6f823e9`）。
+- [x] Task 10: 增加角色无关 AgentLoop（`999e909`）。
+- [x] Task 11: 用通用 Loop 执行单 Agent 运行（`cffc6e9`）。
+- [x] Task 12: 增加安全、渐进式 Skill Registry（`78634b9`）。
+- [x] Task 13: 注册 Skill 工具并接入上下文（`d8ae083`）。
+- [x] Task 14: 增加 AgentService 运行边界（`04743ec`）。
+- [x] Task 15: 统一审批挂起与恢复服务（`89bd035`）。
+- [x] Task 16: 增加结构化多 Agent Workflow（`575af44`）。
+- [x] Task 17: 迁移多 Agent 到版本化 Artifact Workflow（`47f639a`）。
+- [x] Task 18: 收敛入口、报告、版本和最终验证（`674a1f4`）。
 - 已实施：完成 ToolDefinition/Handler/Runtime、HookBus、GovernanceEngine、Gate adapter、SkillRegistry/SkillSession、AgentDefinition、审批恢复、版本化 AgentArtifact 和 SequentialReviewWorkflow。
 - 入口收敛：CLI、eval 与 Web 通过 `AgentServiceFactory` 的 composition root 构造运行时；`AgentRunner` 仅保留兼容转发与 `AgentRunResult -> RunResult` 映射，旧 `_legacy_run_loop` 已删除。
 - 证据：报告按 Hook、Gate、Skill、Workflow 分类展示统一事件，并继续对动态字段执行 escape、redact 和 action payload 移除；历史 Trace 缺少新字段时保持可读。
 - 凭据边界：继续使用 OS keyring 或进程环境变量，不新增 `.env` 读取、写入或回退路径。
-- 验收：聚焦回归、完整离线测试、Mock Demo、静态架构搜索和 Python 编译结果在本阶段完成后记录到 `AGENT_LOG.md`。
-- TDD 顺序：先把三张图片、Stage B 标题和精确远端事实加入 `tests/test_final_evidence.py`，确认当前 28 项出现 `FAILED (failures=3, errors=3)`；随后归档图片并同步 README、部署、讲解、矩阵、清单、事实核对和过程记录，直至证据契约 GREEN。
-- Stage B 证据同步分支验证：imports 1 项、CLI 51 项、workflow 5 项、最终证据 28 项均通过；Python 编译与 JavaScript 语法退出码 0，疑似真实密钥模式扫描无命中。完整套件得到 `Ran 955 tests in 404.159s`、`OK (skipped=27)`，退出码 0；新增 1 项是当前发布事实契约，不替换教师基线。
-- 历史保留：`v0.1.0` 的 `main@44b236f`、PR #25、GHCR #1、digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 与 `docs/evidence/github-actions-pr25-ci-success.png`、`docs/evidence/github-actions-pr25-pages-success.png`、`docs/evidence/github-actions-ghcr-v0.1.0-success.png`、`docs/evidence/github-package-specgate-public.png`、`docs/evidence/ghcr-anonymous-pull-smoke.png` 保持不变。
-- 部署边界：公网交互式 Web 后端未部署；发布公开 CLI 镜像不等于部署公网交互式 Web 后端。容器中的 `specgate-web` help smoke 只证明入口可执行，不证明存在公网常驻服务。
+- 验收：聚焦回归、完整离线测试、Mock Demo、静态架构搜索和 Python 编译均已完成，详细结果记录于 `AGENT_LOG.md`。
+- 部署边界：公网交互式 Web 后端未部署；已发布的公开 CLI 镜像不等于公网常驻服务。

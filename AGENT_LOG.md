@@ -1075,6 +1075,25 @@
 ## 2026-07-31 v0.2.0 Agent Runtime 分层迁移
 
 - 流程：按已确认的 Superpowers 计划和 Inline Execution 执行，生产行为遵循 RED -> GREEN -> focused regression；所有 Git 写操作继续由用户执行。
+- 设计：`72b791a` 固化分层架构，`fcd8026` 固化迁移计划。
+- Task 1: 直接依赖声明，提交 `61add59`。
+- Task 2: 类型化 RunState 与 StateDelta，提交 `b3526b9`。
+- Task 3: 停止、挂起和恢复语义，提交 `02394f7`。
+- Task 4: 统一 RunEvent 流，提交 `7f6bffb`。
+- Task 5: ToolDefinition 与 Handler，提交 `9aff214`。
+- Task 6: 依赖许可证和 ToolRuntime，提交 `556a5cb`、`8677fd5`。
+- Task 7: HookBus 生命周期，提交 `b2a030d`。
+- Task 8: GovernanceEngine，提交 `a179788`。
+- Task 9: ActionPipeline 与 Gate adapter，提交 `6f823e9`。
+- Task 10: 角色无关 AgentLoop，提交 `999e909`。
+- Task 11: 单 Agent 入口迁移，提交 `cffc6e9`。
+- Task 12: Skill Registry，提交 `78634b9`。
+- Task 13: Skill 工具和上下文接入，提交 `d8ae083`。
+- Task 14: AgentService 运行边界，提交 `04743ec`。
+- Task 15: 审批恢复服务，提交 `89bd035`。
+- Task 16: 结构化 Workflow，提交 `575af44`。
+- Task 17: 多 Agent Workflow 迁移，提交 `47f639a`。
+- Task 18: 入口、报告、版本和最终验证，提交 `674a1f4`。
 - Runtime：建立类型化 RunState/CAS、停止与挂起语义、统一 RunEvent、ToolDefinition/Handler/Runtime、HookBus、GovernanceEngine、ActionPipeline 和角色无关 AgentLoop。
 - Agent 与 Workflow：加入安全 Skill Registry、每次 AgentRun 独立 SkillSession、AgentService 运行/恢复边界、三方能力交集、版本化 AgentArtifact 与 SequentialReviewWorkflow；自然语言 repair 控制和角色专用循环已删除。
 - 入口：`AgentServiceFactory` 成为 CLI、eval、Web 新运行及恢复路径的 composition root；`AgentRunner` 收缩为向后兼容 facade。
@@ -1082,9 +1101,13 @@
 - 凭据：没有引入 `.env`；真实模型仍只接受 OS keyring 或进程环境变量，确定性测试与 Mock Demo 不需要凭据。
 - 验证：Task 18 入口/报告/版本聚焦套件得到 `Ran 189 tests in 214.819s`、`OK (skipped=2)`；审批恢复收敛后的关键 5 项得到 `Ran 5 tests in 2.020s`、`OK`，Runner/AgentService/Approvals 回归得到 `Ran 147 tests in 64.994s`、`OK (skipped=7)`。完整离线套件先得到 `Ran 1130 tests in 455.485s`、`OK (skipped=29)`；清理遗留死代码并写入记录后独立复跑得到 `Ran 1130 tests in 456.059s`、`OK (skipped=29)`，两次退出码均为 0。
 - 最终门禁：`AgentLoop` 具体工具/角色/Workflow 名称搜索无匹配，旧 repair 字符串、`_legacy_run_loop` 与 `_run_approval_continuation` 搜索无匹配；CLI、eval、Web 均直接调用 `build_agent_service()`。`python -m compileall -q src tests` 与 Mock Demo 均退出码 0；`index.html`、`runs/latest/trace.jsonl`、`reports/latest/index.html` 均生成，最终 Gate 通过且 trust 为 `trusted`。
-- TDD RED：先扩展最终证据契约，再运行 28 项测试，得到 `FAILED (failures=3, errors=3)`；失败来自当前材料仍记录 Stage A 状态、Stage B 标题/精确事实缺失及三张图片尚未归档，没有语法或导入错误。
-- TDD GREEN：同步当前材料后，最终证据套件得到 `Ran 28 tests in 0.416s`、`OK`；为记录新鲜全量结果，又先增加 Stage B 结果断言并确认 1 项聚焦测试按预期出现 5 个材料失败，再同步五份权威材料。
-- Stage B 证据同步分支验证：imports `Ran 1 test`、CLI `Ran 51 tests in 55.310s`、workflow `Ran 5 tests`、最终证据 `Ran 28 tests in 0.434s`，全部 `OK`；Python 编译与 JavaScript 语法退出码 0，疑似真实密钥模式扫描无命中。完整套件得到 `Ran 955 tests in 404.159s`、`OK (skipped=27)`，退出码 0；新增 1 项是发布事实与历史保留契约，不替换教师基线。
-- 独立审查修复：审查发现最终提交清单把 PR #23、PR #25 旧链仍称为“当前”，并把 Pipeline #313088 / job #596503 称为当前，造成同文件多重当前状态。先将清单加入过期当前状态扫描并加入三项反例，聚焦测试得到 3 个预期失败；再把 PR #23/#25 改为历史来源链，并明确 #313088 是教师基线、#313118 / #596642 才是当前链。
-- 历史边界：`v0.1.0` 的 `main@44b236f`、PR #25、GHCR #1、digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 与 `docs/evidence/github-actions-pr25-ci-success.png`、`docs/evidence/github-actions-pr25-pages-success.png`、`docs/evidence/github-actions-ghcr-v0.1.0-success.png`、`docs/evidence/github-package-specgate-public.png`、`docs/evidence/ghcr-anonymous-pull-smoke.png` 保持不变。
 - 部署边界：公网交互式 Web 后端未部署；发布公开 CLI 镜像不等于部署公网交互式 Web 后端。GHCR、Package、匿名 pull 与 `specgate-web --help` 不构成公网服务部署证据。
+
+### 人工决策与经验
+
+- 用户要求分支名为 `v020-agent-runtime`，不使用 `codex/` 前缀；所有 Git 操作由用户执行。
+- 用户明确排除 `.env`，真实模型凭据继续使用 OS keyring 或进程环境变量。
+- Gate 保持独立且强制，Hook 只承担细粒度扩展检查；平台权限、路径和审批规则归 Governance。
+- 外部 LLM 评审推动状态 patch 所有权、挂起/恢复、取消、验证阶段、Artifact、Workflow 预算和 Trace 边界进入最终设计。
+- 实施开始采用 Subagent-Driven；后续任务按用户决定切换为 Inline Execution。
+- 静态架构测试发现重复审批 continuation loop；移除后，审批恢复继续使用同一个 AgentLoop。
