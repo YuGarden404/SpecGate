@@ -22,6 +22,8 @@ from specgate.approvals import (
     target_state_matches,
 )
 from specgate.metrics import RunMetrics, add_run_metrics
+from specgate.llm import LLMClient
+from specgate.policy import WorkspacePolicy
 from specgate.run_control import CancellationToken
 from specgate.run_state import (
     FileRunStateStore,
@@ -32,6 +34,7 @@ from specgate.run_state import (
     StateDelta,
 )
 from specgate.runtime_events import RunEventContext
+from specgate.runtime_config import RunRuntimeConfig
 from specgate.skill_registry import SkillSession
 
 
@@ -636,6 +639,7 @@ class AgentService:
         )
         return self._result(record, record.loop.run(updated.run_id))
 
+
     def _record_for_resume(
         self,
         run_id: str,
@@ -742,6 +746,149 @@ class AgentService:
             depth,
             child_max_depth,
         )
+
+
+class AgentServiceFactory:
+    def build(
+        self,
+        *,
+        root: Path,
+        llm: LLMClient,
+        policy: WorkspacePolicy,
+        audit_dir: Path,
+        approval_queue_file: Path,
+        runtime_config: RunRuntimeConfig,
+        cancel_token: CancellationToken,
+    ) -> AgentService:
+        return self._build(
+            root=root,
+            llm=llm,
+            policy=policy,
+            audit_dir=audit_dir,
+            approval_queue_file=approval_queue_file,
+            runtime_config=runtime_config,
+            cancel_token=cancel_token,
+            reset_audit=True,
+        )
+
+    def build_resumable(
+        self,
+        *,
+        root: Path,
+        llm: LLMClient,
+        policy: WorkspacePolicy,
+        audit_dir: Path,
+        approval_queue_file: Path,
+        runtime_config: RunRuntimeConfig,
+        cancel_token: CancellationToken,
+    ) -> AgentService:
+        return self._build(
+            root=root,
+            llm=llm,
+            policy=policy,
+            audit_dir=audit_dir,
+            approval_queue_file=approval_queue_file,
+            runtime_config=runtime_config,
+            cancel_token=cancel_token,
+            reset_audit=False,
+        )
+
+    def _build(
+        self,
+        *,
+        root: Path,
+        llm: LLMClient,
+        policy: WorkspacePolicy,
+        audit_dir: Path,
+        approval_queue_file: Path,
+        runtime_config: RunRuntimeConfig,
+        cancel_token: CancellationToken,
+        reset_audit: bool,
+    ) -> AgentService:
+        from specgate.runner import _ConfiguredRuntimeFactory
+
+        try:
+            audit_relative = audit_dir.relative_to(root).as_posix()
+        except ValueError:
+            workspace_fs.ensure_workspace_directory(
+                audit_dir.parent,
+                audit_dir.name,
+            )
+        else:
+            workspace_fs.ensure_workspace_directory(root, audit_relative)
+        runtime_factory = _ConfiguredRuntimeFactory(
+            root=root,
+            llm=llm,
+            policy=policy,
+            audit_dir=audit_dir,
+            approval_queue_file=approval_queue_file,
+            runtime_config=runtime_config,
+            cancel_token=cancel_token,
+            reset_audit=reset_audit,
+        )
+        workspace_fs.ensure_workspace_directory(audit_dir, "agent-state")
+        definition = AgentDefinition(
+            agent_id="default-agent",
+            instructions="Execute the configured workspace task.",
+            capability_set=frozenset(policy.allowed_actions),
+            context_policy=runtime_config.context_strategy,
+            budget=AgentBudget(
+                max_steps=runtime_config.max_steps,
+                context_chars=runtime_config.context_budget_chars,
+                child_runs=0,
+            ),
+        )
+        service = AgentService(
+            audit_root=audit_dir / "agent-state",
+            workspace_capabilities=frozenset(policy.allowed_actions),
+            runtime_factory=runtime_factory,
+        )
+        service._specgate_runtime_factory = runtime_factory
+        service._specgate_default_definition = definition
+        service._specgate_cancel_token = cancel_token
+        return service
+
+
+def build_agent_service(
+    *,
+    root: Path,
+    llm: LLMClient,
+    policy: WorkspacePolicy,
+    audit_dir: Path,
+    approval_queue_file: Path,
+    runtime_config: RunRuntimeConfig,
+    cancel_token: CancellationToken,
+) -> AgentService:
+    return AgentServiceFactory().build(
+        root=root,
+        llm=llm,
+        policy=policy,
+        audit_dir=audit_dir,
+        approval_queue_file=approval_queue_file,
+        runtime_config=runtime_config,
+        cancel_token=cancel_token,
+    )
+
+
+def build_resumable_agent_service(
+    *,
+    root: Path,
+    llm: LLMClient,
+    policy: WorkspacePolicy,
+    audit_dir: Path,
+    approval_queue_file: Path,
+    runtime_config: RunRuntimeConfig,
+    cancel_token: CancellationToken,
+) -> AgentService:
+    return AgentServiceFactory().build_resumable(
+        root=root,
+        llm=llm,
+        policy=policy,
+        audit_dir=audit_dir,
+        approval_queue_file=approval_queue_file,
+        runtime_config=runtime_config,
+        cancel_token=cancel_token,
+    )
 
 
 def effective_child_capabilities(

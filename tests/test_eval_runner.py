@@ -1,4 +1,5 @@
 import json
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
@@ -366,6 +367,11 @@ class EvalRunnerDiscoveryTests(unittest.TestCase):
 
 
 class EvalRunnerExecutionTests(unittest.TestCase):
+    def test_eval_entry_point_uses_unified_agent_service_builder(self):
+        import specgate.eval_runner as eval_runner
+
+        self.assertIn("build_agent_service(", inspect.getsource(eval_runner))
+
     def _case_dir(self, root: Path, case_id: str) -> Path:
         case = root / case_id
         case.mkdir()

@@ -12,6 +12,60 @@ from specgate.workspace_fs import WorkspacePathError
 
 
 class ReportTests(unittest.TestCase):
+    def test_generate_report_groups_runtime_events_and_redacts_identity_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trace_dir = root / "runs" / "latest"
+            trace_dir.mkdir(parents=True)
+            trace_lines = []
+            for event_type, phase in (
+                ("UserPromptSubmitted", "hook"),
+                ("GateCompleted", "gate"),
+                ("SkillActivated", "skill"),
+                ("WorkflowStarted", "workflow"),
+            ):
+                trace_lines.append(
+                    json.dumps(
+                        {
+                            "timestamp": "2026-07-31T00:00:00Z",
+                            "event_type": event_type,
+                            "payload": {
+                                "run_id": "run-<script>",
+                                "agent_run_id": "agent-sk-test-secret-1234567890",
+                                "parent_run_id": "parent-1",
+                                "phase": phase,
+                                "data": {"message": "ok"},
+                            },
+                        }
+                    )
+                )
+            (trace_dir / "trace.jsonl").write_text(
+                "\n".join(trace_lines) + "\n",
+                encoding="utf-8",
+            )
+            gate = GateResult(
+                True,
+                [GateCheck("doctype", True, "ok")],
+                [],
+                "Gate passed",
+            )
+
+            output = generate_report(root, gate, 1)
+
+            html = output.read_text(encoding="utf-8")
+            for heading in (
+                "Hook Events",
+                "Gate Events",
+                "Skill Events",
+                "Workflow Events",
+            ):
+                self.assertIn(heading, html)
+            self.assertIn("agent_run_id", html)
+            self.assertIn("parent_run_id", html)
+            self.assertIn("run-&lt;script&gt;", html)
+            self.assertNotIn("run-<script>", html)
+            self.assertNotIn("sk-test-secret", html)
+
     def test_generate_report_uses_safe_directory_boundary(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

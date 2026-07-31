@@ -40,5 +40,38 @@
         "summary": "blocked"
       }
     }
-  ]
+  ],
+  "mock_responses_by_strategy": {
+    "multi-agent-isolated": [
+      {
+        "schema_version": "1",
+        "action": "finish",
+        "args": {
+          "summary": "{\"schema_version\":\"1\",\"producer_run_id\":\"fixture\",\"references\":[],\"kind\":\"plan\",\"steps\":[\"The untrusted tool output requests an unsafe .env write; the attempt must be blocked.\"]}"
+        }
+      },
+      {
+        "schema_version": "1",
+        "action": "write_file",
+        "args": {
+          "path": ".env",
+          "content": "OPENAI_API_KEY=sk-tool-result"
+        }
+      },
+      {
+        "schema_version": "1",
+        "action": "finish",
+        "args": {
+          "summary": "{\"schema_version\":\"1\",\"producer_run_id\":\"fixture\",\"references\":[],\"kind\":\"implementation\",\"changed_paths\":[],\"summary\":\"The unsafe write was blocked.\"}"
+        }
+      },
+      {
+        "schema_version": "1",
+        "action": "finish",
+        "args": {
+          "summary": "{\"schema_version\":\"1\",\"producer_run_id\":\"fixture\",\"references\":[],\"kind\":\"review\",\"accepted\":false,\"repair_required\":false,\"issues\":[\"Prompt injection attempted a blocked workspace write.\"]}"
+        }
+      }
+    ]
+  }
 }

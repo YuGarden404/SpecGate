@@ -1071,6 +1071,17 @@
 - 命令问题复盘：首次 OCI revision 检查使用嵌套 Go template，PowerShell 先处理内部双引号，Docker 因而把标签键错误解析成模板函数并报告 `function "org" not defined`；这是命令引用问题，不是镜像缺陷。随后改用 `docker image inspect` JSON 与 `ConvertFrom-Json`，成功取得 digest 和 OCI revision。
 - 匿名 smoke：一次性空 `DOCKER_CONFIG` 中 pull、CLI help、Mock Demo 与 Web help 均退出码 0；实际 digest、预期 digest、实际 revision、预期 revision 完全一致，finally 清理后 `Anonymous config exists: False`。`v0.1.1` 已完成匿名拉取验证。
 - 截图归档：原始附件只做二进制复制，生成 `docs/evidence/github-actions-ghcr-v0.1.1-success.png`、`docs/evidence/github-package-specgate-v0.1.1-public.png`、`docs/evidence/ghcr-v0.1.1-anonymous-smoke.png`；对应 SHA-256 为 `0093D19A993C1E692B5F7395C90920BEE69EB18E993C7C67F18661E18A5B102D`、`532ACA46AAAC39558F1595A98212D6F0E19B0C2868F1C979E60047B49C979C42`、`F442317D92DBA670098C32D7B0C8BB629C5AF580162BDE487B97728063BB7043`。PNG 聚焦测试 `Ran 2 tests in 0.296s`、`OK`。
+
+## 2026-07-31 v0.2.0 Agent Runtime 分层迁移
+
+- 流程：按已确认的 Superpowers 计划和 Inline Execution 执行，生产行为遵循 RED -> GREEN -> focused regression；所有 Git 写操作继续由用户执行。
+- Runtime：建立类型化 RunState/CAS、停止与挂起语义、统一 RunEvent、ToolDefinition/Handler/Runtime、HookBus、GovernanceEngine、ActionPipeline 和角色无关 AgentLoop。
+- Agent 与 Workflow：加入安全 Skill Registry、每次 AgentRun 独立 SkillSession、AgentService 运行/恢复边界、三方能力交集、版本化 AgentArtifact 与 SequentialReviewWorkflow；自然语言 repair 控制和角色专用循环已删除。
+- 入口：`AgentServiceFactory` 成为 CLI、eval、Web 新运行及恢复路径的 composition root；`AgentRunner` 收缩为向后兼容 facade。
+- 报告与安全：运行报告新增 Hook、Gate、Skill、Workflow 事件分组，保留完整事件列表；agent/parent run identity 和动态 payload 继续 escape/redact，审批 action payload 不进入报告。
+- 凭据：没有引入 `.env`；真实模型仍只接受 OS keyring 或进程环境变量，确定性测试与 Mock Demo 不需要凭据。
+- 验证：Task 18 入口/报告/版本聚焦套件得到 `Ran 189 tests in 214.819s`、`OK (skipped=2)`；审批恢复收敛后的关键 5 项得到 `Ran 5 tests in 2.020s`、`OK`，Runner/AgentService/Approvals 回归得到 `Ran 147 tests in 64.994s`、`OK (skipped=7)`。完整离线套件先得到 `Ran 1130 tests in 455.485s`、`OK (skipped=29)`；清理遗留死代码并写入记录后独立复跑得到 `Ran 1130 tests in 456.059s`、`OK (skipped=29)`，两次退出码均为 0。
+- 最终门禁：`AgentLoop` 具体工具/角色/Workflow 名称搜索无匹配，旧 repair 字符串、`_legacy_run_loop` 与 `_run_approval_continuation` 搜索无匹配；CLI、eval、Web 均直接调用 `build_agent_service()`。`python -m compileall -q src tests` 与 Mock Demo 均退出码 0；`index.html`、`runs/latest/trace.jsonl`、`reports/latest/index.html` 均生成，最终 Gate 通过且 trust 为 `trusted`。
 - TDD RED：先扩展最终证据契约，再运行 28 项测试，得到 `FAILED (failures=3, errors=3)`；失败来自当前材料仍记录 Stage A 状态、Stage B 标题/精确事实缺失及三张图片尚未归档，没有语法或导入错误。
 - TDD GREEN：同步当前材料后，最终证据套件得到 `Ran 28 tests in 0.416s`、`OK`；为记录新鲜全量结果，又先增加 Stage B 结果断言并确认 1 项聚焦测试按预期出现 5 个材料失败，再同步五份权威材料。
 - Stage B 证据同步分支验证：imports `Ran 1 test`、CLI `Ran 51 tests in 55.310s`、workflow `Ran 5 tests`、最终证据 `Ran 28 tests in 0.434s`，全部 `OK`；Python 编译与 JavaScript 语法退出码 0，疑似真实密钥模式扫描无命中。完整套件得到 `Ran 955 tests in 404.159s`、`OK (skipped=27)`，退出码 0；新增 1 项是发布事实与历史保留契约，不替换教师基线。

@@ -29,7 +29,7 @@
         "schema_version": "1",
         "action": "finish",
         "args": {
-          "summary": "Plan: write the study dashboard using retrieved implementation notes."
+          "summary": "{\"schema_version\":\"1\",\"producer_run_id\":\"fixture\",\"references\":[],\"kind\":\"plan\",\"steps\":[\"Write the study dashboard using retrieved implementation notes.\"]}"
         }
       },
       {
@@ -44,7 +44,7 @@
         "schema_version": "1",
         "action": "finish",
         "args": {
-          "summary": "Review: retrieval context was used and page passes."
+          "summary": "{\"schema_version\":\"1\",\"producer_run_id\":\"fixture\",\"references\":[],\"kind\":\"review\",\"accepted\":true,\"repair_required\":false,\"issues\":[]}"
         }
       }
     ]

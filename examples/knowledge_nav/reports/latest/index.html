@@ -10,6 +10,50 @@
   <h1>SpecGate Run Report</h1>
   <p>Steps: 3</p>
   <p>Gate: Gate 通过</p>
+  <h2>Trust Summary</h2><p>Profile: strict</p><p>Status: <strong>trusted</strong></p><ul><li>clean_finish</li></ul>
+  <h2>Run Metrics</h2><table><tbody><tr><th>steps</th><td>3</td></tr>
+<tr><th>context_chars_max</th><td>14045</td></tr>
+<tr><th>llm_calls</th><td>3</td></tr>
+<tr><th>tool_calls</th><td>3</td></tr>
+<tr><th>successful_tool_calls</th><td>3</td></tr>
+<tr><th>blocked_actions</th><td>0</td></tr>
+<tr><th>parse_errors</th><td>0</td></tr>
+<tr><th>tool_validation_failures</th><td>0</td></tr>
+<tr><th>gate_runs</th><td>3</td></tr>
+<tr><th>gate_failures</th><td>1</td></tr>
+<tr><th>finish_actions</th><td>1</td></tr>
+<tr><th>approval_requests</th><td>0</td></tr>
+<tr><th>pending_approvals</th><td>0</td></tr>
+<tr><th>approved_approvals</th><td>0</td></tr>
+<tr><th>denied_approvals</th><td>0</td></tr>
+<tr><th>applied_approvals</th><td>0</td></tr>
+<tr><th>failed_approvals</th><td>0</td></tr>
+<tr><th>retrieval_queries</th><td>0</td></tr>
+<tr><th>retrieved_chunks</th><td>0</td></tr>
+<tr><th>retrieval_candidate_chunks</th><td>0</td></tr>
+<tr><th>retrieval_context_chars</th><td>0</td></tr>
+<tr><th>compression_original_chars</th><td>0</td></tr>
+<tr><th>compression_compressed_chars</th><td>0</td></tr>
+<tr><th>cleared_tool_results</th><td>0</td></tr>
+<tr><th>role_contexts</th><td>0</td></tr>
+<tr><th>isolated_state_keys</th><td>0</td></tr>
+<tr><th>role_runs</th><td>0</td></tr>
+<tr><th>role_blocked_actions</th><td>0</td></tr>
+<tr><th>review_repairs</th><td>0</td></tr>
+<tr><th>planner_runs</th><td>0</td></tr>
+<tr><th>implementer_runs</th><td>0</td></tr>
+<tr><th>reviewer_runs</th><td>0</td></tr>
+<tr><th>role_cycle_limit_reached</th><td>False</td></tr>
+<tr><th>max_steps_reached</th><td>False</td></tr></tbody></table>
+  <h2>Permission Decisions</h2><table><thead><tr><th>Step</th><th>Action</th><th>Path</th><th>Allowed</th><th>Blocked</th><th>Reason</th><th>Profile</th><th>Rule Family</th></tr></thead><tbody><tr><td>1</td><td>write_file</td><td>index.html</td><td>yes</td><td>no</td><td>tool completed</td><td>strict</td><td>none</td></tr>
+<tr><td>2</td><td>replace_file</td><td>index.html</td><td>yes</td><td>no</td><td>tool completed</td><td>strict</td><td>none</td></tr>
+<tr><td>3</td><td>finish</td><td></td><td>yes</td><td>no</td><td>tool completed</td><td>strict</td><td>none</td></tr></tbody></table>
+  <h2>Approval History</h2><p>No approvals recorded.</p>
+  <h2>Retrieval Evidence</h2><p>Query terms: </p><p>Candidate chunks: 0</p><p>No chunks selected.</p>
+  <h2>Compression Evidence</h2><table><tbody></tbody></table>
+  <h2>Role Isolation Evidence</h2><p>No role isolation roles recorded.</p>
+  <h2>Prompt Injection Safety</h2><p>No prompt injection safety evidence recorded.</p>
+  <h2>Benchmark Summary</h2><p>No benchmark summary recorded.</p>
   <h2>Checks</h2>
   <ul><li>doctype: PASS</li>
 <li>html_tag: PASS</li>
@@ -17,10 +61,9 @@
 <li>title_tag: PASS</li>
 <li>body_tag: PASS</li>
 <li>viewport: PASS</li>
-<li>search: PASS</li>
-<li>relations: PASS</li>
 <li>offline: PASS</li>
 <li>no_secret: PASS</li>
+<li>relations: PASS</li>
 <li>node_count: PASS</li>
 <li>checklist_contains_AI for Coding 知识图谱: PASS</li>
 <li>checklist_contains_TASK_SPEC.md: PASS</li>
@@ -40,25 +83,50 @@
   <h2>Issues</h2>
   <ul></ul>
   <h2>Tools</h2>
-  <ul><li><strong>read_file</strong> [read]: Read a UTF-8 text file allowed by workspace policy.</li>
-<li><strong>write_file</strong> [write]: Write a UTF-8 text file allowed by workspace policy and snapshot protection.</li>
-<li><strong>replace_file</strong> [write]: Replace a UTF-8 text file allowed by workspace policy and snapshot protection.</li>
-<li><strong>list_files</strong> [inspect]: List files inside the workspace.</li>
-<li><strong>finish</strong> [control]: Finish the agent loop with a short summary.</li></ul>
+  <ul><li><strong>read_file</strong> [read]: Read allowed UTF-8 workspace text.</li>
+<li><strong>write_file</strong> [write]: Write allowed UTF-8 workspace text.</li>
+<li><strong>replace_file</strong> [write]: Replace allowed UTF-8 workspace text.</li>
+<li><strong>list_files</strong> [inspect]: List policy-readable workspace files.</li>
+<li><strong>finish</strong> [control]: Request final Gate and completion.</li></ul>
   <h2>Run Events</h2>
-  <ol><li><strong>llm_response</strong>: <code>{&quot;step&quot;: 1, &quot;text&quot;: &quot;{\&quot;schema_version\&quot;: \&quot;1\&quot;, \&quot;action\&quot;: \&quot;write_file\&quot;, \&quot;args\&quot;: {\&quot;path\&quot;: \&quot;index.html\&quot;, \&quot;content\&quot;: \&quot;&lt;html&gt;&lt;head&gt;&lt;title&gt;x&lt;/title&gt;&lt;/head&gt;&lt;body&gt;&lt;/body&gt;&lt;/html&gt;\&quot;}}&quot;}</code></li>
-<li><strong>tool_result</strong>: <code>{&quot;step&quot;: 1, &quot;result&quot;: {&quot;ok&quot;: true, &quot;action&quot;: &quot;write_file&quot;, &quot;message&quot;: &quot;wrote index.html&quot;, &quot;data&quot;: {&quot;path&quot;: &quot;index.html&quot;}, &quot;blocked&quot;: false}}</code></li>
-<li><strong>gate_result</strong>: <code>{&quot;step&quot;: 1, &quot;passed&quot;: false, &quot;summary&quot;: &quot;Gate 失败：添加至少 10 个 class=node 的知识节点；添加 &lt;!doctype html&gt;；添加移动端 viewport meta；添加 search input 或 filter 控件&quot;}</code></li>
+  <h3>All Runtime Events</h3><ol><li><strong>RunStarted</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 0, &quot;phase&quot;: &quot;loop&quot;, &quot;data&quot;: {&quot;status&quot;: &quot;running&quot;}}</code></li>
+<li><strong>context_built</strong>: <code>{&quot;step&quot;: 1, &quot;strategy&quot;: &quot;baseline&quot;, &quot;context_chars&quot;: 13525}</code></li>
+<li><strong>ContextBuilt</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 0, &quot;phase&quot;: &quot;context&quot;, &quot;data&quot;: {&quot;retrieval&quot;: null, &quot;compression&quot;: null, &quot;isolation&quot;: null}}</code></li>
+<li><strong>llm_response</strong>: <code>{&quot;step&quot;: 1, &quot;text&quot;: &quot;{\&quot;schema_version\&quot;: \&quot;1\&quot;, \&quot;action\&quot;: \&quot;write_file\&quot;, \&quot;args\&quot;: {\&quot;path\&quot;: \&quot;index.html\&quot;, \&quot;content\&quot;: \&quot;&lt;html&gt;&lt;head&gt;&lt;title&gt;x&lt;/title&gt;&lt;/head&gt;&lt;body&gt;&lt;/body&gt;&lt;/html&gt;\&quot;}}&quot;}</code></li>
+<li><strong>LLMCompleted</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 0, &quot;phase&quot;: &quot;llm&quot;, &quot;data&quot;: {&quot;response_chars&quot;: 149}}</code></li>
+<li><strong>ToolCompleted</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 1, &quot;phase&quot;: &quot;tool&quot;, &quot;data&quot;: {&quot;action&quot;: &quot;write_file&quot;, &quot;ok&quot;: true, &quot;blocked&quot;: false, &quot;code&quot;: &quot;ok&quot;}}</code></li>
+<li><strong>GateCompleted</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 1, &quot;phase&quot;: &quot;gate&quot;, &quot;data&quot;: {&quot;passed&quot;: false, &quot;summary&quot;: &quot;Gate 失败：添加至少 10 个 class=node 的知识节点；添加 &lt;!doctype html&gt;；添加移动端 viewport meta；添加 data-related 和关系高亮脚本&quot;}}</code></li>
+<li><strong>permission_decision</strong>: <code>{&quot;step&quot;: 1, &quot;action&quot;: &quot;write_file&quot;, &quot;path&quot;: &quot;index.html&quot;, &quot;allowed&quot;: true, &quot;blocked&quot;: false, &quot;reason&quot;: &quot;tool completed&quot;, &quot;profile&quot;: &quot;strict&quot;, &quot;rule_family&quot;: &quot;none&quot;}</code></li>
+<li><strong>tool_result</strong>: <code>{&quot;step&quot;: 1, &quot;result&quot;: {&quot;ok&quot;: true, &quot;action&quot;: &quot;write_file&quot;, &quot;message&quot;: &quot;tool completed&quot;, &quot;data&quot;: {&quot;path&quot;: &quot;index.html&quot;}, &quot;blocked&quot;: false, &quot;rule_family&quot;: &quot;none&quot;, &quot;code&quot;: &quot;ok&quot;}}</code></li>
+<li><strong>gate_result</strong>: <code>{&quot;step&quot;: 1, &quot;passed&quot;: false, &quot;summary&quot;: &quot;Gate 失败：添加至少 10 个 class=node 的知识节点；添加 &lt;!doctype html&gt;；添加移动端 viewport meta；添加 data-related 和关系高亮脚本&quot;}</code></li>
+<li><strong>context_built</strong>: <code>{&quot;step&quot;: 2, &quot;strategy&quot;: &quot;baseline&quot;, &quot;context_chars&quot;: 4158}</code></li>
+<li><strong>ContextBuilt</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 1, &quot;phase&quot;: &quot;context&quot;, &quot;data&quot;: {&quot;retrieval&quot;: null, &quot;compression&quot;: null, &quot;isolation&quot;: null}}</code></li>
 <li><strong>llm_response</strong>: <code>{&quot;step&quot;: 2, &quot;text&quot;: &quot;{\&quot;schema_version\&quot;: \&quot;1\&quot;, \&quot;action\&quot;: \&quot;replace_file\&quot;, \&quot;args\&quot;: {\&quot;path\&quot;: \&quot;index.html\&quot;, \&quot;content\&quot;: \&quot;&lt;!doctype html&gt;\\n&lt;html lang=\\\&quot;zh-CN\\\&quot;&gt;\\n&lt;head&gt;\\n  &lt;meta charset=\\\&quot;utf-8\\\&quot;&gt;\\n  &lt;meta name=\\\&quot;viewport\\\&quot; content=\\\&quot;width=device-width, initial-scale=1\\\&quot;&gt;\\n  &lt;title&gt;AI for Coding 知识图谱&lt;/title&gt;\\n  &lt;style&gt;\\n    :root {\\n      --bg: #eef2f6;\\n      --ink: #17202a;\\n      --muted: #667382;\\n      --line: #d8e0ea;\\n      --paper: #ffffff;\\n      --...[truncated]</code></li>
-<li><strong>tool_result</strong>: <code>{&quot;step&quot;: 2, &quot;result&quot;: {&quot;ok&quot;: true, &quot;action&quot;: &quot;replace_file&quot;, &quot;message&quot;: &quot;wrote index.html&quot;, &quot;data&quot;: {&quot;path&quot;: &quot;index.html&quot;}, &quot;blocked&quot;: false}}</code></li>
+<li><strong>LLMCompleted</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 1, &quot;phase&quot;: &quot;llm&quot;, &quot;data&quot;: {&quot;response_chars&quot;: 14734}}</code></li>
+<li><strong>ToolCompleted</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 2, &quot;phase&quot;: &quot;tool&quot;, &quot;data&quot;: {&quot;action&quot;: &quot;replace_file&quot;, &quot;ok&quot;: true, &quot;blocked&quot;: false, &quot;code&quot;: &quot;ok&quot;}}</code></li>
+<li><strong>GateCompleted</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 2, &quot;phase&quot;: &quot;gate&quot;, &quot;data&quot;: {&quot;passed&quot;: true, &quot;summary&quot;: &quot;Gate 通过&quot;}}</code></li>
+<li><strong>permission_decision</strong>: <code>{&quot;step&quot;: 2, &quot;action&quot;: &quot;replace_file&quot;, &quot;path&quot;: &quot;index.html&quot;, &quot;allowed&quot;: true, &quot;blocked&quot;: false, &quot;reason&quot;: &quot;tool completed&quot;, &quot;profile&quot;: &quot;strict&quot;, &quot;rule_family&quot;: &quot;none&quot;}</code></li>
+<li><strong>tool_result</strong>: <code>{&quot;step&quot;: 2, &quot;result&quot;: {&quot;ok&quot;: true, &quot;action&quot;: &quot;replace_file&quot;, &quot;message&quot;: &quot;tool completed&quot;, &quot;data&quot;: {&quot;path&quot;: &quot;index.html&quot;}, &quot;blocked&quot;: false, &quot;rule_family&quot;: &quot;none&quot;, &quot;code&quot;: &quot;ok&quot;}}</code></li>
 <li><strong>gate_result</strong>: <code>{&quot;step&quot;: 2, &quot;passed&quot;: true, &quot;summary&quot;: &quot;Gate 通过&quot;}</code></li>
+<li><strong>context_built</strong>: <code>{&quot;step&quot;: 3, &quot;strategy&quot;: &quot;baseline&quot;, &quot;context_chars&quot;: 14045}</code></li>
+<li><strong>ContextBuilt</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 2, &quot;phase&quot;: &quot;context&quot;, &quot;data&quot;: {&quot;retrieval&quot;: null, &quot;compression&quot;: null, &quot;isolation&quot;: null}}</code></li>
 <li><strong>llm_response</strong>: <code>{&quot;step&quot;: 3, &quot;text&quot;: &quot;{\&quot;schema_version\&quot;: \&quot;1\&quot;, \&quot;action\&quot;: \&quot;finish\&quot;, \&quot;args\&quot;: {\&quot;summary\&quot;: \&quot;done\&quot;}}&quot;}</code></li>
-<li><strong>tool_result</strong>: <code>{&quot;step&quot;: 3, &quot;result&quot;: {&quot;ok&quot;: true, &quot;action&quot;: &quot;finish&quot;, &quot;message&quot;: &quot;finish requested&quot;, &quot;data&quot;: {&quot;summary&quot;: &quot;done&quot;}, &quot;blocked&quot;: false}}</code></li></ol>
+<li><strong>LLMCompleted</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 2, &quot;phase&quot;: &quot;llm&quot;, &quot;data&quot;: {&quot;response_chars&quot;: 72}}</code></li>
+<li><strong>ToolCompleted</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 3, &quot;phase&quot;: &quot;tool&quot;, &quot;data&quot;: {&quot;action&quot;: &quot;finish&quot;, &quot;ok&quot;: true, &quot;blocked&quot;: false, &quot;code&quot;: &quot;ok&quot;}}</code></li>
+<li><strong>GateCompleted</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 3, &quot;phase&quot;: &quot;gate&quot;, &quot;data&quot;: {&quot;passed&quot;: true, &quot;summary&quot;: &quot;Gate 通过&quot;}}</code></li>
+<li><strong>permission_decision</strong>: <code>{&quot;step&quot;: 3, &quot;action&quot;: &quot;finish&quot;, &quot;path&quot;: null, &quot;allowed&quot;: true, &quot;blocked&quot;: false, &quot;reason&quot;: &quot;tool completed&quot;, &quot;profile&quot;: &quot;strict&quot;, &quot;rule_family&quot;: &quot;none&quot;}</code></li>
+<li><strong>tool_result</strong>: <code>{&quot;step&quot;: 3, &quot;result&quot;: {&quot;ok&quot;: true, &quot;action&quot;: &quot;finish&quot;, &quot;message&quot;: &quot;tool completed&quot;, &quot;data&quot;: {&quot;summary&quot;: &quot;done&quot;}, &quot;blocked&quot;: false, &quot;rule_family&quot;: &quot;none&quot;, &quot;code&quot;: &quot;ok&quot;}}</code></li>
+<li><strong>gate_result</strong>: <code>{&quot;step&quot;: 3, &quot;passed&quot;: true, &quot;summary&quot;: &quot;Gate 通过&quot;}</code></li>
+<li><strong>RunFinished</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 3, &quot;phase&quot;: &quot;loop&quot;, &quot;data&quot;: {&quot;status&quot;: &quot;completed&quot;, &quot;reason&quot;: &quot;finish_accepted&quot;}}</code></li>
+<li><strong>run_summary</strong>: <code>{&quot;profile&quot;: &quot;strict&quot;, &quot;metrics&quot;: {&quot;steps&quot;: 3, &quot;context_chars_max&quot;: 14045, &quot;llm_calls&quot;: 3, &quot;tool_calls&quot;: 3, &quot;successful_tool_calls&quot;: 3, &quot;blocked_actions&quot;: 0, &quot;parse_errors&quot;: 0, &quot;tool_validation_failures&quot;: 0, &quot;gate_runs&quot;: 3, &quot;gate_failures&quot;: 1, &quot;finish_actions&quot;: 1, &quot;approval_requests&quot;: 0, &quot;pending_approvals&quot;: 0, &quot;approved_approvals&quot;: 0, &quot;denied_approvals&quot;: 0, &quot;applied_approvals&quot;: 0, &quot;failed_approvals&quot;: 0, &quot;retrieval_queries&quot;: 0, &quot;retrieved_chunks&quot;: 0, &quot;retrieval_candidate_chunks&quot;: 0, &quot;retrieval_co...[truncated]</code></li></ol><h3>Hook Events</h3><ol><li><strong>RunStarted</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 0, &quot;phase&quot;: &quot;loop&quot;, &quot;data&quot;: {&quot;status&quot;: &quot;running&quot;}}</code></li>
+<li><strong>RunFinished</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 3, &quot;phase&quot;: &quot;loop&quot;, &quot;data&quot;: {&quot;status&quot;: &quot;completed&quot;, &quot;reason&quot;: &quot;finish_accepted&quot;}}</code></li></ol><h3>Gate Events</h3><ol><li><strong>GateCompleted</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 1, &quot;phase&quot;: &quot;gate&quot;, &quot;data&quot;: {&quot;passed&quot;: false, &quot;summary&quot;: &quot;Gate 失败：添加至少 10 个 class=node 的知识节点；添加 &lt;!doctype html&gt;；添加移动端 viewport meta；添加 data-related 和关系高亮脚本&quot;}}</code></li>
+<li><strong>gate_result</strong>: <code>{&quot;step&quot;: 1, &quot;passed&quot;: false, &quot;summary&quot;: &quot;Gate 失败：添加至少 10 个 class=node 的知识节点；添加 &lt;!doctype html&gt;；添加移动端 viewport meta；添加 data-related 和关系高亮脚本&quot;}</code></li>
+<li><strong>GateCompleted</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 2, &quot;phase&quot;: &quot;gate&quot;, &quot;data&quot;: {&quot;passed&quot;: true, &quot;summary&quot;: &quot;Gate 通过&quot;}}</code></li>
+<li><strong>gate_result</strong>: <code>{&quot;step&quot;: 2, &quot;passed&quot;: true, &quot;summary&quot;: &quot;Gate 通过&quot;}</code></li>
+<li><strong>GateCompleted</strong>: <code>{&quot;run_id&quot;: &quot;run-f1d6af02540c&quot;, &quot;agent_run_id&quot;: &quot;agent-run-f1d6af02540c&quot;, &quot;parent_run_id&quot;: null, &quot;step&quot;: 3, &quot;phase&quot;: &quot;gate&quot;, &quot;data&quot;: {&quot;passed&quot;: true, &quot;summary&quot;: &quot;Gate 通过&quot;}}</code></li>
+<li><strong>gate_result</strong>: <code>{&quot;step&quot;: 3, &quot;passed&quot;: true, &quot;summary&quot;: &quot;Gate 通过&quot;}</code></li></ol><h3>Skill Events</h3><p>No events recorded.</p><h3>Workflow Events</h3><p>No events recorded.</p>
   <h2>Memory Summary</h2>
-  <pre>run 1 | passed=True | steps=3 | gate=Gate 通过
-run 2 | passed=True | steps=3 | gate=Gate 通过
-run 3 | passed=True | steps=3 | gate=Gate 通过
-run 4 | passed=True | steps=3 | gate=Gate 通过</pre>
+  <pre>run 1 | passed=True | steps=3 | gate=Gate 通过</pre>
   <p><a href="../../index.html">Final artifact</a></p>
 </body>
 </html>

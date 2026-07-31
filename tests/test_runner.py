@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import json
 import tempfile
 import unittest
@@ -168,6 +169,22 @@ class FinishAfterExternalMutationLLM:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_agent_runner_is_only_a_compatibility_facade(self):
+        source = inspect.getsource(AgentRunner)
+
+        for forbidden in (
+            "while ",
+            "for step",
+            "write_file",
+            "replace_file",
+            "planner",
+            "reviewer",
+            "multi-agent-isolated",
+            "_legacy_run_loop",
+            "_run_approval_continuation",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
     def test_legacy_state_store_preserves_strict_agent_artifact_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = _LegacyRunStateStore(TraceStore(Path(tmp) / "trace.jsonl"))
@@ -205,6 +222,7 @@ class RunnerTests(unittest.TestCase):
             "summary_requests_repair",
             "_run_multi_agent_loop",
             "_run_multi_agent_role_once",
+            "_run_approval_continuation",
         ):
             self.assertNotIn(legacy_name, source)
         self.assertNotIn("request_repair", multi_agent_source)
@@ -1827,7 +1845,7 @@ class RunnerTests(unittest.TestCase):
         for strategy in ("compressed-rag", "isolated-harness"):
             with self.subTest(strategy=strategy), tempfile.TemporaryDirectory() as new_tmp, tempfile.TemporaryDirectory() as legacy_tmp:
                 results = []
-                for tmp, use_new_loop in ((new_tmp, True), (legacy_tmp, False)):
+                for tmp in (new_tmp, legacy_tmp):
                     root = Path(tmp)
                     (root / "TASK_SPEC.md").write_text(
                         "Build a searchable knowledge navigator.",
@@ -1874,11 +1892,7 @@ class RunnerTests(unittest.TestCase):
                             summary_budget_chars=500,
                         ),
                     )
-                    result = (
-                        runner.run()
-                        if use_new_loop
-                        else runner._legacy_run_loop(reset_queue=True)
-                    )
+                    result = runner.run()
                     results.append(result)
 
                 self.assertEqual(results[0].outcome, results[1].outcome)
@@ -1888,7 +1902,7 @@ class RunnerTests(unittest.TestCase):
         traces = []
         results = []
         with tempfile.TemporaryDirectory() as new_tmp, tempfile.TemporaryDirectory() as legacy_tmp:
-            for tmp, use_new_loop in ((new_tmp, True), (legacy_tmp, False)):
+            for tmp in (new_tmp, legacy_tmp):
                 root = Path(tmp)
                 (root / "TASK_SPEC.md").write_text("Keep files safe.", encoding="utf-8")
                 (root / "CHECKLIST.md").write_text("", encoding="utf-8")
@@ -1923,11 +1937,7 @@ class RunnerTests(unittest.TestCase):
                         review_paths={"README.md"},
                     ),
                 )
-                result = (
-                    runner.run()
-                    if use_new_loop
-                    else runner._legacy_run_loop(reset_queue=True)
-                )
+                result = runner.run()
                 events = [
                     json.loads(line)
                     for line in (root / "runs" / "latest" / "trace.jsonl")

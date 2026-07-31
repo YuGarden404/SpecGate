@@ -10,6 +10,10 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Callable
 
+from specgate.agent_service import (
+    build_agent_service,
+    build_resumable_agent_service,
+)
 from specgate.approvals import ApprovalQueue, GovernanceConfig
 from specgate.config import ContextConfig, WorkspaceConfig
 from specgate.context_lifecycle import CompressionConfig
@@ -29,7 +33,8 @@ from specgate.run_storage import (
     run_quarantine_capacity_guard,
     validate_run_storage_ownership,
 )
-from specgate.runner import AgentRunner, RunResult
+from specgate.run_control import CallbackCancellationToken
+from specgate.runner import AgentRunner, RunResult, configure_agent_service
 from specgate.retrieval import RetrievalConfig
 from specgate.runtime_config import RunRuntimeConfig, RuntimeConfigError
 from specgate.trace import redact
@@ -1067,14 +1072,22 @@ def _run_mock_agent(
         stop_check=stop_check or (lambda: None),
         remaining_seconds=remaining_seconds or (lambda: 60.0),
     )
-    runner = AgentRunner(
-        paths.workspace,
-        llm,
-        workspace_config.policy,
-        max_steps=config.max_steps,
-        context_strategy=workspace_config.context.strategy,
+    token = CallbackCancellationToken(
+        stop_check or (lambda: None),
+        remaining_seconds or (lambda: 60.0),
+    )
+    service = build_agent_service(
+        root=paths.workspace,
+        llm=llm,
+        policy=workspace_config.policy,
+        audit_dir=paths.audit,
+        approval_queue_file=paths.approval_queue,
+        runtime_config=config,
+        cancel_token=token,
+    )
+    configure_agent_service(
+        service,
         governance_config=workspace_config.governance,
-        context_budget_chars=config.context_budget_chars,
         retrieval_config=RetrievalConfig(
             top_k=config.retrieval_top_k,
             budget_chars=config.retrieval_budget_chars,
@@ -1082,10 +1095,8 @@ def _run_mock_agent(
         compression_config=CompressionConfig(
             max_tool_result_chars=config.compression_max_tool_result_chars,
         ),
-        audit_dir=paths.audit,
-        approval_queue_file=paths.approval_queue,
-        stop_check=stop_check,
     )
+    runner = AgentRunner(agent_service=service)
     runner.trace.append(
         "runtime_config_applied",
         {"phase": "initial", "config": config.to_dict()},
@@ -1139,14 +1150,22 @@ def _run_resume_agent(
         stop_check=stop_check or (lambda: None),
         remaining_seconds=remaining_seconds or (lambda: 60.0),
     )
-    runner = AgentRunner(
-        paths.workspace,
-        llm,
-        workspace_config.policy,
-        max_steps=config.max_steps,
-        context_strategy=workspace_config.context.strategy,
+    token = CallbackCancellationToken(
+        stop_check or (lambda: None),
+        remaining_seconds or (lambda: 60.0),
+    )
+    service = build_resumable_agent_service(
+        root=paths.workspace,
+        llm=llm,
+        policy=workspace_config.policy,
+        audit_dir=paths.audit,
+        approval_queue_file=paths.approval_queue,
+        runtime_config=config,
+        cancel_token=token,
+    )
+    configure_agent_service(
+        service,
         governance_config=workspace_config.governance,
-        context_budget_chars=config.context_budget_chars,
         retrieval_config=RetrievalConfig(
             top_k=config.retrieval_top_k,
             budget_chars=config.retrieval_budget_chars,
@@ -1154,11 +1173,8 @@ def _run_resume_agent(
         compression_config=CompressionConfig(
             max_tool_result_chars=config.compression_max_tool_result_chars,
         ),
-        audit_dir=paths.audit,
-        approval_queue_file=paths.approval_queue,
-        reset_audit=False,
-        stop_check=stop_check,
     )
+    runner = AgentRunner(agent_service=service)
     runner.trace.append(
         "runtime_config_applied",
         {"phase": "resume", "config": config.to_dict()},

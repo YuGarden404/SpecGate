@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from dataclasses import FrozenInstanceError
+import inspect
 from pathlib import Path
 
 from specgate.agent_service import (
@@ -8,6 +9,7 @@ from specgate.agent_service import (
     AgentDefinition,
     AgentResumeHandle,
     AgentService,
+    AgentServiceFactory,
     BudgetExceeded,
     DelegationDenied,
     DelegationPolicy,
@@ -68,6 +70,30 @@ class RecordingRuntimeFactory:
         loop = CompletingLoop(state_store)
         self.loops.append(loop)
         return loop
+
+
+class AgentServiceFactoryContractTests(unittest.TestCase):
+    def test_build_has_one_keyword_only_composition_contract(self):
+        signature = inspect.signature(AgentServiceFactory.build)
+
+        self.assertEqual(
+            list(signature.parameters),
+            [
+                "self",
+                "root",
+                "llm",
+                "policy",
+                "audit_dir",
+                "approval_queue_file",
+                "runtime_config",
+                "cancel_token",
+            ],
+        )
+        for name in list(signature.parameters)[1:]:
+            self.assertIs(
+                signature.parameters[name].kind,
+                inspect.Parameter.KEYWORD_ONLY,
+            )
 
 
 class ApprovalRuntimeLoop:

@@ -27,7 +27,7 @@
         "schema_version": "1",
         "action": "finish",
         "args": {
-          "summary": "Plan: request review-gated README update."
+          "summary": "{\"schema_version\":\"1\",\"producer_run_id\":\"fixture\",\"references\":[],\"kind\":\"plan\",\"steps\":[\"Request review-gated README update.\"]}"
         }
       },
       {
@@ -42,7 +42,7 @@
         "schema_version": "1",
         "action": "finish",
         "args": {
-          "summary": "Review: approval is pending for the README update."
+          "summary": "{\"schema_version\":\"1\",\"producer_run_id\":\"fixture\",\"references\":[],\"kind\":\"review\",\"accepted\":false,\"repair_required\":false,\"issues\":[\"Approval is pending for the README update.\"]}"
         }
       }
     ]

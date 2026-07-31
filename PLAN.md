@@ -2290,6 +2290,15 @@ TDD 定向安全回归：`Ran 422 tests in 153.419s`、`OK (skipped=17)`。第�
 - 镜像链：[GHCR #2 / run 29679264248](https://github.com/YuGarden404/SpecGate/actions/runs/29679264248) 成功发布 `ghcr.io/yugarden404/specgate:0.1.1`；digest 为 `sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f`，OCI revision 为 `9cf909341cd1a5feb8ed2b244ce31f0495016c4c`。Public Package 列出 `latest`、`sha-9cf909341cd1`、`0.1.1` 与 `0.1`。
 - 匿名验证：一次性空 `DOCKER_CONFIG` 中 pull、CLI help、Mock Demo、Web help 均退出码 0；digest 与预期一致，OCI revision 与 `main` 一致，临时匿名配置清理后不存在。`v0.1.1` 已完成匿名拉取验证。
 - 新证据包：`docs/evidence/github-actions-ghcr-v0.1.1-success.png`、`docs/evidence/github-package-specgate-v0.1.1-public.png`、`docs/evidence/ghcr-v0.1.1-anonymous-smoke.png`。三张原始附件只做二进制复制，并纳入 PNG signature、chunk、CRC、zlib 与 IEND 完整性契约。
+
+# 2026-07-31 v0.2.0 Agent Runtime 分层迁移
+
+- 目标：把集中式 Runner 迁移为角色无关 `AgentLoop`、唯一 `ActionPipeline`、类型化运行状态、统一事件流、渐进式 Skill、`AgentService` 与结构化 Workflow，同时保持 Gate、HITL、WorkspacePolicy、Windows 文件安全、CLI 和 Web 行为。
+- 已实施：完成 ToolDefinition/Handler/Runtime、HookBus、GovernanceEngine、Gate adapter、SkillRegistry/SkillSession、AgentDefinition、审批恢复、版本化 AgentArtifact 和 SequentialReviewWorkflow。
+- 入口收敛：CLI、eval 与 Web 通过 `AgentServiceFactory` 的 composition root 构造运行时；`AgentRunner` 仅保留兼容转发与 `AgentRunResult -> RunResult` 映射，旧 `_legacy_run_loop` 已删除。
+- 证据：报告按 Hook、Gate、Skill、Workflow 分类展示统一事件，并继续对动态字段执行 escape、redact 和 action payload 移除；历史 Trace 缺少新字段时保持可读。
+- 凭据边界：继续使用 OS keyring 或进程环境变量，不新增 `.env` 读取、写入或回退路径。
+- 验收：聚焦回归、完整离线测试、Mock Demo、静态架构搜索和 Python 编译结果在本阶段完成后记录到 `AGENT_LOG.md`。
 - TDD 顺序：先把三张图片、Stage B 标题和精确远端事实加入 `tests/test_final_evidence.py`，确认当前 28 项出现 `FAILED (failures=3, errors=3)`；随后归档图片并同步 README、部署、讲解、矩阵、清单、事实核对和过程记录，直至证据契约 GREEN。
 - Stage B 证据同步分支验证：imports 1 项、CLI 51 项、workflow 5 项、最终证据 28 项均通过；Python 编译与 JavaScript 语法退出码 0，疑似真实密钥模式扫描无命中。完整套件得到 `Ran 955 tests in 404.159s`、`OK (skipped=27)`，退出码 0；新增 1 项是当前发布事实契约，不替换教师基线。
 - 历史保留：`v0.1.0` 的 `main@44b236f`、PR #25、GHCR #1、digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 与 `docs/evidence/github-actions-pr25-ci-success.png`、`docs/evidence/github-actions-pr25-pages-success.png`、`docs/evidence/github-actions-ghcr-v0.1.0-success.png`、`docs/evidence/github-package-specgate-public.png`、`docs/evidence/ghcr-anonymous-pull-smoke.png` 保持不变。

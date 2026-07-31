@@ -1,4 +1,5 @@
 import io
+import inspect
 import json
 import os
 import shutil
@@ -35,6 +36,9 @@ class MemoryCredentialStore:
 
 
 class CliTests(unittest.TestCase):
+    def test_run_entry_points_use_unified_agent_service_builder(self):
+        self.assertIn("build_agent_service(", inspect.getsource(cli))
+
     def _write_eval_case(self, root: Path, case_id: str = "real-case") -> Path:
         case = root / case_id
         case.mkdir()
@@ -162,9 +166,10 @@ class CliTests(unittest.TestCase):
         captured = {}
 
         class RecordingRunner:
-            def __init__(self, root, llm, policy, max_steps=5, governance_profile=None, governance_config=None):
-                captured["governance_profile"] = governance_profile
-                captured["governance_config"] = governance_config
+            def __init__(self, *, agent_service):
+                runtime = agent_service._specgate_runtime_factory.runtime
+                captured["governance_profile"] = runtime.governance_profile
+                captured["governance_config"] = runtime.governance_config
 
             def run(self):
                 from specgate.gate import GateCheck, GateResult
@@ -199,16 +204,17 @@ class CliTests(unittest.TestCase):
                 exit_code = run_mock_demo(root)
 
             self.assertEqual(exit_code, 0)
-            self.assertIsNone(captured["governance_profile"])
+            self.assertEqual(captured["governance_profile"], "review")
             self.assertEqual(captured["governance_config"].profile, "review")
 
     def test_run_mock_demo_cli_explicit_governance_profile_overrides_workspace(self):
         captured = {}
 
         class RecordingRunner:
-            def __init__(self, root, llm, policy, max_steps=5, governance_profile=None, governance_config=None):
-                captured["governance_profile"] = governance_profile
-                captured["governance_config"] = governance_config
+            def __init__(self, *, agent_service):
+                runtime = agent_service._specgate_runtime_factory.runtime
+                captured["governance_profile"] = runtime.governance_profile
+                captured["governance_config"] = runtime.governance_config
 
             def run(self):
                 from specgate.gate import GateCheck, GateResult

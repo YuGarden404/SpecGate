@@ -7,9 +7,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from specgate.agent_service import build_agent_service
+from specgate.approvals import approval_queue_path
 from specgate.config import VALID_CONTEXT_STRATEGIES, load_workspace_config
 from specgate.llm import LLMClient, MockLLM
-from specgate.runner import AgentRunner
+from specgate.run_control import CallbackCancellationToken
+from specgate.runner import AgentRunner, configure_agent_service
+from specgate.runtime_config import RunRuntimeConfig
 from specgate.security_eval import (
     SecurityExpectation,
     evaluate_security_expectations,
@@ -305,15 +309,24 @@ def run_eval_suite(
                     if governance_profile is not None
                     else workspace_config.governance.profile
                 )
-                run_result = AgentRunner(
-                    workspace,
-                    llm,
-                    workspace_config.policy,
-                    max_steps=case_max_steps,
-                    context_strategy=strategy,
-                    governance_profile=active_profile,
+                service = build_agent_service(
+                    root=workspace,
+                    llm=llm,
+                    policy=workspace_config.policy,
+                    audit_dir=workspace / "runs" / "latest",
+                    approval_queue_file=approval_queue_path(workspace),
+                    runtime_config=RunRuntimeConfig(
+                        governance_profile=active_profile,
+                        context_strategy=strategy,
+                        max_steps=case_max_steps,
+                    ),
+                    cancel_token=CallbackCancellationToken(lambda: None),
+                )
+                configure_agent_service(
+                    service,
                     governance_config=workspace_config.governance,
-                ).run()
+                )
+                run_result = AgentRunner(agent_service=service).run()
                 (
                     parse_errors,
                     blocked_actions,

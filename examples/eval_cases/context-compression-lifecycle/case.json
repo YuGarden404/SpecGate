@@ -28,21 +28,21 @@
         "schema_version": "1",
         "action": "finish",
         "args": {
-          "summary": "Plan: keep the valid compression lifecycle page."
+          "summary": "{\"schema_version\":\"1\",\"producer_run_id\":\"fixture\",\"references\":[],\"kind\":\"plan\",\"steps\":[\"Keep the valid compression lifecycle page.\"]}"
         }
       },
       {
         "schema_version": "1",
         "action": "finish",
         "args": {
-          "summary": "Existing page already satisfies compression lifecycle constraints."
+          "summary": "{\"schema_version\":\"1\",\"producer_run_id\":\"fixture\",\"references\":[],\"kind\":\"implementation\",\"changed_paths\":[],\"summary\":\"Existing page already satisfies compression lifecycle constraints.\"}"
         }
       },
       {
         "schema_version": "1",
         "action": "finish",
         "args": {
-          "summary": "Review: compression lifecycle page passes."
+          "summary": "{\"schema_version\":\"1\",\"producer_run_id\":\"fixture\",\"references\":[],\"kind\":\"review\",\"accepted\":true,\"repair_required\":false,\"issues\":[]}"
         }
       }
     ]

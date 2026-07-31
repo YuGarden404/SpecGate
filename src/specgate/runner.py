@@ -43,7 +43,6 @@ from specgate.approvals import (
     approval_queue_path,
     capture_target_state,
     classify_action_risk,
-    preview_args,
 )
 from specgate.context import (
     ArtifactContextContributor,
@@ -86,18 +85,6 @@ def _utc_now_for_runner() -> str:
 
 def _permission_rule_family(rule_family: str | None, message: str) -> str:
     return rule_family or classify_rule_family(message)
-
-
-def _unique_approval_id(queue: ApprovalQueue, step: int) -> str:
-    base = f"approval-step-{step}"
-    existing = {approval.id for approval in queue.approvals}
-    if base not in existing:
-        return base
-
-    suffix = 2
-    while f"{base}-{suffix}" in existing:
-        suffix += 1
-    return f"{base}-{suffix}"
 
 
 VALID_RUN_OUTCOMES = {"completed", "needs_approval", "failed"}
@@ -1156,31 +1143,14 @@ class _LegacyApprovalResumeRuntime:
             )
 
     def run(self, run_id: str) -> RunState:
-        state = self.state_store.get(run_id)
-        runtime_feedback = [
-            {"step": state.step, "type": item.kind, **item.payload}
-            for item in state.observations
-        ]
-        self.last_result = self.runner._legacy_run_loop(
+        self.last_result = self.runner._run_single_agent_loop(
+            run_id=run_id,
+            backing_store=self.state_store,
+            permission_decisions=self.permission_decisions,
+            event_context=self.event_context,
             reset_queue=False,
-            initial_runtime_feedback=runtime_feedback,
-            initial_metrics=state.metrics,
-            initial_permission_decisions=self.permission_decisions,
         )
-        status = {
-            "completed": RunStatus.COMPLETED,
-            "needs_approval": RunStatus.NEEDS_APPROVAL,
-            "failed": RunStatus.FAILED,
-        }.get(self.last_result.outcome, RunStatus.FAILED)
-        return replace(
-            state,
-            revision=state.revision + 1,
-            status=status,
-            step=self.last_result.steps,
-            latest_gate=self.last_result.final_gate,
-            pending_approval_id=self.last_result.pending_approval_id,
-            metrics=self.last_result.metrics or state.metrics,
-        )
+        return self.state_store.get(run_id)
 
 
 class _LegacyResumeLoader:
@@ -1240,7 +1210,7 @@ class _LegacyResumeLoader:
         )
 
 
-class AgentRunner:
+class _RunnerRuntime:
     def __init__(
         self,
         root: Path,
@@ -1472,15 +1442,32 @@ class AgentRunner:
             ),
         )
 
-    def _run_single_agent_loop(self) -> RunResult:
-        self._reset_approval_queue()
-        run_seed = f"{self.root}:{_utc_now_for_runner()}"
-        run_id = "run-" + hashlib.sha256(run_seed.encode("utf-8")).hexdigest()[:12]
-        event_context = RunEventContext(run_id, f"agent-{run_id}")
+    def _run_single_agent_loop(
+        self,
+        *,
+        run_id: str | None = None,
+        backing_store: InMemoryRunStateStore | None = None,
+        permission_decisions: list[PermissionDecision] | None = None,
+        event_context: RunEventContext | None = None,
+        reset_queue: bool = True,
+    ) -> RunResult:
+        if reset_queue:
+            self._reset_approval_queue()
+        if run_id is None:
+            run_seed = f"{self.root}:{_utc_now_for_runner()}"
+            run_id = (
+                "run-"
+                + hashlib.sha256(run_seed.encode("utf-8")).hexdigest()[:12]
+            )
+        if event_context is None:
+            event_context = RunEventContext(run_id, f"agent-{run_id}")
         event_sink = _LegacyRunEventSink(self.trace)
-        state_store = _LegacyRunStateStore(self.trace)
-        state_store.create(RunState(run_id))
-        permission_decisions: list[PermissionDecision] = []
+        state_store = _LegacyRunStateStore(self.trace, backing_store)
+        if backing_store is None:
+            state_store.create(RunState(run_id))
+        initial_step = state_store.get(run_id).step
+        if permission_decisions is None:
+            permission_decisions = []
 
         def context_built(state: RunState, built: ContextBuild) -> None:
             metrics = RunMetrics(
@@ -1578,7 +1565,7 @@ class AgentRunner:
             parse_action=parse_for_legacy,
             action_executor=executor,
             state_store=state_store,
-            stop_policy=_LegacyStopPolicy(self.max_steps),
+            stop_policy=_LegacyStopPolicy(initial_step + self.max_steps),
             cancel_token=CallbackCancellationToken(self._check_stop),
             event_sink=event_sink,
             event_context=event_context,
@@ -2009,195 +1996,6 @@ class AgentRunner:
         )
         return metrics
 
-    def _legacy_run_loop(
-        self,
-        reset_queue: bool,
-        initial_runtime_feedback: list[dict] | None = None,
-        initial_metrics: RunMetrics | None = None,
-        initial_permission_decisions: list[PermissionDecision] | None = None,
-        latest_gate: GateResult | None = None,
-    ) -> RunResult:
-        queue_path = self.approval_queue_file
-        if reset_queue:
-            self._reset_approval_queue()
-
-        runtime_feedback: list[dict] = list(initial_runtime_feedback or [])
-        metrics = initial_metrics or RunMetrics()
-        context_chars_max = metrics.context_chars_max
-        permission_decisions: list[PermissionDecision] = list(initial_permission_decisions or [])
-
-        for step in range(1, self.max_steps + 1):
-            self._check_stop()
-            context, context_metadata = build_context_pack_with_metadata(
-                self.root,
-                latest_gate,
-                runtime_feedback,
-                strategy=self.context_strategy,
-                policy=self.policy,
-                context_budget_chars=self.context_budget_chars,
-                retrieval_config=self.retrieval_config,
-                compression_config=self.compression_config,
-            )
-            metrics = self._record_retrieval(metrics, context_metadata)
-            metrics = self._record_compression(metrics, context_metadata)
-            metrics = self._record_isolation(metrics, context_metadata)
-            context_chars = len(context)
-            context_chars_max = max(context_chars_max, context_chars)
-            metrics = replace(metrics, steps=step, context_chars_max=context_chars_max)
-            self.trace.append(
-                "context_built",
-                {"step": step, "strategy": self.context_strategy, "context_chars": context_chars},
-            )
-            raw = self.llm.complete(context)
-            self._check_stop()
-            metrics = replace(metrics, llm_calls=metrics.llm_calls + 1)
-            self.trace.append("llm_response", {"step": step, "text": raw})
-
-            try:
-                action = parse_action(raw)
-            except ActionParseError as exc:
-                metrics = replace(metrics, parse_errors=metrics.parse_errors + 1)
-                event = {"step": step, "type": "parse_error", "error": str(exc)}
-                runtime_feedback.append(redact(event))
-                self.trace.append("parse_error", event)
-                continue
-
-            metrics, validation_failed = self._record_tool_validation_failure(
-                action,
-                step,
-                metrics,
-                runtime_feedback,
-            )
-            if validation_failed:
-                continue
-
-            action_path_value = action.args.get("path")
-            action_path = action_path_value if isinstance(action_path_value, str) else None
-            risk = classify_action_risk(action, self.policy, self.governance_config)
-            if risk.level == "review" and self.governance_profile == "review":
-                store = ApprovalStore(queue_path)
-                queue = store.read()
-                approval = PendingApproval(
-                    id=_unique_approval_id(queue, step),
-                    step=step,
-                    action=action.action,
-                    path=action_path,
-                    risk_level=risk.level,
-                    reason=risk.reason,
-                    profile=self.governance_profile,
-                    arguments_preview=preview_args(action.args),
-                    action_payload={
-                        "schema_version": action.schema_version,
-                        "action": action.action,
-                        "args": action.args,
-                    },
-                    target_state=capture_target_state(self.root, action_path),
-                )
-                queue = store.append(approval, expected_revision=queue.revision)
-                self._record_permission_decision(
-                    permission_decisions,
-                    step,
-                    action.action,
-                    action_path,
-                    ok=False,
-                    blocked=False,
-                    message=risk.reason,
-                    rule_family=risk.rule_family,
-                )
-                metrics = replace(
-                    metrics,
-                    approval_requests=metrics.approval_requests + 1,
-                    pending_approvals=metrics.pending_approvals + 1,
-                )
-                event = {
-                    "step": step,
-                    "type": "approval_requested",
-                    "approval": approval.to_dict(),
-                    "queue_revision": queue.revision,
-                }
-                runtime_feedback.append(redact(event))
-                self.trace.append("approval_requested", redact(event))
-                return self._pause_result(
-                    step,
-                    latest_gate,
-                    metrics,
-                    permission_decisions,
-                    approval,
-                )
-
-            if risk.level in {"review", "blocked"}:
-                metrics = replace(metrics, blocked_actions=metrics.blocked_actions + 1)
-                self._record_permission_decision(
-                    permission_decisions,
-                    step,
-                    action.action,
-                    action_path,
-                    ok=False,
-                    blocked=True,
-                    message=risk.reason,
-                    rule_family=risk.rule_family,
-                )
-                self._record_tool_feedback(
-                    runtime_feedback,
-                    step,
-                    action.action,
-                    ok=False,
-                    blocked=True,
-                    message=risk.reason,
-                    data={"risk": risk.to_dict()},
-                )
-                continue
-
-            tool_result = self.dispatcher.dispatch(action)
-            self._check_stop()
-            metrics = replace(
-                metrics,
-                tool_calls=metrics.tool_calls + 1,
-                successful_tool_calls=metrics.successful_tool_calls + (1 if tool_result.ok else 0),
-                blocked_actions=metrics.blocked_actions + (1 if tool_result.blocked else 0),
-                finish_actions=metrics.finish_actions + (1 if action.action == "finish" else 0),
-            )
-            action_path_value = action.args.get("path")
-            action_path = action_path_value if isinstance(action_path_value, str) else None
-            self._record_permission_decision(
-                permission_decisions,
-                step=step,
-                action_name=action.action,
-                action_path=action_path,
-                ok=tool_result.ok,
-                blocked=tool_result.blocked,
-                message=tool_result.message,
-                rule_family=getattr(tool_result, "rule_family", None),
-            )
-            runtime_feedback.append(
-                redact(
-                    {
-                        "step": step,
-                        "type": "tool_result",
-                        "action": tool_result.action,
-                        "ok": tool_result.ok,
-                        "blocked": tool_result.blocked,
-                        "message": tool_result.message,
-                        "data": tool_result.data,
-                    }
-                )
-            )
-            self.trace.append("tool_result", {"step": step, "result": tool_result.__dict__})
-
-            if action.action in {"write_file", "replace_file"} and not tool_result.blocked:
-                latest_gate, metrics = self._run_gate_with_feedback(step, metrics, runtime_feedback)
-
-            if action.action == "finish":
-                latest_gate, metrics = self._run_gate_with_feedback(step, metrics, runtime_feedback)
-                if not latest_gate.passed:
-                    continue
-                return self._finish_result(step, latest_gate, metrics, permission_decisions)
-
-        if latest_gate is None:
-            latest_gate, metrics = self._run_gate_with_feedback(self.max_steps, metrics, runtime_feedback)
-        metrics = replace(metrics, max_steps_reached=True)
-        return self._finish_result(self.max_steps, latest_gate, metrics, permission_decisions)
-
     def resume_from_approval(self) -> RunResult:
         self._check_stop()
         queue = ApprovalStore(self.approval_queue_file).read_existing()
@@ -2225,6 +2023,304 @@ class AgentRunner:
         if loader.runtime is None or loader.runtime.last_result is None:
             raise RuntimeError("approval resume did not produce a run result")
         return loader.runtime.last_result
+
+
+class _ConfiguredRunLoop:
+    def __init__(self, runtime: _RunnerRuntime, state_store) -> None:
+        self._runtime = runtime
+        self._state_store = state_store
+
+    def run(self, run_id: str) -> RunState:
+        result = self._runtime.run()
+        state = self._state_store.get(run_id)
+        status = {
+            "completed": RunStatus.COMPLETED,
+            "needs_approval": RunStatus.NEEDS_APPROVAL,
+            "failed": RunStatus.FAILED,
+        }[result.outcome]
+        payload = {
+            "passed": result.passed,
+            "profile": result.profile,
+            "outcome": result.outcome,
+            "pending_approval_id": result.pending_approval_id,
+            "permission_decisions": [
+                item.to_dict() for item in (result.permission_decisions or [])
+            ],
+            "trust": None if result.trust is None else result.trust.to_dict(),
+        }
+        return self._state_store.apply(
+            run_id,
+            state.revision,
+            StateDelta(
+                status=status,
+                step=result.steps,
+                append_observations=(Observation("run_result", payload),),
+                latest_gate=result.final_gate,
+                pending_approval_id=result.pending_approval_id,
+                finish_requested=status is RunStatus.COMPLETED,
+                metrics=result.metrics or RunMetrics(),
+            ),
+        )
+
+
+class _ConfiguredRuntimeFactory:
+    def __init__(
+        self,
+        *,
+        root: Path,
+        llm: LLMClient,
+        policy: WorkspacePolicy,
+        audit_dir: Path,
+        approval_queue_file: Path,
+        runtime_config,
+        cancel_token,
+        reset_audit: bool = True,
+    ) -> None:
+        self.cancel_token = cancel_token
+        self.runtime = _RunnerRuntime(
+            root,
+            llm,
+            policy,
+            max_steps=runtime_config.max_steps,
+            context_strategy=runtime_config.context_strategy,
+            governance_profile=runtime_config.governance_profile,
+            audit_dir=audit_dir,
+            approval_queue_file=approval_queue_file,
+            stop_check=cancel_token.check,
+            context_budget_chars=runtime_config.context_budget_chars,
+            retrieval_config=RetrievalConfig(
+                top_k=runtime_config.retrieval_top_k,
+                budget_chars=runtime_config.retrieval_budget_chars,
+            ),
+            compression_config=CompressionConfig(
+                max_tool_result_chars=(
+                    runtime_config.compression_max_tool_result_chars
+                )
+            ),
+            reset_audit=reset_audit,
+        )
+
+    @classmethod
+    def from_runtime(cls, runtime: _RunnerRuntime, cancel_token):
+        factory = cls.__new__(cls)
+        factory.cancel_token = cancel_token
+        factory.runtime = runtime
+        return factory
+
+    def create(
+        self,
+        request,
+        *,
+        state_store,
+        skill_session,
+        event_context,
+    ) -> _ConfiguredRunLoop:
+        del request, skill_session, event_context
+        return _ConfiguredRunLoop(self.runtime, state_store)
+
+
+def _service_for_configured_runtime(
+    runtime: _RunnerRuntime,
+    runtime_config,
+    cancel_token,
+) -> AgentService:
+    workspace_fs.ensure_workspace_directory(runtime.run_dir, "agent-state")
+    runtime_factory = _ConfiguredRuntimeFactory.from_runtime(
+        runtime,
+        cancel_token,
+    )
+    definition = AgentDefinition(
+        agent_id="default-agent",
+        instructions="Execute the configured workspace task.",
+        capability_set=frozenset(runtime.policy.allowed_actions),
+        context_policy=runtime_config.context_strategy,
+        budget=AgentBudget(
+            max_steps=runtime_config.max_steps,
+            context_chars=runtime_config.context_budget_chars,
+            child_runs=0,
+        ),
+    )
+    service = AgentService(
+        audit_root=runtime.run_dir / "agent-state",
+        workspace_capabilities=frozenset(runtime.policy.allowed_actions),
+        runtime_factory=runtime_factory,
+    )
+    service._specgate_runtime_factory = runtime_factory
+    service._specgate_default_definition = definition
+    service._specgate_cancel_token = cancel_token
+    return service
+
+
+def _configured_runtime(service: AgentService) -> _RunnerRuntime:
+    factory = getattr(service, "_specgate_runtime_factory", None)
+    if not isinstance(factory, _ConfiguredRuntimeFactory):
+        raise TypeError("AgentService is not configured for the Runner facade")
+    return factory.runtime
+
+
+def configure_agent_service(
+    service: AgentService,
+    *,
+    governance_config: GovernanceConfig | None = None,
+    retrieval_config: RetrievalConfig | None = None,
+    compression_config: CompressionConfig | None = None,
+) -> AgentService:
+    runtime = _configured_runtime(service)
+    if governance_config is not None:
+        runtime.governance_config = governance_config
+    if retrieval_config is not None:
+        runtime.retrieval_config = retrieval_config
+    if compression_config is not None:
+        runtime.compression_config = compression_config
+    return service
+
+
+def _run_configured_service(service: AgentService) -> RunResult:
+    definition = getattr(service, "_specgate_default_definition", None)
+    token = getattr(service, "_specgate_cancel_token", None)
+    if definition is None or token is None:
+        raise TypeError("AgentService is missing its default run configuration")
+    result = service.run(
+        definition,
+        "Execute the configured workspace task.",
+        cancel_token=token,
+    )
+    payload = next(
+        item.payload
+        for item in reversed(result.state.observations)
+        if item.kind == "run_result"
+    )
+    decisions = [
+        PermissionDecision(**item)
+        for item in payload.get("permission_decisions", [])
+    ]
+    trust_payload = payload.get("trust")
+    trust = (
+        None
+        if not isinstance(trust_payload, dict)
+        else TrustSummary(
+            str(trust_payload.get("status", "failed")),
+            list(trust_payload.get("reasons", [])),
+        )
+    )
+    outcome = str(payload.get("outcome", result.state.status.value))
+    return RunResult(
+        passed=bool(payload.get("passed", False)),
+        steps=result.state.step,
+        final_gate=result.state.latest_gate,
+        context_chars_max=result.state.metrics.context_chars_max,
+        metrics=result.state.metrics,
+        permission_decisions=decisions,
+        trust=trust,
+        profile=str(payload.get("profile", "strict")),
+        outcome=outcome,
+        pending_approval_id=result.state.pending_approval_id,
+    )
+
+
+def _resume_configured_service(service: AgentService) -> RunResult:
+    return _configured_runtime(service).resume_from_approval()
+
+
+class AgentRunner:
+    """Backward-compatible facade over the configured Agent runtime."""
+
+    def __init__(
+        self,
+        root: Path | None = None,
+        llm: LLMClient | None = None,
+        policy: WorkspacePolicy | None = None,
+        max_steps: int = 5,
+        context_strategy: str = "baseline",
+        governance_profile: str | None = None,
+        governance_config: GovernanceConfig | None = None,
+        audit_dir: Path | None = None,
+        approval_queue_file: Path | None = None,
+        reset_audit: bool = True,
+        stop_check: Callable[[], None] | None = None,
+        context_budget_chars: int = 12000,
+        retrieval_config: RetrievalConfig | None = None,
+        compression_config: CompressionConfig | None = None,
+        agent_service: AgentService | None = None,
+    ) -> None:
+        if agent_service is None:
+            if root is None or llm is None or policy is None:
+                raise TypeError("root, llm, and policy are required")
+            from specgate.agent_service import build_agent_service
+            from specgate.runtime_config import RunRuntimeConfig
+
+            profile = governance_profile or (
+                governance_config.profile if governance_config is not None else "strict"
+            )
+            resolved_audit = audit_dir or root / "runs" / "latest"
+            resolved_approval = approval_queue_file or approval_queue_path(root)
+            token = CallbackCancellationToken(stop_check or (lambda: None))
+            retrieval = retrieval_config or RetrievalConfig()
+            compression = compression_config or CompressionConfig()
+            runtime_config = RunRuntimeConfig(
+                governance_profile=profile,
+                context_strategy=context_strategy,
+                max_steps=max_steps,
+                context_budget_chars=context_budget_chars,
+                retrieval_top_k=retrieval.top_k,
+                retrieval_budget_chars=retrieval.budget_chars,
+                compression_max_tool_result_chars=compression.max_tool_result_chars,
+            )
+            if reset_audit:
+                agent_service = build_agent_service(
+                    root=root,
+                    llm=llm,
+                    policy=policy,
+                    audit_dir=resolved_audit,
+                    approval_queue_file=resolved_approval,
+                    runtime_config=runtime_config,
+                    cancel_token=token,
+                )
+                runtime = _configured_runtime(agent_service)
+                runtime.retrieval_config = retrieval
+                runtime.compression_config = compression
+                if governance_config is not None:
+                    runtime.governance_config = governance_config
+            else:
+                runtime = _RunnerRuntime(
+                    root,
+                    llm,
+                    policy,
+                    max_steps=max_steps,
+                    context_strategy=context_strategy,
+                    governance_profile=governance_profile,
+                    governance_config=governance_config,
+                    audit_dir=resolved_audit,
+                    approval_queue_file=resolved_approval,
+                    reset_audit=False,
+                    stop_check=stop_check,
+                    context_budget_chars=context_budget_chars,
+                    retrieval_config=retrieval,
+                    compression_config=compression,
+                )
+                agent_service = _service_for_configured_runtime(
+                    runtime,
+                    runtime_config,
+                    token,
+                )
+        object.__setattr__(self, "_service", agent_service)
+
+    def run(self) -> RunResult:
+        return _run_configured_service(self._service)
+
+    def resume_from_approval(self) -> RunResult:
+        return _resume_configured_service(self._service)
+
+    def __getattr__(self, name: str):
+        return getattr(_configured_runtime(self._service), name)
+
+    def __setattr__(self, name: str, value) -> None:
+        service = self.__dict__.get("_service")
+        runtime = None if service is None else _configured_runtime(service)
+        if runtime is not None and hasattr(runtime, name):
+            setattr(runtime, name, value)
+            return
+        object.__setattr__(self, name, value)
 
 
 
