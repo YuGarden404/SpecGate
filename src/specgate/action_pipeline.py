@@ -6,9 +6,11 @@ from typing import Any
 
 from specgate.actions import Action
 from specgate.approvals import (
+    ApprovalGrant,
     ApprovalRequester,
     GovernanceConfig,
     PendingApproval,
+    approval_action_digest,
 )
 from specgate.gate import GateContext, GateResult, GateRunner
 from specgate.governance import (
@@ -70,6 +72,8 @@ class PipelineExecutionContext:
     tool_context: ToolExecutionContext
     gate_context: GateContext
     approval_requester: ApprovalRequester | None = None
+    approved_request: PendingApproval | None = None
+    approval_grant: ApprovalGrant | None = None
 
     def __post_init__(self) -> None:
         if self.tool_context.policy != self.policy:
@@ -104,6 +108,7 @@ class ActionPipeline:
             return _tool_failure_outcome(preparation.failure, context.step)
         assert preparation.call is not None
         call = preparation.call
+        grant_available = True
 
         before_decision = self._hooks.before_tool(
             BeforeTool(context.event_context, call, step=context.step)
@@ -117,13 +122,22 @@ class ActionPipeline:
                 context.step,
             )
         if before_decision.kind is BeforeToolDecisionKind.REQUIRE_APPROVAL:
-            return _approval_outcome(
+            if grant_available and _approval_grant_matches(
                 action,
-                before_decision.code,
-                before_decision.reason,
                 context,
-            )
-        assert before_decision.kind is BeforeToolDecisionKind.CONTINUE
+            ):
+                grant_available = False
+            else:
+                return _approval_outcome(
+                    action,
+                    before_decision.code,
+                    before_decision.reason,
+                    context,
+                )
+        assert before_decision.kind in {
+            BeforeToolDecisionKind.CONTINUE,
+            BeforeToolDecisionKind.REQUIRE_APPROVAL,
+        }
 
         governance_decision = self._governance.evaluate(
             call,
@@ -140,13 +154,22 @@ class ActionPipeline:
                 context.step,
             )
         if governance_decision.kind is GovernanceDecisionKind.REQUIRE_APPROVAL:
-            return _approval_outcome(
+            if grant_available and _approval_grant_matches(
                 action,
-                governance_decision.code,
-                governance_decision.reason,
                 context,
-            )
-        assert governance_decision.kind is GovernanceDecisionKind.ALLOW
+            ):
+                grant_available = False
+            else:
+                return _approval_outcome(
+                    action,
+                    governance_decision.code,
+                    governance_decision.reason,
+                    context,
+                )
+        assert governance_decision.kind in {
+            GovernanceDecisionKind.ALLOW,
+            GovernanceDecisionKind.REQUIRE_APPROVAL,
+        }
 
         tool_result = self._runtime.execute_prepared(call, context.tool_context)
         self._hooks.after_tool(
@@ -215,6 +238,29 @@ class ActionPipeline:
             tool_result=tool_result,
             gate_result=gate_result,
         )
+
+
+def _approval_grant_matches(
+    action: Action,
+    context: PipelineExecutionContext,
+) -> bool:
+    grant = context.approval_grant
+    approval = context.approved_request
+    if grant is None or approval is None:
+        return False
+    payload = {
+        "schema_version": action.schema_version,
+        "action": action.action,
+        "args": action.args,
+    }
+    return (
+        approval.status == "applying"
+        and approval.id == grant.approval_id
+        and approval.step == context.step
+        and approval_action_digest(approval.action_payload)
+        == grant.action_digest
+        == approval_action_digest(payload)
+    )
 
 
 def _approval_outcome(

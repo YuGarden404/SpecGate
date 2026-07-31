@@ -12,7 +12,12 @@ from specgate.action_pipeline import (
     PipelineExecutionContext,
 )
 from specgate.actions import Action
-from specgate.approvals import GovernanceConfig, PendingApproval
+from specgate.approvals import (
+    ApprovalGrant,
+    GovernanceConfig,
+    PendingApproval,
+    approval_action_digest,
+)
 from specgate.gate import GateContext, GateResult, HtmlGateRunner
 from specgate.governance import GovernanceDecision, GovernanceDecisionKind
 from specgate.hooks import BeforeToolDecision
@@ -256,6 +261,186 @@ class ActionPipelineTests(unittest.TestCase):
                 self.assertEqual(self.calls, ["before_tool", "governance"])
                 self.assertEqual(outcome.status, expected_status)
 
+    def test_matching_grant_rechecks_governance_then_executes_handler_once(self):
+        action = Action("1", "write_file", {})
+        approval = PendingApproval(
+            id="approval-1",
+            step=3,
+            action=action.action,
+            path=None,
+            risk_level="review",
+            reason="review governance",
+            profile="review",
+            status="applying",
+            action_payload={
+                "schema_version": action.schema_version,
+                "action": action.action,
+                "args": action.args,
+            },
+        )
+        grant = ApprovalGrant(
+            approval.id,
+            approval_action_digest(approval.action_payload),
+            2,
+        )
+        context = self._context_with_requester(
+            RecordingApprovalRequester(),
+            approved_request=approval,
+            approval_grant=grant,
+        )
+        decision = GovernanceDecision(
+            GovernanceDecisionKind.REQUIRE_APPROVAL,
+            "review",
+            approval.reason,
+            "none",
+        )
+        definition = self._definition(
+            "write_file", SideEffectClass.WORKSPACE_WRITE
+        )
+
+        outcome = self._pipeline(
+            definition,
+            governance=RecordingGovernance(self.calls, decision),
+        ).execute(action, context)
+
+        self.assertEqual(
+            self.calls,
+            ["before_tool", "governance", "handler", "after_tool", "gate", "after_gate"],
+        )
+        self.assertEqual(outcome.status, ExecutionStatus.SUCCEEDED)
+
+    def test_grant_cannot_bypass_new_block_or_a_different_approval_request(self):
+        action = Action("1", "write_file", {})
+        approval = PendingApproval(
+            id="approval-1",
+            step=3,
+            action=action.action,
+            path=None,
+            risk_level="review",
+            reason="original review",
+            profile="review",
+            status="applying",
+            action_payload={
+                "schema_version": action.schema_version,
+                "action": action.action,
+                "args": {"different": "payload"},
+            },
+        )
+        context = self._context_with_requester(
+            RecordingApprovalRequester(),
+            approved_request=approval,
+            approval_grant=ApprovalGrant(
+                approval.id,
+                approval_action_digest(approval.action_payload),
+                2,
+            ),
+        )
+        definition = self._definition(
+            "write_file", SideEffectClass.WORKSPACE_WRITE
+        )
+
+        blocked = self._pipeline(
+            definition,
+            hooks=RecordingHooks(
+                self.calls,
+                BeforeToolDecision.block("new_block", "new hook block"),
+            ),
+        ).execute(action, context)
+
+        self.assertEqual(blocked.status, ExecutionStatus.BLOCKED)
+        self.assertEqual(self.calls, ["before_tool"])
+
+        self.calls.clear()
+        requester = RecordingApprovalRequester()
+        changed = self._pipeline(
+            definition,
+            governance=RecordingGovernance(
+                self.calls,
+                GovernanceDecision(
+                    GovernanceDecisionKind.REQUIRE_APPROVAL,
+                    "review",
+                    approval.reason,
+                    "none",
+                ),
+            ),
+        ).execute(
+            action,
+            self._context_with_requester(
+                requester,
+                approved_request=approval,
+                approval_grant=context.approval_grant,
+            ),
+        )
+
+        self.assertEqual(changed.status, ExecutionStatus.APPROVAL_REQUIRED)
+        self.assertEqual(self.calls, ["before_tool", "governance"])
+        self.assertEqual(len(requester.requests), 1)
+
+    def test_grant_is_consumed_once_and_does_not_bypass_gate(self):
+        action = Action("1", "write_file", {})
+        approval = PendingApproval(
+            id="approval-1",
+            step=3,
+            action=action.action,
+            path=None,
+            risk_level="review",
+            reason="same review",
+            profile="review",
+            status="applying",
+            action_payload={
+                "schema_version": action.schema_version,
+                "action": action.action,
+                "args": action.args,
+            },
+        )
+        grant = ApprovalGrant(
+            approval.id,
+            approval_action_digest(approval.action_payload),
+            2,
+        )
+        requester = RecordingApprovalRequester()
+        context = self._context_with_requester(
+            requester,
+            approved_request=approval,
+            approval_grant=grant,
+        )
+        definition = self._definition(
+            "write_file", SideEffectClass.WORKSPACE_WRITE
+        )
+        approval_decision = GovernanceDecision(
+            GovernanceDecisionKind.REQUIRE_APPROVAL,
+            "review",
+            approval.reason,
+            "none",
+        )
+        hooks = RecordingHooks(
+            self.calls,
+            BeforeToolDecision.require_approval("review", approval.reason),
+        )
+
+        second_request = self._pipeline(
+            definition,
+            hooks=hooks,
+            governance=RecordingGovernance(self.calls, approval_decision),
+        ).execute(action, context)
+
+        self.assertEqual(second_request.status, ExecutionStatus.APPROVAL_REQUIRED)
+        self.assertEqual(self.calls, ["before_tool", "governance"])
+        self.assertEqual(len(requester.requests), 1)
+
+        self.calls.clear()
+        gate_failure = GateResult(False, [], [], "still invalid")
+        gate_outcome = self._pipeline(
+            definition,
+            governance=RecordingGovernance(self.calls, approval_decision),
+            gate=RecordingGate(self.calls, gate_failure),
+        ).execute(action, context)
+
+        self.assertEqual(gate_outcome.status, ExecutionStatus.FAILED)
+        self.assertEqual(gate_outcome.error.code, "gate_failed")
+        self.assertIn("handler", self.calls)
+        self.assertIn("gate", self.calls)
+
     def test_read_action_skips_gate(self):
         outcome = self._execute(
             self._definition("read_file", SideEffectClass.NONE)
@@ -450,7 +635,13 @@ class ActionPipelineTests(unittest.TestCase):
                 gate_context=GateContext(self.root, other_policy),
             )
 
-    def _context_with_requester(self, requester):
+    def _context_with_requester(
+        self,
+        requester,
+        *,
+        approved_request=None,
+        approval_grant=None,
+    ):
         return PipelineExecutionContext(
             event_context=self.execution_context.event_context,
             step=self.execution_context.step,
@@ -460,6 +651,8 @@ class ActionPipelineTests(unittest.TestCase):
             tool_context=self.execution_context.tool_context,
             gate_context=self.execution_context.gate_context,
             approval_requester=requester,
+            approved_request=approved_request,
+            approval_grant=approval_grant,
         )
 
 

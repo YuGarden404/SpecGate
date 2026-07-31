@@ -6,13 +6,28 @@ from pathlib import Path
 from specgate.agent_service import (
     AgentBudget,
     AgentDefinition,
+    AgentResumeHandle,
     AgentService,
     BudgetExceeded,
     DelegationDenied,
     DelegationPolicy,
     effective_child_capabilities,
 )
-from specgate.run_state import RunStatus, StateDelta
+from specgate.action_pipeline import ExecutionOutcome, ExecutionStatus, RuntimeErrorInfo
+from specgate.actions import Action
+from specgate.approvals import (
+    ApprovalConflictError,
+    ApprovalDecision,
+    ApprovalGrant,
+    ApprovalQueue,
+    ApprovalStore,
+    PendingApproval,
+    approval_action_digest,
+    capture_target_state,
+)
+from specgate.run_state import Observation, RunStatus, StateDelta
+from specgate.skill_registry import SkillSession
+from specgate.tool_runtime import ToolResult
 
 
 class CompletingLoop:
@@ -53,6 +68,185 @@ class RecordingRuntimeFactory:
         loop = CompletingLoop(state_store)
         self.loops.append(loop)
         return loop
+
+
+class ApprovalRuntimeLoop:
+    def __init__(self, root, store, mode="success"):
+        self.approval_root = root
+        self.approval_store = ApprovalStore(root / "pending_approvals.json")
+        self.store = store
+        self.mode = mode
+        self.run_calls = 0
+        self.approval_calls = []
+        self.handler_calls = 0
+        self.events = []
+
+    def run(self, run_id):
+        self.run_calls += 1
+        state = self.store.get(run_id)
+        if self.run_calls == 1:
+            return self.store.apply(
+                run_id,
+                state.revision,
+                StateDelta(
+                    status=RunStatus.NEEDS_APPROVAL,
+                    step=1,
+                    pending_approval_id="approval-1",
+                ),
+            )
+        if state.status is RunStatus.NEEDS_APPROVAL:
+            return state
+        return self.store.apply(
+            run_id,
+            state.revision,
+            StateDelta(status=RunStatus.COMPLETED),
+        )
+
+    def execute_approval(
+        self,
+        action,
+        state,
+        approval,
+        grant,
+        cancel_token,
+    ):
+        cancel_token.check()
+        queue = self.approval_store.read_existing()
+        self.assert_grant(action, approval, grant, queue)
+        self.approval_calls.append((action, state, approval, grant))
+        if self.mode == "reapproval":
+            next_approval = PendingApproval(
+                id="approval-2",
+                step=approval.step,
+                action=action.action,
+                path=approval.path,
+                risk_level="review",
+                reason="new review requirement",
+                profile="review",
+                action_payload=approval.action_payload,
+                target_state=approval.target_state,
+            )
+            updated_queue = self.approval_store.append(
+                next_approval,
+                expected_revision=queue.revision,
+            )
+            del updated_queue
+            observation = Observation(
+                "approval_required",
+                {"approval_id": next_approval.id, "code": "new_review"},
+            )
+            return ExecutionOutcome(
+                ExecutionStatus.APPROVAL_REQUIRED,
+                StateDelta(
+                    status=RunStatus.NEEDS_APPROVAL,
+                    pending_approval_id=next_approval.id,
+                    append_observations=(observation,),
+                ),
+                approval_request=next_approval,
+                feedback=observation,
+            )
+        if self.mode == "blocked":
+            observation = Observation(
+                "tool_result",
+                {"code": "new_governance_block", "blocked": True},
+            )
+            return ExecutionOutcome(
+                ExecutionStatus.BLOCKED,
+                StateDelta(append_observations=(observation,)),
+                feedback=observation,
+                error=RuntimeErrorInfo(
+                    "new_governance_block",
+                    "new governance rule blocked the action",
+                ),
+            )
+        self.handler_calls += 1
+        result = ToolResult.success(action.action, {"applied": True})
+        return ExecutionOutcome(
+            ExecutionStatus.SUCCEEDED,
+            StateDelta(
+                append_observations=(
+                    Observation(
+                        "tool_result",
+                        {"action": action.action, "ok": True},
+                    ),
+                )
+            ),
+            tool_result=result,
+        )
+
+    def assert_grant(self, action, approval, grant, queue):
+        self_payload = {
+            "schema_version": action.schema_version,
+            "action": action.action,
+            "args": action.args,
+        }
+        if queue.find(approval.id).status != "applying":
+            raise AssertionError("approval was not claimed before execution")
+        if grant.queue_revision != queue.revision:
+            raise AssertionError("grant revision is not bound to applying queue")
+        if grant.action_digest != approval_action_digest(self_payload):
+            raise AssertionError("grant action digest does not match replayed action")
+
+    def emit_resume_event(self, event_type, payload):
+        self.events.append((event_type, payload))
+
+
+class ApprovalRuntimeFactory:
+    def __init__(self, audit_root, workspace_root, mode="success"):
+        self.audit_root = audit_root
+        self.workspace_root = workspace_root
+        self.mode = mode
+        self.loops = []
+
+    def create(
+        self,
+        request,
+        *,
+        state_store,
+        skill_session,
+        event_context,
+    ):
+        del skill_session, event_context
+        run_root = self.audit_root / request.run_id
+        action = Action(
+            "1",
+            "write_file",
+            {"path": "target.txt", "content": "approved"},
+        )
+        approval = PendingApproval(
+            id="approval-1",
+            step=1,
+            action=action.action,
+            path="target.txt",
+            risk_level="review",
+            reason="write_file requires review",
+            profile="review",
+            action_payload={
+                "schema_version": action.schema_version,
+                "action": action.action,
+                "args": action.args,
+            },
+            target_state=capture_target_state(
+                self.workspace_root,
+                "target.txt",
+            ),
+        )
+        ApprovalQueue([approval]).write(run_root / "pending_approvals.json")
+        loop = ApprovalRuntimeLoop(self.workspace_root, state_store, self.mode)
+        loop.approval_store = ApprovalStore(run_root / "pending_approvals.json")
+        self.loops.append(loop)
+        return loop
+
+
+class StaticResumeLoader:
+    def __init__(self, handle):
+        self.handle = handle
+        self.calls = []
+
+    def load(self, run_id, cancel_token):
+        cancel_token.check()
+        self.calls.append(run_id)
+        return self.handle
 
 
 def definition(
@@ -103,6 +297,27 @@ class AgentDefinitionTests(unittest.TestCase):
             definition(agent_id="../reviewer")
         with self.assertRaises(TypeError):
             definition(capabilities={"read_file"})
+
+
+class ApprovalResumeModelTests(unittest.TestCase):
+    def test_decision_and_grant_are_frozen_and_validate_identity(self):
+        decision = ApprovalDecision("approval-1", "approved", 3, "reviewed")
+        grant = ApprovalGrant("approval-1", "a" * 64, 4)
+
+        self.assertEqual(decision.expected_revision, 3)
+        self.assertEqual(grant.queue_revision, 4)
+        with self.assertRaises(FrozenInstanceError):
+            decision.status = "denied"
+        with self.assertRaises(FrozenInstanceError):
+            grant.queue_revision = 5
+        with self.assertRaises(ValueError):
+            ApprovalDecision("../approval", "approved", 0)
+        with self.assertRaises(ValueError):
+            ApprovalDecision("approval-1", "pending", 0)
+        with self.assertRaises(ValueError):
+            ApprovalDecision("approval-1", "approved", -1)
+        with self.assertRaises(ValueError):
+            ApprovalGrant("approval-1", "not-a-digest", 0)
 
 
 class AgentServiceTests(unittest.TestCase):
@@ -259,6 +474,196 @@ class AgentServiceTests(unittest.TestCase):
                 "second child",
                 parent_run_id=parent.run_id,
             )
+
+
+class AgentServiceResumeTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.audit_root = self.root / "audit"
+        self.workspace_root = self.root / "workspace"
+        self.audit_root.mkdir()
+        self.workspace_root.mkdir()
+        (self.workspace_root / "target.txt").write_text(
+            "original",
+            encoding="utf-8",
+        )
+
+    def _service(self, mode="success"):
+        factory = ApprovalRuntimeFactory(
+            self.audit_root,
+            self.workspace_root,
+            mode,
+        )
+        service = AgentService(
+            audit_root=self.audit_root,
+            workspace_capabilities=frozenset({"write_file"}),
+            runtime_factory=factory,
+            id_factory=lambda: "run-approval",
+        )
+        return service, factory
+
+    def test_approved_decision_applies_once_and_continues_same_loop(self):
+        service, factory = self._service()
+        suspended = service.run(
+            definition(capabilities=frozenset({"write_file"})),
+            "write target",
+        )
+
+        resumed = service.resume(
+            suspended.run_id,
+            ApprovalDecision("approval-1", "approved", 0, "reviewed"),
+        )
+
+        loop = factory.loops[0]
+        queue = loop.approval_store.read_existing()
+        self.assertEqual(resumed.run_id, suspended.run_id)
+        self.assertEqual(resumed.agent_run_id, suspended.agent_run_id)
+        self.assertEqual(resumed.state.status, RunStatus.COMPLETED)
+        self.assertIsNone(resumed.state.pending_approval_id)
+        self.assertEqual(queue.find("approval-1").status, "applied")
+        self.assertEqual(queue.revision, 3)
+        self.assertEqual(loop.run_calls, 2)
+        self.assertEqual(loop.handler_calls, 1)
+        self.assertEqual(
+            [event_type for event_type, _ in loop.events],
+            ["RunResumed", "ApprovalClaimed", "ApprovalApplied"],
+        )
+
+        with self.assertRaises((ApprovalConflictError, ValueError)):
+            service.resume(
+                suspended.run_id,
+                ApprovalDecision("approval-1", "approved", 0),
+            )
+        self.assertEqual(loop.handler_calls, 1)
+
+    def test_denied_decision_never_executes_handler(self):
+        service, factory = self._service()
+        suspended = service.run(definition(capabilities=frozenset({"write_file"})), "write")
+
+        resumed = service.resume(
+            suspended.run_id,
+            ApprovalDecision("approval-1", "denied", 0, "too broad"),
+        )
+
+        loop = factory.loops[0]
+        queue = loop.approval_store.read_existing()
+        self.assertEqual(resumed.state.status, RunStatus.COMPLETED)
+        self.assertEqual(queue.find("approval-1").status, "rejected")
+        self.assertEqual(queue.revision, 2)
+        self.assertEqual(loop.approval_calls, [])
+        self.assertEqual(loop.handler_calls, 0)
+
+    def test_stale_revision_and_target_change_fail_closed(self):
+        service, factory = self._service()
+        suspended = service.run(definition(capabilities=frozenset({"write_file"})), "write")
+        loop = factory.loops[0]
+
+        with self.assertRaises(ApprovalConflictError):
+            service.resume(
+                suspended.run_id,
+                ApprovalDecision("approval-1", "approved", 9),
+            )
+        self.assertEqual(loop.handler_calls, 0)
+        self.assertEqual(loop.approval_store.read_existing().revision, 0)
+
+        (self.workspace_root / "target.txt").write_text(
+            "changed externally",
+            encoding="utf-8",
+        )
+        resumed = service.resume(
+            suspended.run_id,
+            ApprovalDecision("approval-1", "approved", 0),
+        )
+
+        queue = loop.approval_store.read_existing()
+        self.assertEqual(queue.find("approval-1").status, "failed")
+        self.assertEqual(loop.handler_calls, 0)
+        self.assertTrue(
+            any(
+                item.payload.get("code") == "approval_target_changed"
+                for item in resumed.state.observations
+            )
+        )
+
+    def test_new_governance_block_overrides_old_approval(self):
+        service, factory = self._service(mode="blocked")
+        suspended = service.run(definition(capabilities=frozenset({"write_file"})), "write")
+
+        resumed = service.resume(
+            suspended.run_id,
+            ApprovalDecision("approval-1", "approved", 0),
+        )
+
+        loop = factory.loops[0]
+        self.assertEqual(
+            loop.approval_store.read_existing().find("approval-1").status,
+            "failed",
+        )
+        self.assertEqual(loop.handler_calls, 0)
+        self.assertEqual(resumed.state.status, RunStatus.COMPLETED)
+        self.assertTrue(
+            any(
+                item.payload.get("code") == "new_governance_block"
+                for item in resumed.state.observations
+            )
+        )
+
+    def test_resume_loader_restores_a_run_when_service_memory_is_empty(self):
+        first_service, factory = self._service()
+        selected = definition(capabilities=frozenset({"write_file"}))
+        suspended = first_service.run(selected, "write")
+        first_loop = factory.loops[0]
+        handle = AgentResumeHandle(
+            run_id=suspended.run_id,
+            agent_run_id=suspended.agent_run_id,
+            parent_run_id=suspended.parent_run_id,
+            definition=selected,
+            effective_capabilities=suspended.effective_capabilities,
+            skill_session=SkillSession(suspended.agent_run_id),
+            state_store=first_loop.store,
+            runtime=first_loop,
+        )
+        loader = StaticResumeLoader(handle)
+        restored_service = AgentService(
+            audit_root=self.audit_root,
+            workspace_capabilities=frozenset({"write_file"}),
+            runtime_factory=ApprovalRuntimeFactory(
+                self.audit_root,
+                self.workspace_root,
+            ),
+            resume_loader=loader,
+        )
+
+        resumed = restored_service.resume(
+            suspended.run_id,
+            ApprovalDecision("approval-1", "approved", 0),
+        )
+
+        self.assertEqual(loader.calls, [suspended.run_id])
+        self.assertEqual(resumed.state.status, RunStatus.COMPLETED)
+        self.assertEqual(first_loop.handler_calls, 1)
+
+    def test_different_reapproval_replaces_pending_id_without_handler(self):
+        service, factory = self._service(mode="reapproval")
+        suspended = service.run(
+            definition(capabilities=frozenset({"write_file"})),
+            "write",
+        )
+
+        resumed = service.resume(
+            suspended.run_id,
+            ApprovalDecision("approval-1", "approved", 0),
+        )
+
+        loop = factory.loops[0]
+        queue = loop.approval_store.read_existing()
+        self.assertEqual(queue.find("approval-1").status, "failed")
+        self.assertEqual(queue.find("approval-2").status, "pending")
+        self.assertEqual(resumed.state.status, RunStatus.NEEDS_APPROVAL)
+        self.assertEqual(resumed.state.pending_approval_id, "approval-2")
+        self.assertEqual(loop.handler_calls, 0)
 
 
 if __name__ == "__main__":

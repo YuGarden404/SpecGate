@@ -3,11 +3,12 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import specgate.workspace_fs as workspace_fs
 from specgate.actions import Action
@@ -32,6 +33,62 @@ TERMINAL_APPROVAL_STATUSES = {"applied", "rejected", "failed"}
 
 class ApprovalConflictError(ValueError):
     code = "approval_conflict"
+
+
+@dataclass(frozen=True)
+class ApprovalDecision:
+    approval_id: str
+    status: Literal["approved", "denied"]
+    expected_revision: int
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_approval_identity(self.approval_id)
+        if self.status not in {"approved", "denied"}:
+            raise ValueError("approval decision status must be approved or denied")
+        _validate_revision(self.expected_revision, "expected revision")
+        if self.reason is not None and not isinstance(self.reason, str):
+            raise TypeError("approval decision reason must be a string or None")
+
+
+@dataclass(frozen=True)
+class ApprovalGrant:
+    approval_id: str
+    action_digest: str
+    queue_revision: int
+
+    def __post_init__(self) -> None:
+        _validate_approval_identity(self.approval_id)
+        if re.fullmatch(r"[0-9a-f]{64}", self.action_digest) is None:
+            raise ValueError("approval grant action digest must be lowercase SHA-256")
+        _validate_revision(self.queue_revision, "queue revision")
+
+
+def _validate_approval_identity(value: str) -> None:
+    if not isinstance(value, str) or re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]*", value
+    ) is None:
+        raise ValueError("approval id must be a safe non-empty identifier")
+
+
+def _validate_revision(value: int, label: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{label} must be a non-negative integer")
+
+
+def approval_action_digest(action_payload: dict[str, Any]) -> str:
+    if not isinstance(action_payload, dict):
+        raise TypeError("approval action payload must be an object")
+    try:
+        canonical = json.dumps(
+            action_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("approval action payload must be JSON serializable") from exc
+    return hashlib.sha256(canonical).hexdigest()
 
 
 @dataclass

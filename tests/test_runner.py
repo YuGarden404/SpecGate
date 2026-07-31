@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from specgate.agent_service import AgentService
 from specgate.context_lifecycle import CompressionConfig
 from specgate.gate import GateResult
 from specgate.llm import MockLLM
@@ -2739,7 +2740,7 @@ class RunnerTests(unittest.TestCase):
                 {"README.md"},
             )
 
-            result = AgentRunner(
+            runner = AgentRunner(
                 root,
                 llm,
                 policy,
@@ -2749,9 +2750,19 @@ class RunnerTests(unittest.TestCase):
                     review_actions={"replace_file"},
                     review_paths={"README.md"},
                 ),
-            ).resume_from_approval()
+            )
+            resume_calls = []
+            original_resume = AgentService.resume
+
+            def resume_through_service(service, run_id, decision, cancel_token=None):
+                resume_calls.append((run_id, decision))
+                return original_resume(service, run_id, decision, cancel_token)
+
+            with mock.patch.object(AgentService, "resume", new=resume_through_service):
+                result = runner.resume_from_approval()
 
             self.assertTrue(result.passed)
+            self.assertEqual(len(resume_calls), 1)
             self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "original")
             queue = ApprovalQueue.read(approval_queue_path(root))
             self.assertEqual(queue.approvals[0].status, "rejected")

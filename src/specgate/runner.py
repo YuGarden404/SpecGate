@@ -11,7 +11,15 @@ import specgate.workspace_fs as workspace_fs
 from specgate.action_pipeline import ActionPipeline, ExecutionOutcome, ExecutionStatus, PipelineExecutionContext
 from specgate.actions import Action, ActionParseError, parse_action
 from specgate.agent_loop import AgentLoop, ContextBuild
+from specgate.agent_service import (
+    AgentBudget,
+    AgentDefinition,
+    AgentResumeHandle,
+    AgentService,
+)
 from specgate.approvals import (
+    ApprovalDecision,
+    ApprovalGrant,
     ApprovalQueue,
     ApprovalStore,
     GovernanceConfig,
@@ -21,7 +29,6 @@ from specgate.approvals import (
     capture_target_state,
     classify_action_risk,
     preview_args,
-    target_state_matches,
 )
 from specgate.context import LegacyContextBuilder, build_context_pack_with_metadata, build_role_context_pack_with_metadata
 from specgate.context_lifecycle import CompressionConfig
@@ -44,6 +51,7 @@ from specgate.run_control import (
 from specgate.run_state import InMemoryRunStateStore, Observation, RunState, RunStatus, StateDelta
 from specgate.runtime_events import RunEventContext, RunEventSink, TraceRunEventSink
 from specgate.snapshot import FileSnapshot
+from specgate.skill_registry import SkillSession
 from specgate.tool_handlers import ToolExecutionContext
 from specgate.tool_registry import default_tool_registry
 from specgate.tool_runtime import ToolRuntime
@@ -303,7 +311,32 @@ class _RunnerActionExecutor:
         )
 
     def execute(self, action: Action, state: RunState) -> ExecutionOutcome:
-        step = state.step + 1
+        return self._execute(action, state, step=state.step + 1)
+
+    def execute_approval(
+        self,
+        action: Action,
+        state: RunState,
+        approval: PendingApproval,
+        grant: ApprovalGrant,
+    ) -> ExecutionOutcome:
+        return self._execute(
+            action,
+            state,
+            step=approval.step,
+            approved_request=approval,
+            approval_grant=grant,
+        )
+
+    def _execute(
+        self,
+        action: Action,
+        state: RunState,
+        *,
+        step: int,
+        approved_request: PendingApproval | None = None,
+        approval_grant: ApprovalGrant | None = None,
+    ) -> ExecutionOutcome:
         context = PipelineExecutionContext(
             event_context=self._event_context,
             step=step,
@@ -316,6 +349,8 @@ class _RunnerActionExecutor:
             ),
             gate_context=GateContext(self._runner.root, self._runner.policy),
             approval_requester=self._approval_requester,
+            approved_request=approved_request,
+            approval_grant=approval_grant,
         )
         outcome = self._pipeline.execute(action, context)
         outcome = self._normalize_unknown_tool(action, outcome)
@@ -471,10 +506,14 @@ class _RunnerActionExecutor:
                 if result is not None
                 else str(payload.get("message", "action blocked"))
             )
-            rule_family = (
+            raw_rule_family = (
                 result.rule_family
                 if result is not None
-                else str(payload.get("rule_family", "none"))
+                else payload.get("rule_family")
+            )
+            rule_family = _permission_rule_family(
+                raw_rule_family if isinstance(raw_rule_family, str) else None,
+                message,
             )
             self._runner._record_permission_decision(
                 self._permission_decisions,
@@ -552,6 +591,210 @@ class _RunnerActionExecutor:
                     "blocked": True,
                 },
             },
+        )
+
+
+class _ResumeOnlyRuntimeFactory:
+    def create(self, *args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("resume-only AgentService cannot create a new run")
+
+
+class _LegacyApprovalResumeRuntime:
+    def __init__(
+        self,
+        runner: AgentRunner,
+        run_id: str,
+        state_store: InMemoryRunStateStore,
+    ) -> None:
+        self.runner = runner
+        self.approval_root = runner.root
+        self.approval_store = ApprovalStore(runner.approval_queue_file)
+        self.state_store = state_store
+        self.event_context = RunEventContext(run_id, f"agent-{run_id}")
+        self.event_sink = _LegacyRunEventSink(runner.trace)
+        self.permission_decisions: list[PermissionDecision] = []
+        self.last_result: RunResult | None = None
+
+        hooks = HookBus(self.event_sink)
+        hooks.register_after_tool(
+            lambda event: self.event_sink.emit(
+                event.context,
+                "ToolCompleted",
+                {
+                    "action": event.tool_result.action,
+                    "ok": event.tool_result.ok,
+                    "blocked": event.tool_result.blocked,
+                    "code": event.tool_result.code,
+                },
+                step=event.step,
+                phase="tool",
+            )
+        )
+        hooks.register_after_gate(
+            lambda event: self.event_sink.emit(
+                event.context,
+                "GateCompleted",
+                {
+                    "passed": event.gate_result.passed,
+                    "summary": event.gate_result.summary,
+                },
+                step=event.step,
+                phase="gate",
+            )
+        )
+        pipeline = ActionPipeline(
+            _DispatcherRuntime(runner.dispatcher),
+            hooks,
+            _RunnerGovernanceEngine(),
+            DefaultValidationPolicy(),
+            _RunnerGateRunner(runner),
+        )
+        self.executor = _RunnerActionExecutor(
+            runner,
+            pipeline,
+            self.event_context,
+            self.permission_decisions,
+        )
+
+    def execute_approval(
+        self,
+        action: Action,
+        state: RunState,
+        approval: PendingApproval,
+        grant: ApprovalGrant,
+        cancel_token: CallbackCancellationToken,
+    ) -> ExecutionOutcome:
+        cancel_token.check()
+        return self.executor.execute_approval(action, state, approval, grant)
+
+    def approval_already_applied(self, approval: PendingApproval) -> bool:
+        action = parse_action(json.dumps(approval.action_payload))
+        return _target_matches_approved_content(self.runner.root, action)
+
+    def emit_resume_event(self, event_type: str, payload: dict) -> None:
+        if (
+            event_type == "ApprovalFailed"
+            and isinstance(payload.get("code"), str)
+            and payload["code"]
+        ):
+            approval = self.approval_store.read_existing().find(
+                str(payload["approval_id"])
+            )
+            decision = PermissionDecision(
+                step=approval.step,
+                action=approval.action,
+                path=approval.path,
+                allowed=False,
+                blocked=True,
+                reason=str(payload["code"]),
+                profile=self.runner.governance_profile,
+                rule_family=str(payload["code"]),
+            )
+            self.permission_decisions.append(decision)
+            self.runner.trace.append("permission_decision", decision.to_dict())
+        legacy_type = {
+            "RunResumed": "resume_started",
+            "ApprovalClaimed": "approval_claimed",
+            "ApprovalApplied": "approval_applied",
+            "ApprovalDenied": "approval_denied",
+            "ApprovalFailed": "approval_failed",
+        }[event_type]
+        self.runner.trace.append(legacy_type, redact(payload))
+        if event_type in {"ApprovalApplied", "ApprovalDenied", "ApprovalFailed"}:
+            self.runner.trace.append(
+                "resume_finished",
+                redact(
+                    {
+                        "approval_id": payload["approval_id"],
+                        "status": payload["status"],
+                        "queue_revision": payload["queue_revision"],
+                    }
+                ),
+            )
+
+    def run(self, run_id: str) -> RunState:
+        state = self.state_store.get(run_id)
+        runtime_feedback = [
+            {"step": state.step, "type": item.kind, **item.payload}
+            for item in state.observations
+        ]
+        self.last_result = self.runner._legacy_run_loop(
+            reset_queue=False,
+            initial_runtime_feedback=runtime_feedback,
+            initial_metrics=state.metrics,
+            initial_permission_decisions=self.permission_decisions,
+        )
+        status = {
+            "completed": RunStatus.COMPLETED,
+            "needs_approval": RunStatus.NEEDS_APPROVAL,
+            "failed": RunStatus.FAILED,
+        }.get(self.last_result.outcome, RunStatus.FAILED)
+        return replace(
+            state,
+            revision=state.revision + 1,
+            status=status,
+            step=self.last_result.steps,
+            latest_gate=self.last_result.final_gate,
+            pending_approval_id=self.last_result.pending_approval_id,
+            metrics=self.last_result.metrics or state.metrics,
+        )
+
+
+class _LegacyResumeLoader:
+    run_id = "legacy-latest"
+
+    def __init__(self, runner: AgentRunner) -> None:
+        self.runner = runner
+        self.runtime: _LegacyApprovalResumeRuntime | None = None
+
+    def load(
+        self,
+        run_id: str,
+        cancel_token: CallbackCancellationToken,
+    ) -> AgentResumeHandle:
+        if run_id != self.run_id:
+            raise ValueError("unknown legacy run")
+        cancel_token.check()
+        queue = ApprovalStore(self.runner.approval_queue_file).read_existing()
+        approval = queue.next_resume_candidate()
+        if approval is None:
+            raise ValueError("no approved or denied approval to resume")
+        state_store = InMemoryRunStateStore()
+        state_store.create(
+            RunState(
+                run_id,
+                status=RunStatus.NEEDS_APPROVAL,
+                step=approval.step,
+                pending_approval_id=approval.id,
+            )
+        )
+        runtime = _LegacyApprovalResumeRuntime(
+            self.runner,
+            run_id,
+            state_store,
+        )
+        self.runtime = runtime
+        definition = AgentDefinition(
+            agent_id="legacy-agent",
+            instructions="Resume the existing SpecGate run.",
+            capability_set=frozenset(self.runner.policy.allowed_actions),
+            context_policy=self.runner.context_strategy,
+            budget=AgentBudget(
+                max_steps=max(1, self.runner.max_steps),
+                context_chars=max(1, self.runner.context_budget_chars),
+                child_runs=0,
+            ),
+        )
+        return AgentResumeHandle(
+            run_id=run_id,
+            agent_run_id=f"agent-{run_id}",
+            parent_run_id=None,
+            definition=definition,
+            effective_capabilities=definition.capability_set,
+            skill_session=SkillSession(f"agent-{run_id}"),
+            state_store=state_store,
+            runtime=runtime,
         )
 
 
@@ -1658,315 +1901,32 @@ class AgentRunner:
 
     def resume_from_approval(self) -> RunResult:
         self._check_stop()
-        queue_path = self.approval_queue_file
-        store = ApprovalStore(queue_path)
-        queue = store.read_existing()
+        queue = ApprovalStore(self.approval_queue_file).read_existing()
         approval = queue.next_resume_candidate()
         if approval is None:
             raise ValueError("no approved or denied approval to resume")
-
-        runtime_feedback: list[dict] = []
-        permission_decisions: list[PermissionDecision] = []
-        metrics = RunMetrics()
-        started = {
-            "approval_id": approval.id,
-            "status": approval.status,
-            "action": approval.action,
-            "path": approval.path,
-            "queue_revision": queue.revision,
-        }
-        self.trace.append("resume_started", redact(started))
-
-        if approval.status == "denied":
-            metrics = replace(metrics, denied_approvals=1)
-            reason = approval.decision_reason or "human denied"
-            event = {
-                "type": "approval_denied",
-                "approval_id": approval.id,
-                "action": approval.action,
-                "path": approval.path,
-                "reason": reason,
-            }
-            redacted_event = redact(event)
-            runtime_feedback.append(redacted_event)
-            self.trace.append("approval_denied", redacted_event)
-            queue = store.transition(
+        decision_status = "denied" if approval.status == "denied" else "approved"
+        loader = _LegacyResumeLoader(self)
+        service = AgentService(
+            audit_root=self.run_dir,
+            workspace_capabilities=frozenset(self.policy.allowed_actions),
+            runtime_factory=_ResumeOnlyRuntimeFactory(),
+            resume_loader=loader,
+        )
+        service.resume(
+            loader.run_id,
+            ApprovalDecision(
                 approval.id,
-                "rejected",
-                expected_revision=queue.revision,
-                resolved_at=_utc_now_for_runner(),
-                reason=reason,
-            )
-            self.trace.append(
-                "resume_finished",
-                redact(
-                    {
-                        "approval_id": approval.id,
-                        "status": "rejected",
-                        "queue_revision": queue.revision,
-                    }
-                ),
-            )
-            return self._legacy_run_loop(
-                reset_queue=False,
-                initial_runtime_feedback=runtime_feedback,
-                initial_metrics=metrics,
-                initial_permission_decisions=permission_decisions,
-            )
-
-        if approval.status == "approved":
-            queue = store.transition(
-                approval.id,
-                "applying",
-                expected_revision=queue.revision,
-                resolved_at=_utc_now_for_runner(),
-            )
-            approval = queue.find(approval.id)
-            self.trace.append(
-                "approval_claimed",
-                redact(
-                    {
-                        "approval_id": approval.id,
-                        "status": approval.status,
-                        "queue_revision": queue.revision,
-                    }
-                ),
-            )
-
-        action = parse_action(json.dumps(approval.action_payload))
-        action_path_value = action.args.get("path")
-        action_path = action_path_value if isinstance(action_path_value, str) else None
-        target_is_original = target_state_matches(self.root, approval.target_state)
-        target_is_expected = _target_matches_approved_content(self.root, action)
-
-        if not target_is_original and target_is_expected:
-            message = "approved action content already present"
-            metrics = replace(metrics, approved_approvals=1, applied_approvals=1)
-            decision = PermissionDecision(
-                step=approval.step,
-                action=action.action,
-                path=action_path,
-                allowed=True,
-                blocked=False,
-                reason=message,
-                profile=self.governance_profile,
-                rule_family="approval_resume",
-            )
-            permission_decisions.append(decision)
-            self.trace.append("permission_decision", decision.to_dict())
-            event = {
-                "type": "approval_applied",
-                "approval_id": approval.id,
-                "action": action.action,
-                "path": action_path,
-                "ok": True,
-                "blocked": False,
-                "message": message,
-                "data": {"recovered_without_reapply": True},
-            }
-            redacted_event = redact(event)
-            runtime_feedback.append(redacted_event)
-            self.trace.append("approval_applied", redacted_event)
-            queue = store.transition(
-                approval.id,
-                "applied",
-                expected_revision=queue.revision,
-                resolved_at=_utc_now_for_runner(),
-            )
-            self.trace.append(
-                "resume_finished",
-                redact(
-                    {
-                        "approval_id": approval.id,
-                        "status": "applied",
-                        "queue_revision": queue.revision,
-                    }
-                ),
-            )
-            return self._legacy_run_loop(
-                reset_queue=False,
-                initial_runtime_feedback=runtime_feedback,
-                initial_metrics=metrics,
-                initial_permission_decisions=permission_decisions,
-            )
-
-        if not target_is_original:
-            error_code = "approval_target_changed"
-            reason = f"{error_code}: target file changed since approval request: {approval.path}"
-            metrics = replace(
-                metrics,
-                approved_approvals=1,
-                failed_approvals=1,
-                blocked_actions=1,
-            )
-            decision = PermissionDecision(
-                step=approval.step,
-                action=approval.action,
-                path=approval.path,
-                allowed=False,
-                blocked=True,
-                reason=reason,
-                profile=self.governance_profile,
-                rule_family=error_code,
-            )
-            permission_decisions.append(decision)
-            self.trace.append("permission_decision", decision.to_dict())
-            event = {
-                "type": "approval_failed",
-                "approval_id": approval.id,
-                "action": approval.action,
-                "path": approval.path,
-                "code": error_code,
-                "reason": reason,
-            }
-            redacted_event = redact(event)
-            runtime_feedback.append(redacted_event)
-            self.trace.append("approval_failed", redacted_event)
-            queue = store.transition(
-                approval.id,
-                "failed",
-                expected_revision=queue.revision,
-                resolved_at=_utc_now_for_runner(),
-                reason=reason,
-            )
-            self.trace.append(
-                "resume_finished",
-                redact(
-                    {
-                        "approval_id": approval.id,
-                        "status": "failed",
-                        "queue_revision": queue.revision,
-                    }
-                ),
-            )
-            return self._legacy_run_loop(
-                reset_queue=False,
-                initial_runtime_feedback=runtime_feedback,
-                initial_metrics=metrics,
-                initial_permission_decisions=permission_decisions,
-            )
-
-        risk = classify_action_risk(action, self.policy, self.governance_config)
-        if risk.level == "blocked":
-            metrics = replace(
-                metrics,
-                approved_approvals=1,
-                failed_approvals=1,
-                blocked_actions=1,
-            )
-            decision = PermissionDecision(
-                step=approval.step,
-                action=action.action,
-                path=action_path,
-                allowed=False,
-                blocked=True,
-                reason=risk.reason,
-                profile=self.governance_profile,
-                rule_family=_permission_rule_family(risk.rule_family, risk.reason),
-            )
-            permission_decisions.append(decision)
-            self.trace.append("permission_decision", decision.to_dict())
-            event = {
-                "type": "approval_failed",
-                "approval_id": approval.id,
-                "action": action.action,
-                "path": action_path,
-                "reason": risk.reason,
-            }
-            redacted_event = redact(event)
-            runtime_feedback.append(redacted_event)
-            self.trace.append("approval_failed", redacted_event)
-            queue = store.transition(
-                approval.id,
-                "failed",
-                expected_revision=queue.revision,
-                resolved_at=_utc_now_for_runner(),
-                reason=risk.reason,
-            )
-            self.trace.append(
-                "resume_finished",
-                redact(
-                    {
-                        "approval_id": approval.id,
-                        "status": "failed",
-                        "queue_revision": queue.revision,
-                    }
-                ),
-            )
-            return self._legacy_run_loop(
-                reset_queue=False,
-                initial_runtime_feedback=runtime_feedback,
-                initial_metrics=metrics,
-                initial_permission_decisions=permission_decisions,
-            )
-
-        tool_result = self.dispatcher.dispatch(action)
-        status = "applied" if tool_result.ok and not tool_result.blocked else "failed"
-        metrics = replace(
-            metrics,
-            approved_approvals=1,
-            applied_approvals=1 if status == "applied" else 0,
-            failed_approvals=1 if status == "failed" else 0,
-            tool_calls=1,
-            successful_tool_calls=1 if tool_result.ok else 0,
-            blocked_actions=1 if tool_result.blocked else 0,
-            finish_actions=1 if action.action == "finish" else 0,
-            tool_validation_failures=(
-                1 if tool_result.code == "tool_validation_failed" else 0
+                decision_status,
+                queue.revision,
+                approval.decision_reason,
             ),
+            CallbackCancellationToken(self._check_stop),
         )
-        decision = PermissionDecision(
-            step=approval.step,
-            action=action.action,
-            path=action_path,
-            allowed=tool_result.ok and not tool_result.blocked,
-            blocked=tool_result.blocked,
-            reason=tool_result.message,
-            profile=self.governance_profile,
-            rule_family=_permission_rule_family(
-                getattr(tool_result, "rule_family", None),
-                tool_result.message,
-            ),
-        )
-        permission_decisions.append(decision)
-        self.trace.append("permission_decision", decision.to_dict())
-        event_type = "approval_applied" if status == "applied" else "approval_failed"
-        event = {
-            "type": event_type,
-            "approval_id": approval.id,
-            "action": action.action,
-            "path": action_path,
-            "ok": tool_result.ok,
-            "blocked": tool_result.blocked,
-            "message": tool_result.message,
-            "data": tool_result.data,
-        }
-        redacted_event = redact(event)
-        runtime_feedback.append(redacted_event)
-        self.trace.append(event_type, redacted_event)
-        queue = store.transition(
-            approval.id,
-            status,
-            expected_revision=queue.revision,
-            resolved_at=_utc_now_for_runner(),
-            reason=None if status == "applied" else tool_result.message,
-        )
-        self.trace.append(
-            "resume_finished",
-            redact(
-                {
-                    "approval_id": approval.id,
-                    "status": status,
-                    "queue_revision": queue.revision,
-                }
-            ),
-        )
-        return self._legacy_run_loop(
-            reset_queue=False,
-            initial_runtime_feedback=runtime_feedback,
-            initial_metrics=metrics,
-            initial_permission_decisions=permission_decisions,
-        )
+        if loader.runtime is None or loader.runtime.last_result is None:
+            raise RuntimeError("approval resume did not produce a run result")
+        return loader.runtime.last_result
+
 
 
 def _target_matches_approved_content(root: Path, action: Action) -> bool:
