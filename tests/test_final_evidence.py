@@ -71,6 +71,26 @@ V011_RELEASE_FACTS = (
     "sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f",
     "9cf909341cd1a5feb8ed2b244ce31f0495016c4c",
 )
+V020_TASK_COMMITS = {
+    1: ("61add59",),
+    2: ("b3526b9",),
+    3: ("02394f7",),
+    4: ("7f6bffb",),
+    5: ("9aff214",),
+    6: ("556a5cb", "8677fd5"),
+    7: ("b2a030d",),
+    8: ("a179788",),
+    9: ("6f823e9",),
+    10: ("999e909",),
+    11: ("cffc6e9",),
+    12: ("78634b9",),
+    13: ("d8ae083",),
+    14: ("04743ec",),
+    15: ("89bd035",),
+    16: ("575af44",),
+    17: ("47f639a",),
+    18: ("674a1f4",),
+}
 KEY_EVIDENCE_PATHS = (
     "src/specgate/runner.py",
     "src/specgate/actions.py",
@@ -1457,6 +1477,31 @@ class FinalEvidenceTests(unittest.TestCase):
         ):
             with self.subTest(stale=stale):
                 self.assertNotIn(stale, current_release_sections)
+
+    def test_v020_task_commits_are_traceable(self):
+        plan = read_text("PLAN.md")
+        agent_log = read_text("AGENT_LOG.md")
+        plan_heading = "# 2026-07-31 v0.2.0 Agent Runtime 分层迁移"
+        log_heading = "## 2026-07-31 v0.2.0 Agent Runtime 分层迁移"
+        self.assertEqual(plan.count(plan_heading), 1)
+        self.assertEqual(agent_log.count(log_heading), 1)
+        plan_section = plan.split(plan_heading, 1)[1]
+        log_section = agent_log.split(log_heading, 1)[1]
+
+        for task, commits in V020_TASK_COMMITS.items():
+            with self.subTest(task=task, document="PLAN"):
+                self.assertIn(f"- [x] Task {task}:", plan_section)
+            with self.subTest(task=task, document="AGENT_LOG"):
+                self.assertIn(f"- Task {task}:", log_section)
+            for commit in commits:
+                with self.subTest(task=task, commit=commit):
+                    self.assertIn(f"`{commit}`", plan_section)
+                    self.assertIn(f"`{commit}`", log_section)
+
+        for commit in ("72b791a", "fcd8026"):
+            with self.subTest(design_commit=commit):
+                self.assertIn(f"`{commit}`", plan_section)
+                self.assertIn(f"`{commit}`", log_section)
 
     def test_matrix_references_existing_implementation_and_test_paths(self):
         matrix = MATRIX.read_text(encoding="utf-8")
