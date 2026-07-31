@@ -280,3 +280,11 @@ brainstorming 与人工决策形成四项明确结论：
 - 自动测试不得访问真实 DNS、socket 或 Provider；使用 Fake Resolver、Fake Transport 和脚本化 Action 验证安全与恢复语义。
 
 设计和实施计划分别记录于 `docs/superpowers/specs/2026-07-15-real-llm-web-integration-design.md` 与 `docs/superpowers/plans/2026-07-15-real-llm-web-integration.md`。用户选择 Superpowers Inline Execution，因此按任务顺序在当前功能分支执行，不派发 subagent；Git 暂存、提交、推送和 PR 继续由用户完成。
+
+## 2026-07-31 v0.2.0 Agent Runtime 过程记录
+
+本轮先依据课程要求和 learn-claude-code 的 Tool/Handler/Dispatch、Skill/Registry、Hook 与多 Agent 分层关系制作能力矩阵，再逐段确认 SpecGate 的迁移边界。结论不是替换现有 Gate，而是保持 Gate 与 Hook 双机制：Hook 处理细粒度生命周期扩展，Gate 负责不可跳过的确定性结果验收。
+
+外部 LLM 评审指出状态 patch 所有权、挂起与终止区分、取消信号、前后验证阶段、审批恢复入口、Artifact 契约、Workflow 总预算和统一 Trace 等风险。经核对后，这些问题进入最终架构设计；角色差异只存在于 AgentDefinition 和 Workflow，AgentLoop、ContextBuilder 与 StopPolicy 不按角色名分支。
+
+用户逐段确认架构、工具链、Skill、AgentService 和 Workflow 设计，并明确不采用 `.env`、分支名使用 `v020-agent-runtime`、所有 Git 操作由用户执行。实施开始采用 Subagent-Driven；Task 11 补做后，后续任务按用户决定切换为 Inline Execution。生产修改遵循 RED -> GREEN -> focused regression，最终再运行完整离线套件、Mock Demo、静态架构搜索和编译检查。

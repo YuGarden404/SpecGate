@@ -1503,6 +1503,46 @@ class FinalEvidenceTests(unittest.TestCase):
                 self.assertIn(f"`{commit}`", plan_section)
                 self.assertIn(f"`{commit}`", log_section)
 
+    def test_v020_architecture_and_process_docs_are_current(self):
+        spec = read_text("SPEC.md")
+        process = read_text("SPEC_PROCESS.md")
+
+        for phrase in (
+            "# 2026-07-31 v0.2.0 Agent Runtime 补充规格",
+            "AgentLoop",
+            "ActionPipeline",
+            "ToolDefinition -> ToolRegistry -> ToolRuntime -> ToolHandler",
+            "HookBus",
+            "GovernanceEngine",
+            "Gate 保持独立",
+            "SkillRegistry",
+            "AgentService",
+            "AgentArtifact",
+            "SequentialReviewWorkflow",
+        ):
+            with self.subTest(document="SPEC", phrase=phrase):
+                self.assertIn(phrase, spec)
+
+        for stale in (
+            "公开容器 registry 仍待后续 GHCR 分发阶段",
+            "公开容器 registry 待后续独立阶段完成",
+        ):
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, spec)
+
+        for phrase in (
+            "## 2026-07-31 v0.2.0 Agent Runtime 过程记录",
+            "能力矩阵",
+            "外部 LLM 评审",
+            "Gate 与 Hook",
+            "Subagent-Driven",
+            "Inline Execution",
+            "所有 Git 操作由用户执行",
+            "不采用 `.env`",
+        ):
+            with self.subTest(document="SPEC_PROCESS", phrase=phrase):
+                self.assertIn(phrase, process)
+
     def test_matrix_references_existing_implementation_and_test_paths(self):
         matrix = MATRIX.read_text(encoding="utf-8")
         for relative in KEY_EVIDENCE_PATHS:
