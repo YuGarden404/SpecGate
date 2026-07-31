@@ -9,6 +9,7 @@ from typing import Callable, Protocol
 
 import specgate.workspace_fs as workspace_fs
 from specgate.agent_loop import ContextBuild
+from specgate.artifacts import Artifact
 from specgate.context_lifecycle import CompressionConfig, compress_runtime_feedback, pin_critical_sections
 from specgate.context_selector import ContextSelection, select_context_files
 from specgate.gate import GateResult
@@ -37,6 +38,33 @@ ISOLATED_HARNESS_STRATEGIES = {"isolated-harness", "multi-agent-isolated"}
 
 class ContextContributor(Protocol):
     def render(self, state: RunState) -> tuple[str, str]: ...
+
+
+@dataclass(frozen=True)
+class ArtifactContextContributor:
+    instructions: str
+    producer_run_id: str
+    task: str
+    artifacts: tuple[Artifact, ...] = ()
+
+    def render(self, state: RunState) -> tuple[str, str]:
+        if state.run_id != self.producer_run_id:
+            raise ValueError("artifact context does not belong to run state")
+        payload = [
+            artifact.model_dump(mode="json") for artifact in self.artifacts
+        ]
+        rendered = "\n".join(
+            (
+                f"producer_run_id: {self.producer_run_id}",
+                "instructions:",
+                self.instructions,
+                "task:",
+                self.task,
+                "input_artifacts:",
+                json.dumps(payload, ensure_ascii=False, indent=2),
+            )
+        )
+        return "Agent Assignment", str(redact(rendered))
 
 
 @dataclass(frozen=True)

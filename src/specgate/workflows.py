@@ -303,7 +303,10 @@ def _used_budget(
 ) -> AgentBudget:
     state = result.state
     steps = max(1, state.step, state.metrics.steps)
-    context_chars = max(1, state.metrics.context_chars_max)
+    context_chars = min(
+        reserved.context_chars,
+        max(1, state.metrics.context_chars_max),
+    )
     return AgentBudget(
         max_steps=steps,
         context_chars=context_chars,

@@ -7,15 +7,44 @@ from unittest import mock
 
 import specgate.workspace_fs as workspace_fs
 from specgate.context import (
+    ArtifactContextContributor,
     build_context_pack,
     build_context_pack_with_metadata,
     build_role_context_pack_with_metadata,
 )
+from specgate.artifacts import ImplementationArtifact, PlanArtifact
+from specgate.run_state import RunState
 from specgate.gate import GateResult
 from specgate.workspace_fs import WorkspacePathError
 
 
 class ContextStrategyTests(unittest.TestCase):
+    def test_artifact_contributor_renders_definition_without_role_branching(self):
+        plan = PlanArtifact(
+            producer_run_id="planner-run",
+            steps=("Inspect", "Implement"),
+        )
+        implementation = ImplementationArtifact(
+            producer_run_id="implementer-run",
+            references=("planner-run",),
+            changed_paths=("index.html",),
+            summary="Implemented the plan.",
+        )
+        contributor = ArtifactContextContributor(
+            instructions="Review the implementation.",
+            producer_run_id="reviewer-run",
+            task="Build the page.",
+            artifacts=(plan, implementation),
+        )
+
+        title, rendered = contributor.render(RunState("reviewer-run"))
+
+        self.assertEqual(title, "Agent Assignment")
+        self.assertIn("Review the implementation.", rendered)
+        self.assertIn('"kind": "plan"', rendered)
+        self.assertIn('"kind": "implementation"', rendered)
+        self.assertIn("producer_run_id: reviewer-run", rendered)
+
     def _symlink_or_skip(self, link: Path, target: Path) -> None:
         try:
             link.symlink_to(target)
