@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 import html
 import json
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 
 import specgate.workspace_fs as workspace_fs
 from specgate.agent_loop import ContextBuild
@@ -16,7 +17,8 @@ from specgate.memory import load_memory_summary
 from specgate.policy import WorkspacePolicy
 from specgate.retrieval import RetrievalConfig, build_query_terms, retrieve_chunks
 from specgate.run_state import RunState
-from specgate.tool_registry import render_tool_registry_for_context
+from specgate.skill_registry import SkillRegistry, SkillSession
+from specgate.tool_registry import ToolDefinition, render_tool_registry_for_context
 from specgate.trace import redact
 
 
@@ -33,6 +35,50 @@ VALID_CONTEXT_STRATEGIES = {
 ISOLATED_HARNESS_STRATEGIES = {"isolated-harness", "multi-agent-isolated"}
 
 
+class ContextContributor(Protocol):
+    def render(self, state: RunState) -> tuple[str, str]: ...
+
+
+@dataclass(frozen=True)
+class SkillContextContributor:
+    registry: SkillRegistry
+    session: SkillSession
+
+    def render(self, state: RunState) -> tuple[str, str]:
+        if self.session.agent_run_id != state.run_id:
+            raise ValueError("skill session does not belong to run state")
+        return "Skills", render_skill_context(self.registry, self.session)
+
+
+def render_skill_context(
+    registry: SkillRegistry,
+    session: SkillSession,
+) -> str:
+    lines = ["Catalog:"]
+    catalog = registry.catalog()
+    if catalog:
+        for entry in catalog:
+            lines.append(
+                f"- {entry.name} [{entry.source.value}]: {entry.description}"
+            )
+    else:
+        lines.append("- none")
+
+    if session.active_names:
+        lines.extend(["", "Active Instructions:"])
+        for name in session.active_names:
+            instructions = registry.load(name)
+            lines.extend(
+                [
+                    f"### {instructions.name}",
+                    instructions.body.rstrip(),
+                ]
+            )
+
+    rendered = redact("\n".join(lines))
+    return str(rendered)
+
+
 @dataclass(frozen=True)
 class LegacyContextBuilder:
     root: Path
@@ -41,8 +87,10 @@ class LegacyContextBuilder:
     context_budget_chars: int = 12000
     retrieval_config: RetrievalConfig | None = None
     compression_config: CompressionConfig | None = None
+    tool_registry: Mapping[str, ToolDefinition] | None = None
     context_factory: Callable[..., tuple[str, dict]] | None = None
     on_build: Callable[[RunState, ContextBuild], None] | None = None
+    context_contributors: tuple[ContextContributor, ...] = ()
 
     def build(self, state: RunState) -> ContextBuild:
         runtime_feedback = []
@@ -72,6 +120,14 @@ class LegacyContextBuilder:
             )
 
         context_factory = self.context_factory or build_context_pack_with_metadata
+        context_kwargs = {}
+        if self.context_contributors:
+            context_kwargs = {
+                "context_contributors": self.context_contributors,
+                "state": state,
+            }
+        if self.tool_registry is not None:
+            context_kwargs["tool_registry"] = self.tool_registry
         text, metadata = context_factory(
             self.root,
             state.latest_gate,
@@ -81,6 +137,7 @@ class LegacyContextBuilder:
             context_budget_chars=self.context_budget_chars,
             retrieval_config=self.retrieval_config,
             compression_config=self.compression_config,
+            **context_kwargs,
         )
         built = ContextBuild(text, metadata)
         if self.on_build is not None:
@@ -407,6 +464,9 @@ def build_context_pack_with_metadata(
     context_budget_chars: int = 12000,
     retrieval_config: RetrievalConfig | None = None,
     compression_config: CompressionConfig | None = None,
+    tool_registry: Mapping[str, ToolDefinition] | None = None,
+    context_contributors: tuple[ContextContributor, ...] = (),
+    state: RunState | None = None,
 ) -> tuple[str, dict]:
     if strategy not in VALID_CONTEXT_STRATEGIES:
         raise ValueError(f"unknown context strategy: {strategy}")
@@ -453,7 +513,7 @@ def build_context_pack_with_metadata(
         ("Context Strategy", strategy),
         *[_split_rendered_section(section) for section in safety_sections],
         ("Action Protocol", _action_protocol()),
-        ("Tool Registry", render_tool_registry_for_context()),
+        ("Tool Registry", render_tool_registry_for_context(tool_registry)),
         ("Context Manifest", _render_manifest(selection)),
         ("Memory", load_memory_summary(root)),
         ("Selected Files", _render_selected_files(selection, strategy)),
@@ -462,6 +522,16 @@ def build_context_pack_with_metadata(
         (_artifact_summary(root / "index.html", policy), ""),
         ("Latest Gate Feedback", gate_summary),
     ]
+    if context_contributors:
+        if state is None:
+            raise ValueError("run state is required for context contributors")
+        tool_registry_index = next(
+            index
+            for index, (name, _body) in enumerate(body_sections)
+            if name == "Tool Registry"
+        )
+        contributions = [contributor.render(state) for contributor in context_contributors]
+        body_sections[tool_registry_index + 1 : tool_registry_index + 1] = contributions
     if strategy in ISOLATED_HARNESS_STRATEGIES:
         body_sections.append(("Role Isolation", _render_role_isolation()))
         body_sections.append(("Compression Evidence", _render_compression_evidence(compression_summary)))
@@ -499,6 +569,9 @@ def build_context_pack(
     context_budget_chars: int = 12000,
     retrieval_config: RetrievalConfig | None = None,
     compression_config: CompressionConfig | None = None,
+    tool_registry: Mapping[str, ToolDefinition] | None = None,
+    context_contributors: tuple[ContextContributor, ...] = (),
+    state: RunState | None = None,
 ) -> str:
     context, _metadata = build_context_pack_with_metadata(
         root,
@@ -509,6 +582,9 @@ def build_context_pack(
         context_budget_chars=context_budget_chars,
         retrieval_config=retrieval_config,
         compression_config=compression_config,
+        tool_registry=tool_registry,
+        context_contributors=context_contributors,
+        state=state,
     )
     return context
 
@@ -525,6 +601,7 @@ def build_role_context_pack_with_metadata(
     context_budget_chars: int = 12000,
     retrieval_config: RetrievalConfig | None = None,
     compression_config: CompressionConfig | None = None,
+    tool_registry: Mapping[str, ToolDefinition] | None = None,
 ) -> tuple[str, dict]:
     role_context = role_context_for(role)
     role_runtime_feedback = _runtime_feedback_for_role(role_context.role, runtime_feedback)
@@ -537,6 +614,7 @@ def build_role_context_pack_with_metadata(
         context_budget_chars=context_budget_chars,
         retrieval_config=retrieval_config,
         compression_config=compression_config,
+        tool_registry=tool_registry,
     )
     role_sections = [
         "## Current Role\n"

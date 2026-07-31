@@ -140,7 +140,10 @@ class ToolRegistry(Mapping[str, ToolDefinition]):
         return tuple(self._definitions.values())
 
 
-def default_tool_definitions() -> tuple[ToolDefinition, ...]:
+def default_tool_definitions(
+    *,
+    include_skill_tools: bool = False,
+) -> tuple[ToolDefinition, ...]:
     from specgate.tool_handlers import (
         FinishHandler,
         ListFilesHandler,
@@ -149,7 +152,7 @@ def default_tool_definitions() -> tuple[ToolDefinition, ...]:
         WriteFileHandler,
     )
 
-    return (
+    definitions = (
         ToolDefinition(
             ToolMetadata("read_file", "Read allowed UTF-8 workspace text."),
             PermissionClass.READ,
@@ -191,10 +194,48 @@ def default_tool_definitions() -> tuple[ToolDefinition, ...]:
             FinishHandler(),
         ),
     )
+    if include_skill_tools:
+        return definitions + skill_tool_definitions()
+    return definitions
 
 
-def default_tool_registry() -> ToolRegistry:
-    return ToolRegistry(default_tool_definitions())
+def skill_tool_definitions() -> tuple[ToolDefinition, ...]:
+    from specgate.skill_tools import (
+        LoadSkillArgs,
+        LoadSkillHandler,
+        LoadSkillResult,
+        ReadSkillResourceArgs,
+        ReadSkillResourceHandler,
+        ReadSkillResourceResult,
+    )
+
+    return (
+        ToolDefinition(
+            ToolMetadata("load_skill", "Load complete instructions for a catalog Skill."),
+            PermissionClass.READ,
+            SideEffectClass.NONE,
+            LoadSkillArgs,
+            LoadSkillResult,
+            LoadSkillHandler(),
+        ),
+        ToolDefinition(
+            ToolMetadata(
+                "read_skill_resource",
+                "Read a resource from an already loaded Skill.",
+            ),
+            PermissionClass.READ,
+            SideEffectClass.NONE,
+            ReadSkillResourceArgs,
+            ReadSkillResourceResult,
+            ReadSkillResourceHandler(),
+        ),
+    )
+
+
+def default_tool_registry(*, include_skill_tools: bool = False) -> ToolRegistry:
+    return ToolRegistry(
+        default_tool_definitions(include_skill_tools=include_skill_tools)
+    )
 
 
 def render_tool_registry_for_context(

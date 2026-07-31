@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest import mock
 
 from specgate.context import (
+    ContextContributor,
     LegacyContextBuilder,
     build_context_pack,
     build_context_pack_with_metadata,
@@ -15,10 +16,53 @@ from specgate.gate import GateCheck, GateIssue, GateResult
 from specgate.policy import WorkspacePolicy
 from specgate.run_state import Observation, RunState
 from specgate.trace import TraceStore
+from specgate.tool_registry import default_tool_registry
 from specgate.workspace_fs import WorkspacePathError
 
 
 class ContextTests(unittest.TestCase):
+    def test_context_pack_renders_the_injected_tool_registry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            context, _metadata = build_context_pack_with_metadata(
+                Path(tmp),
+                None,
+                tool_registry=default_tool_registry(include_skill_tools=True),
+            )
+
+        self.assertIn("load_skill [read]", context)
+        self.assertIn("read_skill_resource [read]", context)
+
+    def test_context_pack_renders_explicit_contributors_with_run_state(self):
+        class StepContributor:
+            def render(self, state: RunState) -> tuple[str, str]:
+                return "Extension", f"run={state.run_id}; step={state.step}"
+
+        contributor: ContextContributor = StepContributor()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context, _metadata = build_context_pack_with_metadata(
+                root,
+                None,
+                context_contributors=(contributor,),
+                state=RunState("run-1", step=3),
+            )
+
+        self.assertIn("## Extension", context)
+        self.assertIn("run=run-1; step=3", context)
+
+    def test_context_pack_requires_state_when_contributors_are_present(self):
+        class Contributor:
+            def render(self, state: RunState) -> tuple[str, str]:
+                return "Extension", state.run_id
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                build_context_pack_with_metadata(
+                    Path(tmp),
+                    None,
+                    context_contributors=(Contributor(),),
+                )
+
     def test_legacy_context_builder_preserves_configuration_and_observation_feedback(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

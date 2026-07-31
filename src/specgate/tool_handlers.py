@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import specgate.workspace_fs as workspace_fs
 from specgate.policy import WorkspacePolicy
+from specgate.skill_registry import SkillRegistry, SkillSession
 from specgate.snapshot import FileSnapshot
 from specgate.tool_registry import (
     FinishArgs,
@@ -21,6 +22,8 @@ from specgate.tool_registry import (
 class ToolExecutionContext:
     policy: WorkspacePolicy
     snapshot: FileSnapshot | None
+    skill_registry: SkillRegistry | None = None
+    skill_session: SkillSession | None = None
 
 
 class ToolExecutionError(RuntimeError):
