@@ -1543,6 +1543,26 @@ class FinalEvidenceTests(unittest.TestCase):
             with self.subTest(document="SPEC_PROCESS", phrase=phrase):
                 self.assertIn(phrase, process)
 
+    def test_readme_exposes_release_and_deterministic_mechanism_demos(self):
+        readme = read_text("README.md")
+        release_url = "https://github.com/YuGarden404/SpecGate/releases/tag/v0.1.1"
+        self.assertIn(release_url, readme)
+
+        heading = "## 课程机制演示"
+        self.assertEqual(readme.count(heading), 1)
+        section = readme.split(heading, 1)[1].split("\n## ", 1)[0]
+        for phrase in (
+            "Guardrail 阻止危险动作",
+            "Gate 失败反馈改变下一步动作",
+            "HITL 审批挂起与恢复",
+            "tests.test_runner.RunnerTests.test_guardrail_block_is_recorded",
+            "tests.test_runner.RunnerTests.test_gate_failure_feedback_changes_next_action",
+            "tests.test_cli.CliTests.test_cli_pending_approve_resume_applies_queue_and_writes_report",
+            "不需要真实模型、网络或私有凭据",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, section)
+
     def test_matrix_references_existing_implementation_and_test_paths(self):
         matrix = MATRIX.read_text(encoding="utf-8")
         for relative in KEY_EVIDENCE_PATHS:

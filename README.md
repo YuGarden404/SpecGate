@@ -12,6 +12,7 @@ SpecGate 是 AI4SE 期末项目的 A 类选题：一个从零实现、以 GitHub
 - 项目讲解稿：`docs/PROJECT_WALKTHROUGH.md`
 - Lab 9-12 对齐说明：`docs/AI4SE_Lab_9_12_Alignment.md`
 - SpecGate Skill：`skills/specgate-static-html-harness/SKILL.md`
+- GitHub Release：[v0.1.1](https://github.com/YuGarden404/SpecGate/releases/tag/v0.1.1)
 - 公开静态评审首页：`https://yugarden404.github.io/SpecGate/`
 - 知识图谱 demo：`https://yugarden404.github.io/SpecGate/demo/`
 - 运行报告：`https://yugarden404.github.io/SpecGate/report/`
@@ -175,6 +176,30 @@ skills/                       SpecGate 可复用 Skill
 ```powershell
 python -m unittest discover -s tests
 ```
+
+## 课程机制演示
+
+下面三项使用 MockLLM、临时工作区和确定性本地规则，不需要真实模型、网络或私有凭据：
+
+1. Guardrail 阻止危险动作：
+
+   ```powershell
+   python -m unittest -v tests.test_runner.RunnerTests.test_guardrail_block_is_recorded
+   ```
+
+2. Gate 失败反馈改变下一步动作：
+
+   ```powershell
+   python -m unittest -v tests.test_runner.RunnerTests.test_gate_failure_feedback_changes_next_action
+   ```
+
+3. HITL 审批挂起与恢复：
+
+   ```powershell
+   python -m unittest -v tests.test_cli.CliTests.test_cli_pending_approve_resume_applies_queue_and_writes_report
+   ```
+
+三项均应显示 `OK`。它们分别证明确定性安全拦截、Gate 反馈闭环，以及审批决定后重新校验并继续同一 Agent Runtime。
 
 ## 真实模型运行
 
