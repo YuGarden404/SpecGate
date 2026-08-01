@@ -46,7 +46,9 @@ from specgate.approvals import (
 )
 from specgate.context import (
     ArtifactContextContributor,
+    ContextContributor,
     LegacyContextBuilder,
+    UserRequestContextContributor,
     build_context_pack_with_metadata,
 )
 from specgate.context_lifecycle import CompressionConfig
@@ -88,6 +90,7 @@ def _permission_rule_family(rule_family: str | None, message: str) -> str:
 
 
 VALID_RUN_OUTCOMES = {"completed", "needs_approval", "failed"}
+DEFAULT_AGENT_TASK = "Execute the configured workspace task."
 
 
 @dataclass(frozen=True)
@@ -102,6 +105,7 @@ class RunResult:
     profile: str = "strict"
     outcome: str = "failed"
     pending_approval_id: str | None = None
+    run_id: str | None = None
 
 
 class _LegacyRunStateStore:
@@ -934,6 +938,7 @@ class _WorkflowRuntimeFactory:
             context_factory=build_context_pack_with_metadata,
             on_build=context_built,
             context_contributors=(
+                *self.runner.context_contributors,
                 ArtifactContextContributor(
                     instructions=request.definition.instructions,
                     producer_run_id=request.run_id,
@@ -1227,6 +1232,7 @@ class _RunnerRuntime:
         context_budget_chars: int = 12000,
         retrieval_config: RetrievalConfig | None = None,
         compression_config: CompressionConfig | None = None,
+        context_contributors: tuple[ContextContributor, ...] = (),
     ):
         self.root = root
         self.llm = llm
@@ -1249,6 +1255,7 @@ class _RunnerRuntime:
         self.context_budget_chars = context_budget_chars
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.compression_config = compression_config or CompressionConfig()
+        self.context_contributors = context_contributors
         self.trace = TraceStore(self.run_dir / "trace.jsonl", reset=reset_audit)
         if reset_audit:
             self._reset_run_artifacts()
@@ -1510,6 +1517,7 @@ class _RunnerRuntime:
             compression_config=self.compression_config,
             context_factory=build_context_pack_with_metadata,
             on_build=context_built,
+            context_contributors=self.context_contributors,
         )
         hooks = HookBus(event_sink)
         hooks.register_after_tool(
@@ -2123,6 +2131,7 @@ def _service_for_configured_runtime(
     runtime: _RunnerRuntime,
     runtime_config,
     cancel_token,
+    id_factory: Callable[[], str] | None = None,
 ) -> AgentService:
     workspace_fs.ensure_workspace_directory(runtime.run_dir, "agent-state")
     runtime_factory = _ConfiguredRuntimeFactory.from_runtime(
@@ -2144,6 +2153,7 @@ def _service_for_configured_runtime(
         audit_root=runtime.run_dir / "agent-state",
         workspace_capabilities=frozenset(runtime.policy.allowed_actions),
         runtime_factory=runtime_factory,
+        id_factory=id_factory,
     )
     service._specgate_runtime_factory = runtime_factory
     service._specgate_default_definition = definition
@@ -2175,16 +2185,42 @@ def configure_agent_service(
     return service
 
 
-def _run_configured_service(service: AgentService) -> RunResult:
+def _trust_from_payload(payload: object) -> TrustSummary | None:
+    if not isinstance(payload, dict):
+        return None
+    return TrustSummary(
+        str(payload.get("status", "failed")),
+        list(payload.get("reasons", [])),
+    )
+
+
+def _request_summary(task: str) -> str:
+    single_line = " ".join(task.split())
+    return str(redact(single_line[:160]))
+
+
+def _run_configured_service(
+    service: AgentService,
+    task: str | None = None,
+) -> RunResult:
     definition = getattr(service, "_specgate_default_definition", None)
     token = getattr(service, "_specgate_cancel_token", None)
     if definition is None or token is None:
         raise TypeError("AgentService is missing its default run configuration")
-    result = service.run(
-        definition,
-        "Execute the configured workspace task.",
-        cancel_token=token,
+    resolved_task = DEFAULT_AGENT_TASK if task is None else task
+    runtime = _configured_runtime(service)
+    runtime.context_contributors = (
+        () if task is None else (UserRequestContextContributor(task),)
     )
+    if task is not None:
+        runtime.trace.append(
+            "user_request_received",
+            {
+                "summary": _request_summary(task),
+                "request_chars": len(task),
+            },
+        )
+    result = service.run(definition, resolved_task, cancel_token=token)
     payload = next(
         item.payload
         for item in reversed(result.state.observations)
@@ -2194,15 +2230,6 @@ def _run_configured_service(service: AgentService) -> RunResult:
         PermissionDecision(**item)
         for item in payload.get("permission_decisions", [])
     ]
-    trust_payload = payload.get("trust")
-    trust = (
-        None
-        if not isinstance(trust_payload, dict)
-        else TrustSummary(
-            str(trust_payload.get("status", "failed")),
-            list(trust_payload.get("reasons", [])),
-        )
-    )
     outcome = str(payload.get("outcome", result.state.status.value))
     return RunResult(
         passed=bool(payload.get("passed", False)),
@@ -2211,10 +2238,11 @@ def _run_configured_service(service: AgentService) -> RunResult:
         context_chars_max=result.state.metrics.context_chars_max,
         metrics=result.state.metrics,
         permission_decisions=decisions,
-        trust=trust,
+        trust=_trust_from_payload(payload.get("trust")),
         profile=str(payload.get("profile", "strict")),
         outcome=outcome,
         pending_approval_id=result.state.pending_approval_id,
+        run_id=result.run_id,
     )
 
 
@@ -2242,6 +2270,7 @@ class AgentRunner:
         retrieval_config: RetrievalConfig | None = None,
         compression_config: CompressionConfig | None = None,
         agent_service: AgentService | None = None,
+        id_factory: Callable[[], str] | None = None,
     ) -> None:
         if agent_service is None:
             if root is None or llm is None or policy is None:
@@ -2275,6 +2304,7 @@ class AgentRunner:
                     approval_queue_file=resolved_approval,
                     runtime_config=runtime_config,
                     cancel_token=token,
+                    id_factory=id_factory,
                 )
                 runtime = _configured_runtime(agent_service)
                 runtime.retrieval_config = retrieval
@@ -2302,11 +2332,12 @@ class AgentRunner:
                     runtime,
                     runtime_config,
                     token,
+                    id_factory,
                 )
         object.__setattr__(self, "_service", agent_service)
 
-    def run(self) -> RunResult:
-        return _run_configured_service(self._service)
+    def run(self, task: str | None = None) -> RunResult:
+        return _run_configured_service(self._service, task)
 
     def resume_from_approval(self) -> RunResult:
         return _resume_configured_service(self._service)

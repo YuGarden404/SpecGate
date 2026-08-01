@@ -6,6 +6,8 @@ from unittest import mock
 from specgate.context import (
     ContextContributor,
     LegacyContextBuilder,
+    MAX_USER_REQUEST_CHARS,
+    UserRequestContextContributor,
     build_context_pack,
     build_context_pack_with_metadata,
     build_role_context_pack_with_metadata,
@@ -21,6 +23,23 @@ from specgate.workspace_fs import WorkspacePathError
 
 
 class ContextTests(unittest.TestCase):
+    def test_user_request_contributor_renders_redacted_ephemeral_section(self):
+        contributor = UserRequestContextContributor(
+            "Please update index.html using sk-secret-1234567890"
+        )
+
+        title, content = contributor.render(RunState("run-1"))
+
+        self.assertEqual(title, "User Request")
+        self.assertIn("Please update index.html", content)
+        self.assertNotIn("sk-secret", content)
+
+    def test_user_request_contributor_rejects_empty_or_oversized_requests(self):
+        for request in ("", "   ", "x" * (MAX_USER_REQUEST_CHARS + 1)):
+            with self.subTest(length=len(request)):
+                with self.assertRaises(ValueError):
+                    UserRequestContextContributor(request)
+
     def test_context_pack_renders_the_injected_tool_registry(self):
         with tempfile.TemporaryDirectory() as tmp:
             context, _metadata = build_context_pack_with_metadata(

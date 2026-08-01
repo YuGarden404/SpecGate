@@ -759,6 +759,7 @@ class AgentServiceFactory:
         approval_queue_file: Path,
         runtime_config: RunRuntimeConfig,
         cancel_token: CancellationToken,
+        id_factory: Callable[[], str] | None = None,
     ) -> AgentService:
         return self._build(
             root=root,
@@ -768,6 +769,7 @@ class AgentServiceFactory:
             approval_queue_file=approval_queue_file,
             runtime_config=runtime_config,
             cancel_token=cancel_token,
+            id_factory=id_factory,
             reset_audit=True,
         )
 
@@ -781,6 +783,7 @@ class AgentServiceFactory:
         approval_queue_file: Path,
         runtime_config: RunRuntimeConfig,
         cancel_token: CancellationToken,
+        id_factory: Callable[[], str] | None = None,
     ) -> AgentService:
         return self._build(
             root=root,
@@ -790,6 +793,7 @@ class AgentServiceFactory:
             approval_queue_file=approval_queue_file,
             runtime_config=runtime_config,
             cancel_token=cancel_token,
+            id_factory=id_factory,
             reset_audit=False,
         )
 
@@ -803,6 +807,7 @@ class AgentServiceFactory:
         approval_queue_file: Path,
         runtime_config: RunRuntimeConfig,
         cancel_token: CancellationToken,
+        id_factory: Callable[[], str] | None,
         reset_audit: bool,
     ) -> AgentService:
         from specgate.runner import _ConfiguredRuntimeFactory
@@ -842,6 +847,7 @@ class AgentServiceFactory:
             audit_root=audit_dir / "agent-state",
             workspace_capabilities=frozenset(policy.allowed_actions),
             runtime_factory=runtime_factory,
+            id_factory=id_factory,
         )
         service._specgate_runtime_factory = runtime_factory
         service._specgate_default_definition = definition
@@ -858,6 +864,7 @@ def build_agent_service(
     approval_queue_file: Path,
     runtime_config: RunRuntimeConfig,
     cancel_token: CancellationToken,
+    id_factory: Callable[[], str] | None = None,
 ) -> AgentService:
     return AgentServiceFactory().build(
         root=root,
@@ -867,6 +874,7 @@ def build_agent_service(
         approval_queue_file=approval_queue_file,
         runtime_config=runtime_config,
         cancel_token=cancel_token,
+        id_factory=id_factory,
     )
 
 
@@ -879,6 +887,7 @@ def build_resumable_agent_service(
     approval_queue_file: Path,
     runtime_config: RunRuntimeConfig,
     cancel_token: CancellationToken,
+    id_factory: Callable[[], str] | None = None,
 ) -> AgentService:
     return AgentServiceFactory().build_resumable(
         root=root,
@@ -888,6 +897,7 @@ def build_resumable_agent_service(
         approval_queue_file=approval_queue_file,
         runtime_config=runtime_config,
         cancel_token=cancel_token,
+        id_factory=id_factory,
     )
 
 
