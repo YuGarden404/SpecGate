@@ -26,7 +26,11 @@ from specgate.hooks import (
 )
 from specgate.policy import WorkspacePolicy
 from specgate.run_state import Observation, RunStatus, StateDelta
-from specgate.runtime_events import RunEventContext
+from specgate.runtime_events import (
+    NullRunEventSink,
+    RunEventContext,
+    RunEventSink,
+)
 from specgate.tool_handlers import ToolExecutionContext
 from specgate.tool_registry import SideEffectClass
 from specgate.tool_runtime import (
@@ -90,12 +94,16 @@ class ActionPipeline:
         governance: GovernanceEngine,
         validation_policy: ValidationPolicy,
         gate_runner: GateRunner,
+        event_sink: RunEventSink | None = None,
     ) -> None:
         self._runtime = runtime
         self._hooks = hooks
         self._governance = governance
         self._validation_policy = validation_policy
         self._gate_runner = gate_runner
+        self._event_sink = (
+            NullRunEventSink() if event_sink is None else event_sink
+        )
 
     def execute(
         self,
@@ -128,11 +136,12 @@ class ActionPipeline:
             ):
                 grant_available = False
             else:
-                return _approval_outcome(
+                return _approval_outcome_with_event(
                     action,
                     before_decision.code,
                     before_decision.reason,
                     context,
+                    self._event_sink,
                 )
         assert before_decision.kind in {
             BeforeToolDecisionKind.CONTINUE,
@@ -144,6 +153,24 @@ class ActionPipeline:
             capabilities=context.capabilities,
             policy=context.policy,
             config=context.governance_config,
+        )
+        assert governance_decision.kind in {
+            GovernanceDecisionKind.ALLOW,
+            GovernanceDecisionKind.BLOCK,
+            GovernanceDecisionKind.REQUIRE_APPROVAL,
+        }
+        self._event_sink.emit(
+            context.event_context,
+            "GovernanceEvaluated",
+            {
+                "action": call.definition.name,
+                "path": call.args.model_dump(mode="python").get("path"),
+                "decision": governance_decision.kind.value,
+                "code": governance_decision.code,
+                "rule_family": governance_decision.rule_family,
+            },
+            step=context.step,
+            phase="governance",
         )
         if governance_decision.kind is GovernanceDecisionKind.BLOCK:
             return _decision_blocked_outcome(
@@ -160,17 +187,13 @@ class ActionPipeline:
             ):
                 grant_available = False
             else:
-                return _approval_outcome(
+                return _approval_outcome_with_event(
                     action,
                     governance_decision.code,
                     governance_decision.reason,
                     context,
+                    self._event_sink,
                 )
-        assert governance_decision.kind in {
-            GovernanceDecisionKind.ALLOW,
-            GovernanceDecisionKind.REQUIRE_APPROVAL,
-        }
-
         tool_result = self._runtime.execute_prepared(call, context.tool_context)
         self._hooks.after_tool(
             AfterTool(
@@ -315,6 +338,32 @@ def _approval_outcome(
         approval_request=approval,
         feedback=observation,
     )
+
+
+def _approval_outcome_with_event(
+    action: Action,
+    code: str,
+    reason: str,
+    context: PipelineExecutionContext,
+    event_sink: RunEventSink,
+) -> ExecutionOutcome:
+    outcome = _approval_outcome(action, code, reason, context)
+    approval = outcome.approval_request
+    if approval is not None:
+        event_sink.emit(
+            context.event_context,
+            "ApprovalRequested",
+            {
+                "approval_id": approval.id,
+                "action": approval.action,
+                "path": approval.path,
+                "risk_level": approval.risk_level,
+                "reason": str(redact(approval.reason)),
+            },
+            step=context.step,
+            phase="approval",
+        )
+    return outcome
 
 
 def _decision_blocked_outcome(

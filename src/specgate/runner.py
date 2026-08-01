@@ -69,7 +69,12 @@ from specgate.run_control import (
     LoopDecisionKind,
 )
 from specgate.run_state import InMemoryRunStateStore, Observation, RunState, RunStatus, StateDelta
-from specgate.runtime_events import RunEventContext, RunEventSink, TraceRunEventSink
+from specgate.runtime_events import (
+    FanoutRunEventSink,
+    RunEventContext,
+    RunEventSink,
+    TraceRunEventSink,
+)
 from specgate.snapshot import FileSnapshot
 from specgate.skill_registry import SkillSession
 from specgate.tool_handlers import ToolExecutionContext
@@ -168,9 +173,14 @@ class _LegacyRunStateStore:
 
 
 class _LegacyRunEventSink:
-    def __init__(self, trace: TraceStore) -> None:
+    def __init__(
+        self,
+        trace: TraceStore,
+        observer: RunEventSink | None = None,
+    ) -> None:
         self._trace = trace
-        self._sink = TraceRunEventSink(trace)
+        observers = () if observer is None else (observer,)
+        self._sink = FanoutRunEventSink(TraceRunEventSink(trace), observers)
         self._last_llm_response: str | None = None
 
     def remember_llm_response(self, response: str) -> None:
@@ -899,7 +909,10 @@ class _WorkflowRuntimeFactory:
                 "run_id": request.run_id,
             },
         )
-        event_sink = _LegacyRunEventSink(self.runner.trace)
+        event_sink = _LegacyRunEventSink(
+            self.runner.trace,
+            self.runner.event_sink,
+        )
         legacy_store = _LegacyRunStateStore(self.runner.trace, state_store)
 
         def context_built(state: RunState, built: ContextBuild) -> None:
@@ -980,6 +993,7 @@ class _WorkflowRuntimeFactory:
             _RunnerGovernanceEngine(),
             _WorkflowValidationPolicy(),
             _RunnerGateRunner(self.runner),
+            event_sink=event_sink,
         )
         delegate = _RunnerActionExecutor(
             self.runner,
@@ -1046,7 +1060,7 @@ class _LegacyApprovalResumeRuntime:
         self.approval_store = ApprovalStore(runner.approval_queue_file)
         self.state_store = state_store
         self.event_context = RunEventContext(run_id, f"agent-{run_id}")
-        self.event_sink = _LegacyRunEventSink(runner.trace)
+        self.event_sink = _LegacyRunEventSink(runner.trace, runner.event_sink)
         self.permission_decisions: list[PermissionDecision] = []
         self.last_result: RunResult | None = None
 
@@ -1083,6 +1097,7 @@ class _LegacyApprovalResumeRuntime:
             _RunnerGovernanceEngine(),
             DefaultValidationPolicy(),
             _RunnerGateRunner(runner),
+            event_sink=self.event_sink,
         )
         self.executor = _RunnerActionExecutor(
             runner,
@@ -1233,6 +1248,7 @@ class _RunnerRuntime:
         retrieval_config: RetrievalConfig | None = None,
         compression_config: CompressionConfig | None = None,
         context_contributors: tuple[ContextContributor, ...] = (),
+        event_sink: RunEventSink | None = None,
     ):
         self.root = root
         self.llm = llm
@@ -1256,6 +1272,7 @@ class _RunnerRuntime:
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.compression_config = compression_config or CompressionConfig()
         self.context_contributors = context_contributors
+        self.event_sink = event_sink
         self.trace = TraceStore(self.run_dir / "trace.jsonl", reset=reset_audit)
         if reset_audit:
             self._reset_run_artifacts()
@@ -1468,7 +1485,7 @@ class _RunnerRuntime:
             )
         if event_context is None:
             event_context = RunEventContext(run_id, f"agent-{run_id}")
-        event_sink = _LegacyRunEventSink(self.trace)
+        event_sink = _LegacyRunEventSink(self.trace, self.event_sink)
         state_store = _LegacyRunStateStore(self.trace, backing_store)
         if backing_store is None:
             state_store.create(RunState(run_id))
@@ -1552,6 +1569,7 @@ class _RunnerRuntime:
             _RunnerGovernanceEngine(),
             DefaultValidationPolicy(),
             _RunnerGateRunner(self),
+            event_sink=event_sink,
         )
         executor = _RunnerActionExecutor(
             self,
@@ -2083,6 +2101,7 @@ class _ConfiguredRuntimeFactory:
         runtime_config,
         cancel_token,
         reset_audit: bool = True,
+        event_sink: RunEventSink | None = None,
     ) -> None:
         self.cancel_token = cancel_token
         self.runtime = _RunnerRuntime(
@@ -2106,6 +2125,7 @@ class _ConfiguredRuntimeFactory:
                 )
             ),
             reset_audit=reset_audit,
+            event_sink=event_sink,
         )
 
     @classmethod
@@ -2271,6 +2291,7 @@ class AgentRunner:
         compression_config: CompressionConfig | None = None,
         agent_service: AgentService | None = None,
         id_factory: Callable[[], str] | None = None,
+        event_sink: RunEventSink | None = None,
     ) -> None:
         if agent_service is None:
             if root is None or llm is None or policy is None:
@@ -2305,6 +2326,7 @@ class AgentRunner:
                     runtime_config=runtime_config,
                     cancel_token=token,
                     id_factory=id_factory,
+                    event_sink=event_sink,
                 )
                 runtime = _configured_runtime(agent_service)
                 runtime.retrieval_config = retrieval
@@ -2327,6 +2349,7 @@ class AgentRunner:
                     context_budget_chars=context_budget_chars,
                     retrieval_config=retrieval,
                     compression_config=compression,
+                    event_sink=event_sink,
                 )
                 agent_service = _service_for_configured_runtime(
                     runtime,

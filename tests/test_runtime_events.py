@@ -4,11 +4,14 @@ import unittest
 from pathlib import Path
 
 from specgate.runtime_events import (
+    FanoutRunEventSink,
     InMemoryRunEventSink,
+    NullRunEventSink,
     RunEventContext,
     TraceRunEventSink,
 )
 from specgate.trace import TraceStore
+from shell_support import FailingSink, RecordingSink
 
 
 class RuntimeEventTests(unittest.TestCase):
@@ -53,6 +56,55 @@ class RuntimeEventTests(unittest.TestCase):
         self.assertEqual(
             sink.events[0].payload["nested"]["value"],
             "original",
+        )
+
+    def test_fanout_redacts_and_observer_failure_does_not_block_primary(self):
+        primary = RecordingSink()
+        observer = FailingSink()
+        errors = []
+        sink = FanoutRunEventSink(primary, (observer,), errors.append)
+
+        sink.emit(
+            self.context,
+            "ToolCompleted",
+            {"token": "sk-secret-1234567890"},
+        )
+
+        self.assertEqual(len(primary.events), 1)
+        self.assertNotIn("sk-secret", str(primary.events[0]))
+        self.assertIn("[REDACTED]", str(primary.events[0]))
+        self.assertEqual(len(errors), 1)
+
+    def test_fanout_gives_each_sink_an_independent_payload_snapshot(self):
+        class MutatingSink:
+            def emit(
+                self,
+                context,
+                event_type,
+                payload,
+                *,
+                step=0,
+                phase="runtime",
+            ):
+                del context, event_type, step, phase
+                payload["nested"]["value"] = "observer mutation"
+
+        primary = RecordingSink()
+        sink = FanoutRunEventSink(primary, (MutatingSink(),))
+        payload = {"nested": {"value": "original"}}
+
+        sink.emit(self.context, "Event", payload)
+
+        self.assertEqual(payload["nested"]["value"], "original")
+        self.assertEqual(primary.events[0][2]["nested"]["value"], "original")
+
+    def test_null_sink_accepts_events_without_side_effects(self):
+        NullRunEventSink().emit(
+            self.context,
+            "Event",
+            {"token": "sk-secret-1234567890"},
+            step=2,
+            phase="test",
         )
 
     def test_trace_sink_maps_unified_event_and_uses_trace_clock(self):

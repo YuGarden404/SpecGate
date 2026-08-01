@@ -39,6 +39,64 @@ class RunEventSink(Protocol):
     ) -> None: ...
 
 
+class NullRunEventSink:
+    def emit(
+        self,
+        context: RunEventContext,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        step: int = 0,
+        phase: str = "runtime",
+    ) -> None:
+        del context, event_type, payload, step, phase
+
+
+class FanoutRunEventSink:
+    def __init__(
+        self,
+        primary: RunEventSink,
+        observers: tuple[RunEventSink, ...] = (),
+        on_observer_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        self._primary = primary
+        self._observers = tuple(observers)
+        self._on_observer_error = on_observer_error or (lambda error: None)
+
+    def emit(
+        self,
+        context: RunEventContext,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        step: int = 0,
+        phase: str = "runtime",
+    ) -> None:
+        safe_payload = redact(deepcopy(payload))
+        assert isinstance(safe_payload, dict)
+        self._primary.emit(
+            context,
+            event_type,
+            deepcopy(safe_payload),
+            step=step,
+            phase=phase,
+        )
+        for observer in self._observers:
+            try:
+                observer.emit(
+                    context,
+                    event_type,
+                    deepcopy(safe_payload),
+                    step=step,
+                    phase=phase,
+                )
+            except Exception as exc:
+                try:
+                    self._on_observer_error(exc)
+                except Exception:
+                    pass
+
+
 class InMemoryRunEventSink:
     def __init__(self, clock: Callable[[], str]) -> None:
         self._clock = clock

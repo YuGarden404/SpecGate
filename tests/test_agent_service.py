@@ -92,6 +92,7 @@ class AgentServiceFactoryContractTests(unittest.TestCase):
                         "runtime_config",
                         "cancel_token",
                         "id_factory",
+                        "event_sink",
                     ],
                 )
                 for name in list(signature.parameters)[1:]:
@@ -100,15 +101,17 @@ class AgentServiceFactoryContractTests(unittest.TestCase):
                         inspect.Parameter.KEYWORD_ONLY,
                     )
 
-    def test_public_build_helpers_accept_optional_id_factory(self):
+    def test_public_build_helpers_accept_optional_shell_extensions(self):
         for builder in (build_agent_service, build_resumable_agent_service):
             with self.subTest(builder=builder.__name__):
-                parameter = inspect.signature(builder).parameters["id_factory"]
-                self.assertIsNone(parameter.default)
-                self.assertIs(
-                    parameter.kind,
-                    inspect.Parameter.KEYWORD_ONLY,
-                )
+                parameters = inspect.signature(builder).parameters
+                for name in ("id_factory", "event_sink"):
+                    parameter = parameters[name]
+                    self.assertIsNone(parameter.default)
+                    self.assertIs(
+                        parameter.kind,
+                        inspect.Parameter.KEYWORD_ONLY,
+                    )
 
 
 class ApprovalRuntimeLoop:

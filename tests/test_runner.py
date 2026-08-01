@@ -24,6 +24,7 @@ from specgate.approvals import ActionRisk, ApprovalQueue, GovernanceConfig, Pend
 from specgate.trace import TraceStore
 from specgate.tools import ToolResult
 from specgate.workspace_fs import WorkspacePathError
+from shell_support import RecordingSink
 
 
 BROKEN_HTML = "<html><head><title>x</title></head><body></body></html>"
@@ -169,6 +170,89 @@ class FinishAfterExternalMutationLLM:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_external_event_observer_receives_governance_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            sink = RecordingSink()
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            AgentRunner(
+                root,
+                RecordingLLM(),
+                policy,
+                max_steps=1,
+                event_sink=sink,
+            ).run(task="Finish the current page")
+
+            event_types = [event[1] for event in sink.events]
+            self.assertIn("GovernanceEvaluated", event_types)
+            self.assertIn("RunFinished", event_types)
+
+    def test_external_event_observer_failure_does_not_block_trace_or_tool(self):
+        class CountingFailingSink:
+            def __init__(self):
+                self.calls = 0
+
+            def emit(
+                self,
+                context,
+                event_type,
+                payload,
+                *,
+                step=0,
+                phase="runtime",
+            ):
+                del context, event_type, payload, step, phase
+                self.calls += 1
+                raise RuntimeError("observer failed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            sink = CountingFailingSink()
+            policy = WorkspacePolicy(
+                root,
+                {"write_file"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": FIXED_HTML},
+                    }
+                ]
+            )
+
+            AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=1,
+                event_sink=sink,
+            ).run(task="Write the page")
+
+            trace_text = (
+                root / "runs" / "latest" / "trace.jsonl"
+            ).read_text(encoding="utf-8")
+            self.assertGreater(sink.calls, 0)
+            self.assertEqual(
+                (root / "index.html").read_text(encoding="utf-8"),
+                FIXED_HTML,
+            )
+            self.assertIn("ToolCompleted", trace_text)
     def test_agent_runner_passes_explicit_task_to_context_and_returns_run_id(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
