@@ -114,6 +114,34 @@ V020_TASK_COMMITS = {
     17: ("47f639a",),
     18: ("674a1f4",),
 }
+V030_SHELL_DESIGN = (
+    ROOT
+    / "docs"
+    / "superpowers"
+    / "specs"
+    / "2026-08-01-interactive-agent-shell-design.md"
+)
+V030_SHELL_PLAN = (
+    ROOT
+    / "docs"
+    / "superpowers"
+    / "plans"
+    / "2026-08-01-interactive-agent-shell.md"
+)
+V030_SHELL_COMMANDS = {
+    "/help",
+    "/status",
+    "/setup",
+    "/mode",
+    "/workspace",
+    "/model",
+    "/url",
+    "/api-key",
+    "/verbose",
+    "/approvals",
+    "/clear",
+    "/exit",
+}
 KEY_EVIDENCE_PATHS = (
     "src/specgate/runner.py",
     "src/specgate/actions.py",
@@ -505,6 +533,31 @@ def direct_dependency_versions() -> dict[str, str]:
 
 
 class FinalEvidenceTests(unittest.TestCase):
+    def test_v030_interactive_shell_contract_is_present(self):
+        self.assertTrue(V030_SHELL_DESIGN.is_file())
+        self.assertTrue(V030_SHELL_PLAN.is_file())
+        design = V030_SHELL_DESIGN.read_text(encoding="utf-8")
+        plan = V030_SHELL_PLAN.read_text(encoding="utf-8")
+        readme = read_text("README.md")
+
+        for phrase in (
+            "裸执行 `specgate`",
+            "`SpecGate >>`",
+            "API key 只进入操作系统 keyring",
+            "MockLLM 不解释任意自然语言",
+        ):
+            with self.subTest(document="design", phrase=phrase):
+                self.assertIn(phrase, design)
+        for command in V030_SHELL_COMMANDS:
+            with self.subTest(document="design", command=command):
+                self.assertIn(command, design)
+
+        self.assertIn("Task 10: Add End-To-End Mock And Security Regression Coverage", plan)
+        self.assertIn("Task 11: Synchronize v0.3.0 Version And User Documentation", plan)
+        self.assertIn("specgate --help", readme)
+        self.assertIn("真实模型凭据只通过操作系统 keyring", readme)
+        self.assertIn("`run-mock-demo` 的任务内容是固定的", readme)
+
     def test_supplemental_cold_start_records_required_evidence(self):
         self.assertTrue(COLD_START_AUDIT.is_file())
         audit = COLD_START_AUDIT.read_text(encoding="utf-8")
@@ -1224,6 +1277,10 @@ class FinalEvidenceTests(unittest.TestCase):
             "httpx": ("BSD-3-Clause", "https://github.com/encode/httpx"),
             "keyring": ("MIT", "https://github.com/jaraco/keyring"),
             "pydantic": ("MIT", "https://github.com/pydantic/pydantic"),
+            "prompt-toolkit": (
+                "BSD-3-Clause",
+                "https://github.com/prompt-toolkit/python-prompt-toolkit",
+            ),
             "python-multipart": (
                 "Apache-2.0",
                 "https://github.com/Kludex/python-multipart",

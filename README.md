@@ -630,6 +630,7 @@ NJU GitLab Pipeline #312781 在 `main@5fd86fa` 上运行：`unit-test` 已通过
 | `httpx` | `>=0.27,<1` | 测试与 HTTP 客户端支持 | BSD-3-Clause | https://github.com/encode/httpx |
 | `keyring` | `>=25,<26` | CLI 操作系统凭据存储 | MIT | https://github.com/jaraco/keyring |
 | `pydantic` | `>=2.10,<3` | Agent Runtime 工具参数与结果模型 | MIT | https://github.com/pydantic/pydantic |
+| `prompt-toolkit` | `>=3.0,<4` | 交互式 Shell 终端输入与样式 | BSD-3-Clause | https://github.com/prompt-toolkit/python-prompt-toolkit |
 | `python-multipart` | `>=0.0.9,<1` | Web 表单与文件上传解析 | Apache-2.0 | https://github.com/Kludex/python-multipart |
 | `PyYAML` | `>=6,<7` | Skill 元数据安全解析 | MIT | https://github.com/yaml/pyyaml |
 | `uvicorn` | `>=0.30,<1` | ASGI Web 服务器 | BSD-3-Clause | https://github.com/Kludex/uvicorn |
