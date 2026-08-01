@@ -2320,3 +2320,20 @@ TDD 定向安全回归：`Ran 422 tests in 153.419s`、`OK (skipped=17)`。第�
 - 凭据边界：继续使用 OS keyring 或进程环境变量，不新增 `.env` 读取、写入或回退路径。
 - 验收：聚焦回归、完整离线测试、Mock Demo、静态架构搜索和 Python 编译均已完成，详细结果记录于 `AGENT_LOG.md`。
 - 部署边界：公网交互式 Web 后端未部署；已发布的公开 CLI 镜像不等于公网常驻服务。
+
+# 2026-08-01 v0.2.0 发布证据同步
+
+- 目标：把 PR #30 合并、`v0.2.0` Release、CI/Pages/GHCR、匿名镜像 smoke、不可变 digest/revision 与外部 NJU 阻塞同步到当前交付材料；不修改生产 Runtime 或学生本人撰写的 `REFLECTION.md`。
+- 执行方式：在 `v020-release-evidence` 分支按 Superpowers Inline Execution 与 TDD 执行；所有 Git 写操作继续由用户完成。
+- [x] 失败契约：先增加 `test_v020_release_evidence_is_current_and_preserves_history`，聚焦测试因缺少 `# 2026-08-01 v0.2.0 发布证据同步` 得到预期 RED。
+- [x] 源码链：PR #30 合并后的 `main@f95e08c`，完整 commit 与 `v0.2.0` peeled commit 均为 `f95e08caae0ddf4dfee23912fe87153a8afb8dff`。
+- [x] Actions 链：[CI #73 / run 30678670251](https://github.com/YuGarden404/SpecGate/actions/runs/30678670251)、[Pages #41 / run 30678670260](https://github.com/YuGarden404/SpecGate/actions/runs/30678670260) 与 [GHCR #3 / run 30679259458](https://github.com/YuGarden404/SpecGate/actions/runs/30679259458) 均成功。
+- [x] Release 链：<https://github.com/YuGarden404/SpecGate/releases/tag/v0.2.0> 已发布；镜像为 `ghcr.io/yugarden404/specgate:0.2.0`，RepoDigest 为 `sha256:fe982389424bf56ca723febf8e8a590de5f7e34d5a5ca7964f7b812f257e3050`，OCI revision 为 `f95e08caae0ddf4dfee23912fe87153a8afb8dff`。
+- [x] 匿名 smoke：一次性空 `DOCKER_CONFIG` 中匿名拉取、CLI help、Mock Demo 与 Web help 均退出码 0，显式检查得到 `RepoDigest verified` 与 `OCI revision verified`，临时目录清理后不存在。
+- [x] 已有发布验证：合并前完整套件得到 `Ran 1136 tests in 296.092s`、`OK (skipped=29)`；`python -m compileall -q src tests` 退出码 0。
+- [x] 问题记录：第一次 smoke 时 Docker Desktop daemon 尚未运行；启动 WSL2 backend 后重试成功。最初 Go template 检查因 PowerShell 引号处理报 `function "org" not defined`；改用 `ConvertFrom-Json` 后验证成功，两者均不是镜像缺陷。
+- [x] 截图证据：`docs/evidence/github-actions-ghcr-v0.2.0-success.png`、`docs/evidence/github-actions-ghcr-v0.2.0-summary.png`、`docs/evidence/github-release-v0.2.0.png`。
+- [x] NJU GitLab 边界：两次 `git push nju main:main` 均报 `OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0`。这是外部 TLS/网络阻塞；NJU `main` 与 `v0.2.0` 标签待重试，不能声称双仓库已经同步。
+- [x] 历史保留：`v0.1.1`、`ghcr.io/yugarden404/specgate:0.1.1`、`v0.1.0`、`ghcr.io/yugarden404/specgate:0.1.0` 与历史 digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 保持可追溯。
+- [x] 完成门禁：发布证据 RED 后 GREEN；最终证据得到 `Ran 35 tests in 0.470s`、`OK`，三项机制演示得到 `Ran 3 tests in 2.627s`、`OK`，完整离线套件得到 `Ran 1137 tests in 365.513s`、`OK (skipped=29)`。`python -m compileall -q src tests` 退出码 0；当前事实扫描命中 `v0.2.0` 链，过期当前状态与行尾空白扫描无有效命中。
+- 部署边界：公网交互式 Web 后端未部署；GitHub Release 与公开 CLI 镜像已经满足本项目的发布交付路径，发布镜像不等于部署服务。

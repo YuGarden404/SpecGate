@@ -85,23 +85,23 @@ specgate credentials clear openai-compatible
 
 ## 3. 本地 Docker 验证
 
-`v0.1.1` 已发布并完成匿名拉取验证。当前公开 CLI 镜像的验证命令为：
+`v0.2.0` 已发布并完成匿名拉取验证。当前公开 CLI 镜像的验证命令为：
 
 ```powershell
-docker pull ghcr.io/yugarden404/specgate:0.1.1
-docker run --rm ghcr.io/yugarden404/specgate:0.1.1 --help
+docker pull ghcr.io/yugarden404/specgate:0.2.0
+docker run --rm ghcr.io/yugarden404/specgate:0.2.0 --help
 docker run --rm `
   --env-file "$HOME\.specgate.env" `
   -v "D:\Projects\my-page:/workspace" `
-  ghcr.io/yugarden404/specgate:0.1.1 `
+  ghcr.io/yugarden404/specgate:0.2.0 `
   run /workspace
 ```
 
 CLI 容器使用 `SPECGATE_LLM_BASE_URL`、`SPECGATE_LLM_MODEL` 与 `OPENAI_COMPATIBLE_API_KEY`。`--env-file` 是 Docker 的输入文件，应放在仓库外且不得提交；SpecGate 本身不读取 `.env`。
 
-当前发布链是 PR #28 合并后的 `main@9cf9093`、[CI #69](https://github.com/YuGarden404/SpecGate/actions/runs/29678498485)、[Pages #39](https://github.com/YuGarden404/SpecGate/actions/runs/29678498457) 和 [GHCR #2](https://github.com/YuGarden404/SpecGate/actions/runs/29679264248)。镜像 `ghcr.io/yugarden404/specgate:0.1.1` 的不可变 RepoDigest 为 `sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f`，OCI revision 为 `9cf909341cd1a5feb8ed2b244ce31f0495016c4c`。一次性空 Docker 配置中的 pull、CLI help、Mock Demo 与 Web help 均退出码 0，临时配置已删除。
+当前 [v0.2.0 Release](https://github.com/YuGarden404/SpecGate/releases/tag/v0.2.0) 来自 PR #30 合并后的 `main@f95e08c`，完整 commit 为 `f95e08caae0ddf4dfee23912fe87153a8afb8dff`。[CI #73 / run 30678670251](https://github.com/YuGarden404/SpecGate/actions/runs/30678670251)、[Pages #41 / run 30678670260](https://github.com/YuGarden404/SpecGate/actions/runs/30678670260) 和 [GHCR #3 / run 30679259458](https://github.com/YuGarden404/SpecGate/actions/runs/30679259458) 均成功。镜像 `ghcr.io/yugarden404/specgate:0.2.0` 的不可变 RepoDigest 为 `sha256:fe982389424bf56ca723febf8e8a590de5f7e34d5a5ca7964f7b812f257e3050`，OCI revision 为 `f95e08caae0ddf4dfee23912fe87153a8afb8dff`。一次性空 Docker 配置中的匿名拉取、CLI help、Mock Demo 与 Web help 均退出码 0，显式校验输出 `RepoDigest verified` 与 `OCI revision verified`，临时配置已删除。证据为 `docs/evidence/github-actions-ghcr-v0.2.0-success.png`、`docs/evidence/github-actions-ghcr-v0.2.0-summary.png` 与 `docs/evidence/github-release-v0.2.0.png`。
 
-`v0.1.0` 是已验证的历史公开镜像，其 `main@44b236f`、GHCR #1、digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 和五张历史证据图保持不变。公网交互式 Web 后端未部署；发布公开 CLI 镜像不等于部署公网交互式 Web 后端，使用 `--entrypoint specgate-web` 在本机启动也不构成公网部署。
+`v0.1.1` 是已验证的历史公开镜像 `ghcr.io/yugarden404/specgate:0.1.1`，digest `sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f` 与原有三张证据图保持不变。`v0.1.0` 的 `ghcr.io/yugarden404/specgate:0.1.0`、`main@44b236f`、GHCR #1、digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 和五张历史证据图同样保留。公网交互式 Web 后端未部署；发布公开 CLI 镜像不等于部署公网交互式 Web 后端，使用 `--entrypoint specgate-web` 在本机启动也不构成公网部署。
 
 在仓库根目录构建镜像：
 

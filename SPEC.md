@@ -444,7 +444,7 @@ Mock 模式不需要 key。CLI 的 `specgate credentials status/set/clear <provi
 
 ### 9.2 分发
 
-本地与 CI 构建形态为 Docker，镜像默认启动 `specgate` CLI，并以 `--help` 作为默认参数；WebUI 需显式使用 `--entrypoint specgate-web` 启动。README 和 `docs/DEPLOYMENT.md` 记录本地构建与后续服务器运行所需的持久化数据目录、Web 主密钥、安全 cookie 和固定 worker/队列配置。Mock 模式无需凭据即可启动。公开 GHCR CLI 镜像 `ghcr.io/yugarden404/specgate:0.1.1` 已发布并完成匿名拉取验证；发布镜像不等于部署公网交互式 Web 后端。
+本地与 CI 构建形态为 Docker，镜像默认启动 `specgate` CLI，并以 `--help` 作为默认参数；WebUI 需显式使用 `--entrypoint specgate-web` 启动。README 和 `docs/DEPLOYMENT.md` 记录本地构建与后续服务器运行所需的持久化数据目录、Web 主密钥、安全 cookie 和固定 worker/队列配置。Mock 模式无需凭据即可启动。PR #30 合并后的 `main@f95e08c` 已发布为 [v0.2.0](https://github.com/YuGarden404/SpecGate/releases/tag/v0.2.0)；公开 GHCR CLI 镜像 `ghcr.io/yugarden404/specgate:0.2.0` 的 RepoDigest 为 `sha256:fe982389424bf56ca723febf8e8a590de5f7e34d5a5ca7964f7b812f257e3050`，OCI revision 为 `f95e08caae0ddf4dfee23912fe87153a8afb8dff`，并已完成匿名拉取验证。公网交互式 Web 后端未部署；发布镜像不等于部署公网交互式 Web 后端。
 
 ### 9.3 WebUI URL
 

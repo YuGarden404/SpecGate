@@ -1153,3 +1153,18 @@
 - 外部 LLM 评审推动状态 patch 所有权、挂起/恢复、取消、验证阶段、Artifact、Workflow 预算和 Trace 边界进入最终设计。
 - 实施开始采用 Subagent-Driven；后续任务按用户决定切换为 Inline Execution。
 - 静态架构测试发现重复审批 continuation loop；移除后，审批恢复继续使用同一个 AgentLoop。
+
+## 2026-08-01 v0.2.0 发布证据同步
+
+- 执行模式：按用户确认继续使用 Superpowers Inline Execution，不调用子 Agent；所有 Git add、commit、push、tag 与 PR 操作由用户执行。范围只包括发布事实契约、课程证据文档和截图，不修改生产 Runtime 或 `REFLECTION.md`。
+- TDD RED：新增 `test_v020_release_evidence_is_current_and_preserves_history` 后立即聚焦运行；测试因 PLAN 缺少 `# 2026-08-01 v0.2.0 发布证据同步` 而失败，证明契约捕获的是未同步发布事实，不是导入或语法错误。
+- 源码与标签：PR #30 合并后的 `main@f95e08c`；完整 commit 与 `v0.2.0` peeled commit 均为 `f95e08caae0ddf4dfee23912fe87153a8afb8dff`。GitHub Release 为 <https://github.com/YuGarden404/SpecGate/releases/tag/v0.2.0>。
+- GitHub Actions：公开 Actions 页面只读核对 [CI #73 / run 30678670251](https://github.com/YuGarden404/SpecGate/actions/runs/30678670251)、[Pages #41 / run 30678670260](https://github.com/YuGarden404/SpecGate/actions/runs/30678670260) 与 [GHCR #3 / run 30679259458](https://github.com/YuGarden404/SpecGate/actions/runs/30679259458)，三者均绑定 `main@f95e08c` 并成功。
+- 镜像：`ghcr.io/yugarden404/specgate:0.2.0`；RepoDigest 为 `sha256:fe982389424bf56ca723febf8e8a590de5f7e34d5a5ca7964f7b812f257e3050`；OCI revision 为 `f95e08caae0ddf4dfee23912fe87153a8afb8dff`。
+- 匿名 smoke：一次性空 `DOCKER_CONFIG` 中匿名拉取、CLI help、Mock Demo 与 Web help 均退出码 0；JSON 检查显式输出 `RepoDigest verified`、`OCI revision verified`，临时配置目录清理后 `Test-Path` 为 `False`。
+- 发布前验证：PR 合并前完整套件得到 `Ran 1136 tests in 296.092s`、`OK (skipped=29)`；`python -m compileall -q src tests` 退出码 0。该结果与本证据分支稍后的独立复跑分开记录。
+- 问题与修复：第一次匿名 smoke 连接 `docker_engine` named pipe 失败，原因是 Docker Desktop daemon 尚未运行；启动 WSL2 backend 后重试成功。最初 OCI revision 的 Go template 命令因 PowerShell 处理嵌套引号而报 `function "org" not defined`；改用 `docker image inspect` JSON 与 `ConvertFrom-Json` 后 digest/revision 均通过。这是命令引用问题，不是镜像缺陷。
+- NJU GitLab：用户两次执行 `git push nju main:main` 均得到 `OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0`。当前按外部 TLS/网络阻塞处理，NJU `main` 与 `v0.2.0` 标签待重试；不把 GitHub 成功替代为 GitLab 成功，也不声称双仓库 tags 已同步。
+- 截图归档：原始附件只做二进制复制，生成 `docs/evidence/github-actions-ghcr-v0.2.0-success.png`、`docs/evidence/github-actions-ghcr-v0.2.0-summary.png`、`docs/evidence/github-release-v0.2.0.png`。SHA-256 分别为 `049D08F7819B88E1ED64C18593DBDA8124B997EFB4FFBCFCB7D98BA8C3EA245F`、`A5FE0DC9DB9647D9EAB7D0C2BEECC1C97ACD36091135C7B4FFCFBCDF703B278F`、`1D4734D3348F24C8A98125D3460ADBF230EB5A0D0DC4F5080DF09C0246773E79`。
+- 历史与边界：`v0.1.1`、`ghcr.io/yugarden404/specgate:0.1.1`、`v0.1.0`、`ghcr.io/yugarden404/specgate:0.1.0` 和 digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 保留为历史。公网交互式 Web 后端未部署；发布公开 CLI 镜像不等于部署服务。
+- 完成门禁：发布证据契约先因缺少日期化章节 RED，文档与截图同步后 GREEN。最终证据得到 `Ran 35 tests in 0.470s`、`OK`；三项确定性机制得到 `Ran 3 tests in 2.627s`、`OK`；完整离线套件得到 `Ran 1137 tests in 365.513s`、`OK (skipped=29)`，退出码 0。`python -m compileall -q src tests` 退出码 0；当前事实扫描命中 `v0.2.0` Release/镜像/Actions/NJU 待重试边界，行尾空白扫描无命中。新增 1 项测试来自本阶段发布证据契约，不替换 PR 合并前的 `Ran 1136 tests in 296.092s` 结果。
