@@ -45,6 +45,16 @@ class UserShellConfig:
             raise UserConfigError("invalid user config: llm")
 
 
+@dataclass(frozen=True)
+class UserShellConfigDraft:
+    mode: str | None
+    workspace: str | None
+    verbose: bool
+    provider: str | None
+    base_url: str | None
+    model: str | None
+
+
 def user_config_path(
     *,
     environ: Mapping[str, str] | None = None,
@@ -169,6 +179,72 @@ def load_user_shell_config(
     if not target.exists():
         return None
     return _shell_from_payload(_read_payload(target))
+
+
+def load_user_shell_config_draft(
+    *,
+    path: Path | None = None,
+) -> UserShellConfigDraft | None:
+    target = user_config_path() if path is None else path
+    if not target.exists():
+        return None
+    try:
+        payload = _read_payload(target)
+    except UserConfigError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    schema_version = payload.get("schema_version")
+    if schema_version == LEGACY_SCHEMA_VERSION:
+        expected = {"schema_version", "provider", "base_url", "model"}
+        if set(payload) != expected:
+            return None
+        return UserShellConfigDraft(
+            mode="real",
+            workspace=None,
+            verbose=False,
+            provider=_recover_provider(payload.get("provider")),
+            base_url=_recover_config_value(payload.get("base_url")),
+            model=_recover_config_value(payload.get("model")),
+        )
+
+    expected = {
+        "schema_version",
+        "provider",
+        "base_url",
+        "model",
+        "mode",
+        "workspace",
+        "verbose",
+    }
+    if schema_version != SCHEMA_VERSION or set(payload) != expected:
+        return None
+    mode_value = payload.get("mode")
+    mode = mode_value if mode_value in SHELL_MODES else None
+    verbose_value = payload.get("verbose")
+    return UserShellConfigDraft(
+        mode=mode,
+        workspace=_recover_config_value(payload.get("workspace")),
+        verbose=verbose_value if type(verbose_value) is bool else False,
+        provider=_recover_provider(payload.get("provider")),
+        base_url=_recover_config_value(payload.get("base_url")),
+        model=_recover_config_value(payload.get("model")),
+    )
+
+
+def _recover_config_value(value: object) -> str | None:
+    if value is None:
+        return None
+    try:
+        return _config_value("field", value)
+    except UserConfigError:
+        return None
+
+
+def _recover_provider(value: object) -> str | None:
+    recovered = _recover_config_value(value)
+    return recovered if recovered == SUPPORTED_PROVIDER else None
 
 
 def load_user_llm_config(*, path: Path | None = None) -> UserLLMConfig | None:

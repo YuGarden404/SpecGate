@@ -9,6 +9,7 @@ from specgate.user_config import (
     UserShellConfig,
     load_user_llm_config,
     load_user_shell_config,
+    load_user_shell_config_draft,
     resolve_user_llm_config,
     save_user_llm_config,
     save_user_shell_config,
@@ -216,6 +217,58 @@ class UserConfigTests(unittest.TestCase):
 
                 with self.assertRaises(UserConfigError):
                     load_user_llm_config(path=path)
+
+    def test_draft_recovers_valid_fields_when_one_field_is_corrupt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "provider": "openai-compatible",
+                        "base_url": "https://api.test/v1",
+                        "model": "",
+                        "mode": "real",
+                        "workspace": "D:/work/site",
+                        "verbose": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            draft = load_user_shell_config_draft(path=path)
+
+        self.assertIsNotNone(draft)
+        assert draft is not None
+        self.assertEqual(draft.mode, "real")
+        self.assertEqual(draft.workspace, "D:/work/site")
+        self.assertTrue(draft.verbose)
+        self.assertEqual(draft.provider, "openai-compatible")
+        self.assertEqual(draft.base_url, "https://api.test/v1")
+        self.assertIsNone(draft.model)
+
+    def test_draft_rejects_payload_with_extra_sensitive_field(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "provider": "openai-compatible",
+                        "base_url": "https://api.test/v1",
+                        "model": "model-1",
+                        "mode": "real",
+                        "workspace": "D:/work/site",
+                        "verbose": False,
+                        "api_key": "sk-must-not-be-recovered",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            draft = load_user_shell_config_draft(path=path)
+
+        self.assertIsNone(draft)
 
     def test_resolution_priority_is_cli_then_environment_then_file(self):
         saved = UserLLMConfig(
