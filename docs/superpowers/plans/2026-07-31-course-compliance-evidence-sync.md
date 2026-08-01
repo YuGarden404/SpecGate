@@ -502,3 +502,35 @@ git commit -m "docs: 记录课程合规最终验证"
 ```
 
 Do not record the full-suite result until the command has actually completed successfully.
+
+## Task 6: Synchronize the v0.2.0 Release Evidence
+
+**Files:**
+- Modify: `tests/test_final_evidence.py`
+- Modify: `README.md`, `SPEC.md`, `PLAN.md`, `AGENT_LOG.md`
+- Modify: `docs/DEPLOYMENT.md`, `docs/PROJECT_WALKTHROUGH.md`
+- Modify: `docs/FINAL_EVIDENCE_MATRIX.md`, `docs/FINAL_SUBMISSION_CHECKLIST.md`, `docs/REFLECTION_FACT_CHECK.md`
+- Add: three `v0.2.0` screenshots under `docs/evidence/`
+- Do not modify: `src/specgate/**`, `.env` handling, or `REFLECTION.md`
+
+- [x] **Step 1: Add and run the v0.2.0 release evidence contract**
+
+The focused test must first fail because the dated release-evidence sections are absent. It binds PR #30, `main@f95e08c`, CI #73, Pages #41, GHCR #3, Release URL, image, digest, OCI revision, anonymous smoke, NJU retry status, screenshot integrity, and preservation of `v0.1.1`/`v0.1.0` history.
+
+- [x] **Step 2: Verify exact GitHub run URLs from the public Actions page**
+
+Use the public page as a read-only source. The verified runs are CI `30678670251`, Pages `30678670260`, and GHCR `30679259458`.
+
+- [x] **Step 3: Archive the supplied screenshots without transformation**
+
+Copy the GHCR list, GHCR summary/digest, and Release page images to `docs/evidence/` and bind them to the existing PNG signature/chunk/CRC/zlib/IEND validator.
+
+- [x] **Step 4: Synchronize current release facts and preserve history**
+
+Make `v0.2.0` the current download path. Keep `v0.1.1` and `v0.1.0` as historical releases. Record the Docker daemon startup issue and PowerShell Go-template quoting issue truthfully. Record NJU GitLab as an external TLS/network blocker and do not claim `main` or the tag is synchronized.
+
+- [x] **Step 5: Run completion verification**
+
+Run the focused release test, full final-evidence suite, Python compilation, static scans, deterministic demos, and complete offline suite. Update `PLAN.md` and `AGENT_LOG.md` with only the fresh observed results, then give the user Git commands without running them.
+
+Observed before the final documentation-only result sync: final evidence `Ran 35 tests in 0.470s`, mechanism demos `Ran 3 tests in 2.627s`, complete offline suite `Ran 1137 tests in 365.513s` with `OK (skipped=29)`, and Python compilation exit code 0. A final fresh verification is required after writing these results.

@@ -12,24 +12,24 @@ SpecGate 是 AI4SE 期末项目的 A 类选题：一个从零实现、以 GitHub
 - 项目讲解稿：`docs/PROJECT_WALKTHROUGH.md`
 - Lab 9-12 对齐说明：`docs/AI4SE_Lab_9_12_Alignment.md`
 - SpecGate Skill：`skills/specgate-static-html-harness/SKILL.md`
-- GitHub Release：[v0.1.1](https://github.com/YuGarden404/SpecGate/releases/tag/v0.1.1)
+- GitHub Release：[v0.2.0](https://github.com/YuGarden404/SpecGate/releases/tag/v0.2.0)
 - 公开静态评审首页：`https://yugarden404.github.io/SpecGate/`
 - 知识图谱 demo：`https://yugarden404.github.io/SpecGate/demo/`
 - 运行报告：`https://yugarden404.github.io/SpecGate/report/`
 
-仓库交付采用双仓库分工：GitHub 是开发主仓库，保留完整 commit、PR、GitHub Actions、Docker 构建与 Pages 证据；[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 是公开可克隆的课程检查入口，运行 `unit-test` Pipeline。GitHub 平台的 PR/Actions 元数据不会迁移到 GitLab，两个仓库只同步源码与 Git 标签。
+仓库交付采用双仓库分工：GitHub 是开发主仓库，保留完整 commit、PR、GitHub Actions、Docker 构建与 Pages 证据；[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 是公开可克隆的课程镜像，运行 `unit-test` Pipeline。GitHub 平台的 PR/Actions 元数据不会迁移到 GitLab。当前 `v0.2.0` 因外部 TLS/网络错误尚未同步到 NJU，因此最新版本复现应使用 GitHub；NJU 恢复后再同步 `main` 与标签。
 
-课程检查优先从 NJU GitLab 克隆：
-
-```powershell
-git clone https://git.nju.edu.cn/YuyuanLiang/specgate.git SpecGate
-cd .\SpecGate
-```
-
-需要查看 GitHub PR、Actions 和 Pages 发布链时，从开发主仓库克隆：
+当前 `v0.2.0` 课程检查从 GitHub 开发主仓库克隆：
 
 ```powershell
 git clone https://github.com/YuGarden404/SpecGate.git SpecGate
+cd .\SpecGate
+```
+
+需要核对历史课程镜像时，可从 NJU GitLab 克隆；在 `v0.2.0` 同步完成前，该入口不代表最新版本：
+
+```powershell
+git clone https://git.nju.edu.cn/YuyuanLiang/specgate.git SpecGate
 cd .\SpecGate
 ```
 
@@ -579,21 +579,21 @@ docker run --rm -p 8000:8000 `
 http://127.0.0.1:8000
 ```
 
-GHCR Package 已设为 Public。v0.1.1 已发布，CLI 用户可以直接使用当前镜像：
+GHCR Package 已设为 Public。v0.2.0 已发布，CLI 用户可以直接使用当前镜像：
 
 ```powershell
-docker pull ghcr.io/yugarden404/specgate:0.1.1
-docker run --rm ghcr.io/yugarden404/specgate:0.1.1 --help
+docker pull ghcr.io/yugarden404/specgate:0.2.0
+docker run --rm ghcr.io/yugarden404/specgate:0.2.0 --help
 docker run --rm `
   --env-file "$HOME\.specgate.env" `
   -v "D:\Projects\my-page:/workspace" `
-  ghcr.io/yugarden404/specgate:0.1.1 `
+  ghcr.io/yugarden404/specgate:0.2.0 `
   run /workspace
 ```
 
-v0.1.1 已完成匿名拉取验证。PR #28 合并后的 `main@9cf9093` 由 [CI #69](https://github.com/YuGarden404/SpecGate/actions/runs/29678498485) 和 [Pages #39](https://github.com/YuGarden404/SpecGate/actions/runs/29678498457) 验证；[GHCR #2](https://github.com/YuGarden404/SpecGate/actions/runs/29679264248) 发布 `ghcr.io/yugarden404/specgate:0.1.1`。RepoDigest 为 `sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f`，OCI revision 为 `9cf909341cd1a5feb8ed2b244ce31f0495016c4c`。一次性空 Docker 配置中的 pull、CLI help、Mock Demo 和 Web help 均以退出码 0 完成，临时配置已清理；证据见 `docs/evidence/github-actions-ghcr-v0.1.1-success.png`、`docs/evidence/github-package-specgate-v0.1.1-public.png` 与 `docs/evidence/ghcr-v0.1.1-anonymous-smoke.png`。
+当前 [v0.2.0 Release](https://github.com/YuGarden404/SpecGate/releases/tag/v0.2.0) 来自 PR #30 合并后的 `main@f95e08c`，完整 commit 为 `f95e08caae0ddf4dfee23912fe87153a8afb8dff`。[CI #73 / run 30678670251](https://github.com/YuGarden404/SpecGate/actions/runs/30678670251)、[Pages #41 / run 30678670260](https://github.com/YuGarden404/SpecGate/actions/runs/30678670260) 与 [GHCR #3 / run 30679259458](https://github.com/YuGarden404/SpecGate/actions/runs/30679259458) 均成功。镜像 `ghcr.io/yugarden404/specgate:0.2.0` 的 RepoDigest 为 `sha256:fe982389424bf56ca723febf8e8a590de5f7e34d5a5ca7964f7b812f257e3050`，OCI revision 为 `f95e08caae0ddf4dfee23912fe87153a8afb8dff`。一次性空 Docker 配置中的匿名拉取、CLI help、Mock Demo 和 Web help 均以退出码 0 完成，随后显式得到 `RepoDigest verified`、`OCI revision verified`，临时配置已清理。证据见 `docs/evidence/github-actions-ghcr-v0.2.0-success.png`、`docs/evidence/github-actions-ghcr-v0.2.0-summary.png` 与 `docs/evidence/github-release-v0.2.0.png`。
 
-v0.1.0 是已验证的历史公开镜像 `ghcr.io/yugarden404/specgate:0.1.0`：`main@44b236f`、[GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933)、digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 以及 `docs/evidence/github-actions-pr25-ci-success.png`、`docs/evidence/github-actions-pr25-pages-success.png`、`docs/evidence/github-actions-ghcr-v0.1.0-success.png`、`docs/evidence/github-package-specgate-public.png`、`docs/evidence/ghcr-anonymous-pull-smoke.png` 均作为历史证据保留。`--env-file` 由 Docker 读取，应放在仓库外且不得提交；SpecGate 本身仍不读取 `.env`。公网交互式 Web 后端未部署，发布公开 CLI 镜像不等于部署公网交互式 Web 后端，发布镜像不等于部署服务。
+`v0.1.1` 是已验证的历史公开镜像 `ghcr.io/yugarden404/specgate:0.1.1`，其 PR #28、GHCR #2、digest `sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f`、OCI revision 与三张证据图保持不变。`v0.1.0` 的 `ghcr.io/yugarden404/specgate:0.1.0`、`main@44b236f`、[GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933)、digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 和五张旧证据图也继续保留。`--env-file` 由 Docker 读取，应放在仓库外且不得提交；SpecGate 本身仍不读取 `.env`。公网交互式 Web 后端未部署，发布公开 CLI 镜像不等于部署公网交互式 Web 后端，发布镜像不等于部署服务。
 
 Mock 模式不需要 API key。WebUI 默认使用 MockLLM；保存完整且符合部署白名单的 API key、Base URL 和 Model 后，新 run 才切换为真实模型。
 
@@ -605,13 +605,13 @@ Mock 模式不需要 API key。WebUI 默认使用 MockLLM；保存完整且符�
 python -m unittest discover -s tests -v
 ```
 
-GitHub 是开发主仓库；`.github/workflows/ci.yml` 运行完整测试并执行 Docker 镜像构建检查，`.github/workflows/pages.yml` 发布静态评审入口，`.github/workflows/ghcr.yml` 校验版本标签并发布 CLI-first 镜像。当前源码发布基线是 PR #28 合并后的 `main@9cf9093`，[CI #69](https://github.com/YuGarden404/SpecGate/actions/runs/29678498485)、[Pages #39](https://github.com/YuGarden404/SpecGate/actions/runs/29678498457) 与 [GHCR #2](https://github.com/YuGarden404/SpecGate/actions/runs/29679264248) 均成功。历史发布链继续保留：PR #25 合并后的 [CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245)、[Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246) 与 `v0.1.0` 触发的 [GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933) 均成功。
+GitHub 是开发主仓库；`.github/workflows/ci.yml` 运行完整测试并执行 Docker 镜像构建检查，`.github/workflows/pages.yml` 发布静态评审入口，`.github/workflows/ghcr.yml` 校验版本标签并发布 CLI-first 镜像。当前源码发布基线是 PR #30 合并后的 `main@f95e08c`，[CI #73](https://github.com/YuGarden404/SpecGate/actions/runs/30678670251)、[Pages #41](https://github.com/YuGarden404/SpecGate/actions/runs/30678670260) 与 [GHCR #3](https://github.com/YuGarden404/SpecGate/actions/runs/30679259458) 均成功。`v0.1.1` 和 `v0.1.0` 发布链作为历史继续保留。
 
 NJU GitLab 课程镜像从同一 `main` commit 独立运行 `.gitlab-ci.yml`。课程文件只保留 `unit-test`，安装项目、运行完整测试并执行 `specgate --help` CLI smoke；GitLab Pipeline 的成功由实际 Pipeline 证明，不用 GitHub Actions 成功替代。
 
 NJU GitLab Pipeline #312781 在 `main@5fd86fa` 上运行：`unit-test` 已通过，`docker-build` 因共享 Runner 未启用 privileged 模式而失败。Pipeline #312784 中 `unit-test` 再次通过，但 `docker-build` 在拉取 `gcr.io/kaniko-project/executor` 时出现 `context deadline exceeded`。Pipeline #312797 成功拉取 `moby/buildkit:rootless` 并进入脚本，随后 RootlessKit 在 `fork/exec /proc/self/exe` 处返回 `operation not permitted`。三次结果共同证明学校共享 Runner 不适合容器构建，而不是 Dockerfile 或 Python 测试失败。
 
-历史 [Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 针对 `main@66ea825` 只运行 `unit-test` 并通过，[job #595758](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/595758) 完成 `Ran 926 tests in 33.684s`、`OK (skipped=18)` 与 CLI smoke。教师源码基线 `main@6dbaa75` 由 Pipeline #313088 / job #596503 覆盖并通过；当前 `main@9cf9093` 由 [Pipeline #313118](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/313118) / [job #596642](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/596642) 覆盖并通过。GitLab Pipeline 已通过；Docker 构建继续由 GitHub Actions 的成功 job 独立覆盖。
+历史 [Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 针对 `main@66ea825` 只运行 `unit-test` 并通过，[job #595758](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/595758) 完成 `Ran 926 tests in 33.684s`、`OK (skipped=18)` 与 CLI smoke。教师源码基线 `main@6dbaa75` 由 Pipeline #313088 / job #596503 覆盖并通过；`v0.1.1` 的 `main@9cf9093` 由 [Pipeline #313118](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/313118) / [job #596642](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/596642) 覆盖并通过。`v0.2.0` 向 NJU GitLab 的同步因外部 TLS/网络错误尚未完成，恢复后需重试 `main` 与标签；GitHub Release 与 GHCR 发布不受该镜像仓库故障影响。
 
 ## 已知限制
 

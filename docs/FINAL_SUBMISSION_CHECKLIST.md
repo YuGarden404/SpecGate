@@ -1,8 +1,12 @@
 # SpecGate 最终提交检查清单
 
-当前证据口径：教师已验证源码基线为 PR #27 合并后的 `main@6dbaa75`；空目录克隆验证得到 `Ran 954 tests in 213.679s`、`OK (skipped=27)`，退出码 0。阶段 A 发布准备分支验证得到 `Ran 954 tests in 418.617s`，同步后的独立复跑得到 `Ran 954 tests in 417.907s`，两次均 `OK (skipped=27)` 且退出码 0。教师基线的 CI #67、Pages #38、NJU Pipeline #313088 / job #596503 均成功；`glm-5.2` 真实 CLI smoke 得到 `passed=True, steps=2`、最终 Gate 通过、`trusted`、`parse_errors=0`，且 keyring 凭据已清除。当前发布基线为 PR #28 合并后的 `main@9cf9093`；CI #69 / run 29678498485、Pages #39 / run 29678498457、GHCR #2 / run 29679264248 与 NJU Pipeline #313118 / job #596642 均成功。`v0.1.1` 已发布，annotated tag object 为 `adb74ca0586b20e3cb5e32767bb409370e70c2ef`，peeled commit 与 OCI revision 为 `9cf909341cd1a5feb8ed2b244ce31f0495016c4c`；`ghcr.io/yugarden404/specgate:0.1.1` 的 digest 为 `sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f`，匿名 pull 与四项 smoke 均通过。
+当前发布基线为 PR #30 合并后的 `main@f95e08c`，完整 commit 为 `f95e08caae0ddf4dfee23912fe87153a8afb8dff`。[CI #73 / run 30678670251](https://github.com/YuGarden404/SpecGate/actions/runs/30678670251)、[Pages #41 / run 30678670260](https://github.com/YuGarden404/SpecGate/actions/runs/30678670260) 与 [GHCR #3 / run 30679259458](https://github.com/YuGarden404/SpecGate/actions/runs/30679259458) 均成功；[v0.2.0 Release](https://github.com/YuGarden404/SpecGate/releases/tag/v0.2.0) 已发布。`ghcr.io/yugarden404/specgate:0.2.0` 的 RepoDigest 为 `sha256:fe982389424bf56ca723febf8e8a590de5f7e34d5a5ca7964f7b812f257e3050`，OCI revision 为 `f95e08caae0ddf4dfee23912fe87153a8afb8dff`。匿名拉取、CLI help、Mock Demo、Web help 及显式 `RepoDigest verified`、`OCI revision verified` 均通过。完整套件得到 `Ran 1136 tests in 296.092s`、`OK (skipped=29)`。
 
-Stage B 证据包为 `docs/evidence/github-actions-ghcr-v0.1.1-success.png`、`docs/evidence/github-package-specgate-v0.1.1-public.png`、`docs/evidence/ghcr-v0.1.1-anonymous-smoke.png`。历史 `v0.1.0` 的 `main@44b236f`、[CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245)、[Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246)、[GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933)、digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 与 `docs/evidence/github-actions-pr25-ci-success.png`、`docs/evidence/github-actions-pr25-pages-success.png`、`docs/evidence/github-actions-ghcr-v0.1.0-success.png`、`docs/evidence/github-package-specgate-public.png`、`docs/evidence/ghcr-anonymous-pull-smoke.png` 继续保留。公网交互式 Web 后端未部署；发布公开 CLI 镜像不等于部署公网交互式 Web 后端。
+当前证据包为 `docs/evidence/github-actions-ghcr-v0.2.0-success.png`、`docs/evidence/github-actions-ghcr-v0.2.0-summary.png` 与 `docs/evidence/github-release-v0.2.0.png`。历史 `v0.1.1` 的 PR #28、`main@9cf9093`、CI #69 / run 29678498485、Pages #39 / run 29678498457、GHCR #2 / run 29679264248、NJU Pipeline #313118 / job #596642、annotated tag object `adb74ca0586b20e3cb5e32767bb409370e70c2ef`、peeled commit 与 OCI revision `9cf909341cd1a5feb8ed2b244ce31f0495016c4c`、镜像 `ghcr.io/yugarden404/specgate:0.1.1`、digest `sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f` 及 `docs/evidence/github-actions-ghcr-v0.1.1-success.png`、`docs/evidence/github-package-specgate-v0.1.1-public.png`、`docs/evidence/ghcr-v0.1.1-anonymous-smoke.png` 原样保留。`v0.1.0`、`ghcr.io/yugarden404/specgate:0.1.0`、digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 与五张证据图也继续作为历史保留。公网交互式 Web 后端未部署；发布公开 CLI 镜像不等于部署公网交互式 Web 后端。
+
+NJU GitLab 课程镜像目前未同步 `v0.2.0`：两次 `git push nju main:main` 均报 `OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0`。这是外部 TLS/网络阻塞，NJU `main` 与 `v0.2.0` 标签待重试；不能写成双仓库已同步。GitHub Release 与 GHCR 发布已独立完成。
+
+本发布证据分支验证得到：最终证据 `Ran 35 tests in 0.470s`、`OK`；三项确定性机制 `Ran 3 tests in 2.627s`、`OK`；完整离线套件 `Ran 1137 tests in 365.513s`、`OK (skipped=29)`，退出码 0；Python 编译、当前事实扫描和行尾空白扫描均通过。
 
 Stage B 证据同步分支验证得到 `Ran 955 tests in 404.159s`、`OK (skipped=27)`，退出码 0；这是新增发布事实契约后的独立结果，不替换教师 `Ran 954 tests in 213.679s` 基线。
 
@@ -54,12 +58,13 @@ MVP 范围：
 | Mock 工作区 smoke | 已完成 | 固定 Mock Demo 退出码 0、Gate 通过、trust 为 `trusted` |
 | `glm-5.2` 真实 CLI smoke | 已完成 | `passed=True, steps=2`、Gate 通过、`parse_errors=0`，keyring 凭据已清除 |
 | `v0.1.1` 发布 | 已完成 | 标签双远端一致，GHCR #2、Public Package、匿名 smoke、digest 与 OCI revision 均已核验 |
-| NJU GitLab 课程镜像 | CI 已通过且公开 | [公开项目](https://git.nju.edu.cn/YuyuanLiang/specgate)：Pipeline #313118 / job #596642 覆盖当前 `main@9cf9093`；教师基线 Pipeline #313088 / job #596503 与历史 Pipeline #312806 继续保留 |
+| `v0.2.0` 发布 | 已完成 | PR #30、CI #73、Pages #41、GHCR #3、Release、匿名 smoke、digest 与 OCI revision 均已核验 |
+| NJU GitLab 课程镜像 | 公开；v0.2.0 同步待重试 | [公开项目](https://git.nju.edu.cn/YuyuanLiang/specgate)：Pipeline #313118 / job #596642 覆盖历史 `main@9cf9093`；`main@f95e08c` 与 `v0.2.0` 尚未同步 |
 | 公开静态评审入口 | 已完成 | GitHub Pages 首页、demo、报告 |
 | 本地交互式 WebUI | 已完成 | Docker/本地启动与确定性测试 |
 | 公网交互式 Web 后端 | 待完成 | 后续独立部署阶段 |
 | Docker 本地与 CI 构建 | 已完成 | `Dockerfile` 与 CI smoke |
-| 公开容器 registry | 已完成 | `ghcr.io/yugarden404/specgate:0.1.1` 已公开，匿名 pull、四项 smoke、digest 与 OCI revision 已核验 |
+| 公开容器 registry | 已完成 | `ghcr.io/yugarden404/specgate:0.2.0` 已公开，匿名 pull、四项 smoke、digest 与 OCI revision 已核验 |
 | AgentOS / Superpowers 对齐 | 已完成 | `skills/specgate-static-html-harness/SKILL.md`、`docs/AI4SE_Lab_9_12_Alignment.md` |
 | Lab 11 Hook sample | 已完成 | `hooks/pre-commit.sample`、`tests/test_hook_sample.py` |
 
@@ -138,14 +143,22 @@ PR #25 合并与 `v0.1.0` 发布后的历史来源链为：
 
 GHCR 公开镜像已完成匿名拉取验证；镜像为 `ghcr.io/yugarden404/specgate:0.1.0`，digest 为 `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d`。五张证据图见本清单开头的当前证据包；公网交互式 Web 后端未部署。
 
-PR #28 合并与 `v0.1.1` 发布后的当前来源链为：
+PR #28 合并与 `v0.1.1` 发布后的历史来源链为：
 
 - [CI #69](https://github.com/YuGarden404/SpecGate/actions/runs/29678498485) → `main@9cf9093` → 成功
 - [Pages #39](https://github.com/YuGarden404/SpecGate/actions/runs/29678498457) → `main@9cf9093` → 成功
 - [GHCR #2](https://github.com/YuGarden404/SpecGate/actions/runs/29679264248) → `v0.1.1@9cf9093` → 成功
 - [Pipeline #313118](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/313118) / [job #596642](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/596642) → `main@9cf9093` → 成功
 
-双仓库交付采用“GitHub 开发主仓库 + NJU GitLab 课程镜像”：GitHub 保留完整 commit、PR、GitHub PR/Actions、Docker 构建与 Pages 证据；GitLab 项目已经 Public，可直接用于教师克隆。Pipeline #312781 的 `docker-build` 因学校共享 Runner 不支持 privileged Docker-in-Docker 而失败；Pipeline #312784 因访问 `gcr.io` 出现 `context deadline exceeded`；Pipeline #312797 已成功拉取 BuildKit 镜像，但 RootlessKit 因 `operation not permitted` 无法启动。三次 `unit-test` 已通过，GitLab CI 随后只保留 `unit-test`。[Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 是历史成功链，Pipeline #313088 / job #596503 是教师源码基线，当前 Pipeline #313118 / job #596642 覆盖 `main@9cf9093` 并成功。GitLab Pipeline 已通过，且不等同于迁移 GitHub Actions。
+PR #30 合并与 `v0.2.0` 发布后的当前来源链为：
+
+- [CI #73](https://github.com/YuGarden404/SpecGate/actions/runs/30678670251) → `main@f95e08c` → 成功
+- [Pages #41](https://github.com/YuGarden404/SpecGate/actions/runs/30678670260) → `main@f95e08c` → 成功
+- [GHCR #3](https://github.com/YuGarden404/SpecGate/actions/runs/30679259458) → `v0.2.0@f95e08c` → 成功
+- [GitHub Release](https://github.com/YuGarden404/SpecGate/releases/tag/v0.2.0) → `v0.2.0@f95e08c` → 已发布
+- NJU GitLab → `main@f95e08c` 与 `v0.2.0` → 外部 TLS/网络错误，待重试
+
+双仓库交付采用“GitHub 开发主仓库 + NJU GitLab 课程镜像”：GitHub 保留完整 commit、PR、GitHub PR/Actions、Docker 构建与 Pages 证据；GitLab 项目已经 Public，可用于历史版本教师克隆。Pipeline #312781 的 `docker-build` 因学校共享 Runner 不支持 privileged Docker-in-Docker 而失败；Pipeline #312784 因访问 `gcr.io` 出现 `context deadline exceeded`；Pipeline #312797 已成功拉取 BuildKit 镜像，但 RootlessKit 因 `operation not permitted` 无法启动。三次 `unit-test` 已通过，GitLab CI 随后只保留 `unit-test`。[Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 是历史成功链，Pipeline #313088 / job #596503 是教师源码基线，`v0.1.1` 的 Pipeline #313118 / job #596642 覆盖 `main@9cf9093` 并成功。`v0.2.0` 同步仍待外部 TLS/网络恢复，当前最新版本应从 GitHub 获取。
 
 ## 6. 本地复现命令
 
@@ -197,6 +210,6 @@ docker run --rm --entrypoint specgate-web specgate:local --help
 - 有过程文档、计划、反思和日志。
 - 有上下文、安全、工具三条工程主线。
 - 有 Lab 10 Skill 与 Lab 9-12 取舍说明。
-- GitHub 开发主仓库当前源码证据已同步到 PR #28；NJU GitLab 已公开，当前 unit-test-only Pipeline #313118 / job #596642 已通过。`v0.1.1` 标签、GHCR、匿名 smoke、digest、OCI revision 与双仓库 tags 同步均已完成并核验。
+- GitHub 开发主仓库当前源码证据已同步到 PR #30；`v0.2.0` 标签、Release、GHCR、匿名 smoke、digest 与 OCI revision 均已完成并核验。NJU GitLab 已公开，但 `main@f95e08c` 与 `v0.2.0` 标签仍因外部 TLS/网络错误待重试；历史 Pipeline #313118 / job #596642 继续保留。
 
 后续阶段包括公网交互式 Web 后端部署、更多 Provider 的人工兼容性验证和 AgentPack 草案；发布镜像不等于部署服务。当前公开容器 registry 已完成，但 CI、Pages 与 GHCR 成功都不代表公网交互式 Web 后端已经部署。真实 LLM Web 接入代码已经完成，但课程自动验收仍使用 Mock/Fake/Stub，`REFLECTION.md` 继续由学生本人维护。
