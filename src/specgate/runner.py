@@ -94,7 +94,13 @@ def _permission_rule_family(rule_family: str | None, message: str) -> str:
     return rule_family or classify_rule_family(message)
 
 
-VALID_RUN_OUTCOMES = {"completed", "needs_approval", "failed"}
+VALID_RUN_OUTCOMES = {
+    "completed",
+    "needs_approval",
+    "failed",
+    "cancelled",
+    "timed_out",
+}
 DEFAULT_AGENT_TASK = "Execute the configured workspace task."
 
 
@@ -1277,11 +1283,11 @@ class _RunnerRuntime:
         if reset_audit:
             self._reset_run_artifacts()
 
-    def run(self) -> RunResult:
+    def run(self, run_id: str | None = None) -> RunResult:
         self._check_stop()
         if self.context_strategy == "multi-agent-isolated":
             return self._run_multi_agent_workflow()
-        return self._run_single_agent_loop()
+        return self._run_single_agent_loop(run_id=run_id)
 
     def _run_multi_agent_workflow(self) -> RunResult:
         self._reset_approval_queue()
@@ -1626,6 +1632,20 @@ class _RunnerRuntime:
                 metrics,
                 permission_decisions,
                 approval,
+            )
+
+        if state.status in {RunStatus.CANCELLED, RunStatus.TIMED_OUT}:
+            return RunResult(
+                passed=False,
+                steps=state.step,
+                final_gate=latest_gate,
+                context_chars_max=metrics.context_chars_max,
+                metrics=metrics,
+                permission_decisions=permission_decisions,
+                trust=TrustSummary("failed", [state.status.value]),
+                profile=self.governance_profile,
+                outcome=state.status.value,
+                run_id=state.run_id,
             )
 
         if latest_gate is None:
@@ -2057,12 +2077,14 @@ class _ConfiguredRunLoop:
         self._state_store = state_store
 
     def run(self, run_id: str) -> RunState:
-        result = self._runtime.run()
+        result = self._runtime.run(run_id=run_id)
         state = self._state_store.get(run_id)
         status = {
             "completed": RunStatus.COMPLETED,
             "needs_approval": RunStatus.NEEDS_APPROVAL,
             "failed": RunStatus.FAILED,
+            "cancelled": RunStatus.CANCELLED,
+            "timed_out": RunStatus.TIMED_OUT,
         }[result.outcome]
         payload = {
             "passed": result.passed,

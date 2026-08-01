@@ -17,6 +17,7 @@ from specgate.gate import GateResult
 from specgate.llm import MockLLM
 from specgate.metrics import RunMetrics
 from specgate.policy import WorkspacePolicy
+from specgate.run_control import RunCancelled, RunTimedOut
 from specgate.run_state import Observation, RunState, StateDelta
 from specgate.runner import AgentRunner, _LegacyRunStateStore
 from specgate.retrieval import RetrievalConfig
@@ -170,6 +171,116 @@ class FinishAfterExternalMutationLLM:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_configured_runtime_events_use_the_agent_service_run_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            sink = RecordingSink()
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            result = AgentRunner(
+                root,
+                RecordingLLM(),
+                policy,
+                max_steps=1,
+                id_factory=lambda: "shell-run-identity",
+                event_sink=sink,
+            ).run(task="Finish the page")
+
+            self.assertEqual(result.run_id, "shell-run-identity")
+            self.assertTrue(sink.events)
+            self.assertEqual(
+                {event[0].run_id for event in sink.events},
+                {"shell-run-identity"},
+            )
+
+    def test_cancelled_run_skips_final_gate_and_memory(self):
+        checks = 0
+
+        def cancel_during_loop():
+            nonlocal checks
+            checks += 1
+            if checks >= 2:
+                raise RunCancelled("cancelled")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            with (
+                mock.patch("specgate.runner.run_html_gate") as gate,
+                mock.patch("specgate.runner.append_memory") as memory,
+            ):
+                result = AgentRunner(
+                    root,
+                    RecordingLLM(),
+                    policy,
+                    max_steps=1,
+                    stop_check=cancel_during_loop,
+                    id_factory=lambda: "cancelled-run",
+                ).run(task="Finish the page")
+
+            self.assertEqual(result.outcome, "cancelled")
+            self.assertFalse(result.passed)
+            self.assertIsNone(result.final_gate)
+            gate.assert_not_called()
+            memory.assert_not_called()
+
+    def test_timed_out_run_skips_final_gate_and_memory(self):
+        checks = 0
+
+        def time_out_during_loop():
+            nonlocal checks
+            checks += 1
+            if checks >= 2:
+                raise RunTimedOut("timed out")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            with (
+                mock.patch("specgate.runner.run_html_gate") as gate,
+                mock.patch("specgate.runner.append_memory") as memory,
+            ):
+                result = AgentRunner(
+                    root,
+                    RecordingLLM(),
+                    policy,
+                    max_steps=1,
+                    stop_check=time_out_during_loop,
+                    id_factory=lambda: "timed-out-run",
+                ).run(task="Finish the page")
+
+            self.assertEqual(result.outcome, "timed_out")
+            self.assertFalse(result.passed)
+            self.assertIsNone(result.final_gate)
+            gate.assert_not_called()
+            memory.assert_not_called()
+
     def test_external_event_observer_receives_governance_events(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
