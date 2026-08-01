@@ -23,6 +23,7 @@ class RuntimeDependencyTests(unittest.TestCase):
         )
 
         self.assertIn('"pydantic>=2.10,<3"', pyproject)
+        self.assertIn('"prompt-toolkit>=3.0,<4"', pyproject)
         self.assertIn('"PyYAML>=6,<7"', pyproject)
 
 
