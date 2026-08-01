@@ -36,6 +36,113 @@ class MemoryCredentialStore:
 
 
 class CliTests(unittest.TestCase):
+    def test_bare_cli_starts_interactive_shell(self):
+        with patch(
+            "specgate.cli.run_interactive_shell",
+            return_value=0,
+            create=True,
+        ) as shell:
+            code = main([])
+
+        self.assertEqual(code, 0)
+        shell.assert_called_once_with()
+
+    def test_help_does_not_start_shell(self):
+        output = io.StringIO()
+        with (
+            patch("specgate.cli.run_interactive_shell", create=True) as shell,
+            redirect_stdout(output),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            main(["--help"])
+
+        self.assertEqual(raised.exception.code, 0)
+        shell.assert_not_called()
+        self.assertIn("run-mock-demo", output.getvalue())
+
+    def test_existing_run_dispatch_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            root.joinpath("TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            root.joinpath("CHECKLIST.md").write_text("", encoding="utf-8")
+            with (
+                patch("specgate.cli.run_real_llm", return_value=0) as run,
+                patch("specgate.cli.run_interactive_shell", create=True) as shell,
+            ):
+                code = main(
+                    [
+                        "run",
+                        str(root),
+                        "--model",
+                        "m",
+                        "--base-url",
+                        "https://x.example/v1",
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        run.assert_called_once()
+        shell.assert_not_called()
+
+    def test_bare_non_tty_cli_reports_error_instead_of_starting_shell(self):
+        output = io.StringIO()
+        stdin = SimpleNamespace(isatty=lambda: False)
+        with (
+            patch("sys.argv", ["specgate"]),
+            patch("sys.stdin", stdin),
+            patch("specgate.cli.run_interactive_shell", create=True) as shell,
+            redirect_stdout(output),
+        ):
+            code = main()
+
+        self.assertEqual(code, 2)
+        shell.assert_not_called()
+        self.assertIn("interactive input is unavailable", output.getvalue())
+
+    def test_shell_builder_wires_terminal_config_runtime_and_canonical_demo(self):
+        terminal = object()
+        controller = SimpleNamespace(config=object())
+        runtime = object()
+        shell_instance = SimpleNamespace(run=lambda: 7)
+        with (
+            patch(
+                "specgate.cli.PromptToolkitTerminal",
+                return_value=terminal,
+                create=True,
+            ) as terminal_type,
+            patch(
+                "specgate.cli.ShellConfigController",
+                return_value=controller,
+                create=True,
+            ) as controller_type,
+            patch(
+                "specgate.cli.SpecGateShellRuntime",
+                return_value=runtime,
+                create=True,
+            ) as runtime_type,
+            patch(
+                "specgate.cli.InteractiveShell",
+                return_value=shell_instance,
+                create=True,
+            ) as shell_type,
+        ):
+            code = cli.run_interactive_shell()
+
+        self.assertEqual(code, 7)
+        terminal_type.assert_called_once_with()
+        controller_type.assert_called_once_with(terminal)
+        runtime_type.assert_called_once()
+        config_provider = runtime_type.call_args.args[0]
+        self.assertIs(config_provider(), controller.config)
+        mock_llm = runtime_type.call_args.kwargs["mock_llm_factory"]()
+        self.assertIsInstance(mock_llm, MockLLM)
+        self.assertEqual(len(mock_llm.responses), 3)
+        self.assertEqual(
+            mock_llm.responses[1]["args"]["content"],
+            cli._fixed_demo_html(),
+        )
+        shell_type.assert_called_once_with(terminal, controller, runtime)
+
     def test_run_entry_points_use_unified_agent_service_builder(self):
         self.assertIn("build_agent_service(", inspect.getsource(cli))
 
