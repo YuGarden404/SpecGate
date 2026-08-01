@@ -28,7 +28,7 @@
 - Modify: `tests/test_final_evidence.py`
 - Test: `tests/test_final_evidence.py`
 
-- [ ] **Step 1: Add the exact v0.2.0 commit map near `V011_RELEASE_FACTS`**
+- [x] **Step 1: Add the exact v0.2.0 commit map near `V011_RELEASE_FACTS`**
 
 ```python
 V020_TASK_COMMITS = {
@@ -53,7 +53,7 @@ V020_TASK_COMMITS = {
 }
 ```
 
-- [ ] **Step 2: Add a focused traceability test to `FinalEvidenceTests`**
+- [x] **Step 2: Add a focused traceability test to `FinalEvidenceTests`**
 
 ```python
 def test_v020_task_commits_are_traceable(self):
@@ -82,7 +82,7 @@ def test_v020_task_commits_are_traceable(self):
             self.assertIn(f"`{commit}`", log_section)
 ```
 
-- [ ] **Step 3: Run the focused test and verify the intended RED state**
+- [x] **Step 3: Run the focused test and verify the intended RED state**
 
 Run:
 
@@ -92,7 +92,7 @@ python -m unittest -v tests.test_final_evidence.FinalEvidenceTests.test_v020_tas
 
 Expected: `FAIL`; the first missing assertion refers to `- [x] Task 1:` or `- Task 1:`. Import and syntax errors are not an acceptable RED state.
 
-- [ ] **Step 4: Ask the user to commit the evidence contract**
+- [x] **Step 4: Ask the user to commit the evidence contract**
 
 The agent does not run Git commands. Give the user:
 
@@ -109,7 +109,7 @@ git commit -m "test: 增加 v0.2.0 流程证据契约"
 - Modify: `AGENT_LOG.md`
 - Test: `tests/test_final_evidence.py`
 
-- [ ] **Step 1: Replace the aggregate v0.2.0 plan summary with an explicit completion ledger**
+- [x] **Step 1: Replace the aggregate v0.2.0 plan summary with an explicit completion ledger**
 
 Keep the existing architecture goal and append these exact entries under `# 2026-07-31 v0.2.0 Agent Runtime 分层迁移`:
 
@@ -137,7 +137,7 @@ Keep the existing architecture goal and append these exact entries under `# 2026
 
 Remove unrelated v0.1.1 Stage B bullets currently placed inside the v0.2.0 section; preserve them in their existing v0.1.1 historical section if they are already recorded there.
 
-- [ ] **Step 2: Add the corresponding per-task ledger to `AGENT_LOG.md`**
+- [x] **Step 2: Add the corresponding per-task ledger to `AGENT_LOG.md`**
 
 Append these exact task lines within its existing v0.2.0 section:
 
@@ -176,7 +176,7 @@ Then append this verified intervention and lesson block:
 - 静态架构测试发现重复审批 continuation loop；移除后，审批恢复继续使用同一个 AgentLoop。
 ```
 
-- [ ] **Step 3: Run the traceability contract and verify GREEN**
+- [x] **Step 3: Run the traceability contract and verify GREEN**
 
 Run:
 
@@ -186,7 +186,7 @@ python -m unittest -v tests.test_final_evidence.FinalEvidenceTests.test_v020_tas
 
 Expected: `Ran 1 test` and `OK`.
 
-- [ ] **Step 4: Ask the user to commit the task ledger**
+- [x] **Step 4: Ask the user to commit the task ledger**
 
 ```powershell
 git add -- PLAN.md AGENT_LOG.md
@@ -202,7 +202,7 @@ git commit -m "docs: 补齐 v0.2.0 任务与 Agent 记录"
 - Modify: `SPEC_PROCESS.md`
 - Test: `tests/test_final_evidence.py`
 
-- [ ] **Step 1: Add the architecture and process evidence test**
+- [x] **Step 1: Add the architecture and process evidence test**
 
 ```python
 def test_v020_architecture_and_process_docs_are_current(self):
@@ -246,7 +246,7 @@ def test_v020_architecture_and_process_docs_are_current(self):
             self.assertIn(phrase, process)
 ```
 
-- [ ] **Step 2: Run the architecture/process test and verify RED**
+- [x] **Step 2: Run the architecture/process test and verify RED**
 
 ```powershell
 python -m unittest -v tests.test_final_evidence.FinalEvidenceTests.test_v020_architecture_and_process_docs_are_current
@@ -254,7 +254,7 @@ python -m unittest -v tests.test_final_evidence.FinalEvidenceTests.test_v020_arc
 
 Expected: `FAIL` because the new v0.2.0 headings and current architecture/process phrases are missing.
 
-- [ ] **Step 3: Correct the current distribution statement in `SPEC.md`**
+- [x] **Step 3: Correct the current distribution statement in `SPEC.md`**
 
 In section 9.2 replace the stale registry sentence with:
 
@@ -268,7 +268,7 @@ Update the historical risk bullet so it explicitly distinguishes then from now:
 - 风险：把静态 Pages、Dockerfile 或 CI build 误写成公网交互式后端或公开镜像分发。决策：当时先完成合规再部署；目前公开静态评审入口、本地交互式 WebUI 和公开 GHCR 镜像已完成，公网交互式 Web 后端仍未部署。
 ```
 
-- [ ] **Step 4: Append the v0.2.0 architecture supplement to `SPEC.md`**
+- [x] **Step 4: Append the v0.2.0 architecture supplement to `SPEC.md`**
 
 ```markdown
 # 2026-07-31 v0.2.0 Agent Runtime 补充规格
@@ -288,7 +288,7 @@ Update the historical risk bullet so it explicitly distinguishes then from now:
 CLI、eval 和 Web 通过同一个 composition root 构造运行时。`AgentRunner` 仅保留兼容 facade，不再维护独立工具循环、角色循环或审批 continuation loop。
 ```
 
-- [ ] **Step 5: Append the confirmed decision record to `SPEC_PROCESS.md`**
+- [x] **Step 5: Append the confirmed decision record to `SPEC_PROCESS.md`**
 
 ```markdown
 ## 2026-07-31 v0.2.0 Agent Runtime 过程记录
@@ -300,7 +300,7 @@ CLI、eval 和 Web 通过同一个 composition root 构造运行时。`AgentRunn
 用户逐段确认架构、工具链、Skill、AgentService 和 Workflow 设计，并明确不采用 `.env`、分支名使用 `v020-agent-runtime`、所有 Git 操作由用户执行。实施开始采用 Subagent-Driven；Task 11 补做后，后续任务按用户决定切换为 Inline Execution。生产修改遵循 RED -> GREEN -> focused regression，最终再运行完整离线套件、Mock Demo、静态架构搜索和编译检查。
 ```
 
-- [ ] **Step 6: Run the architecture/process test and verify GREEN**
+- [x] **Step 6: Run the architecture/process test and verify GREEN**
 
 ```powershell
 python -m unittest -v tests.test_final_evidence.FinalEvidenceTests.test_v020_architecture_and_process_docs_are_current
@@ -308,7 +308,7 @@ python -m unittest -v tests.test_final_evidence.FinalEvidenceTests.test_v020_arc
 
 Expected: `Ran 1 test` and `OK`.
 
-- [ ] **Step 7: Ask the user to commit the architecture/process sync**
+- [x] **Step 7: Ask the user to commit the architecture/process sync**
 
 ```powershell
 git add -- SPEC.md SPEC_PROCESS.md tests/test_final_evidence.py
@@ -323,7 +323,7 @@ git commit -m "docs: 同步 Agent Runtime 架构与决策过程"
 - Modify: `README.md`
 - Test: `tests/test_final_evidence.py`
 
-- [ ] **Step 1: Add the evaluator-entry contract**
+- [x] **Step 1: Add the evaluator-entry contract**
 
 ```python
 def test_readme_exposes_release_and_deterministic_mechanism_demos(self):
@@ -347,7 +347,7 @@ def test_readme_exposes_release_and_deterministic_mechanism_demos(self):
             self.assertIn(phrase, section)
 ```
 
-- [ ] **Step 2: Run the evaluator-entry test and verify RED**
+- [x] **Step 2: Run the evaluator-entry test and verify RED**
 
 ```powershell
 python -m unittest -v tests.test_final_evidence.FinalEvidenceTests.test_readme_exposes_release_and_deterministic_mechanism_demos
@@ -355,7 +355,7 @@ python -m unittest -v tests.test_final_evidence.FinalEvidenceTests.test_readme_e
 
 Expected: `FAIL` because the Release URL and `## 课程机制演示` section are absent.
 
-- [ ] **Step 3: Add the Release link to the README quick-entry list**
+- [x] **Step 3: Add the Release link to the README quick-entry list**
 
 Add this bullet under `## 评审快速入口`:
 
@@ -363,7 +363,7 @@ Add this bullet under `## 评审快速入口`:
 - GitHub Release：[v0.1.1](https://github.com/YuGarden404/SpecGate/releases/tag/v0.1.1)
 ```
 
-- [ ] **Step 4: Add the deterministic mechanism-demo section after `## 本地测试`**
+- [x] **Step 4: Add the deterministic mechanism-demo section after `## 本地测试`**
 
 ````markdown
 ## 课程机制演示
@@ -391,7 +391,7 @@ Add this bullet under `## 评审快速入口`:
 三项均应显示 `OK`。它们分别证明确定性安全拦截、Gate 反馈闭环，以及审批决定后重新校验并继续同一 Agent Runtime。
 ````
 
-- [ ] **Step 5: Run the evaluator-entry test and the three documented commands**
+- [x] **Step 5: Run the evaluator-entry test and the three documented commands**
 
 ```powershell
 python -m unittest -v tests.test_final_evidence.FinalEvidenceTests.test_readme_exposes_release_and_deterministic_mechanism_demos
@@ -400,7 +400,7 @@ python -m unittest -v tests.test_runner.RunnerTests.test_guardrail_block_is_reco
 
 Expected: the evidence contract reports `Ran 1 test` and `OK`; the mechanism command reports `Ran 3 tests` and `OK`.
 
-- [ ] **Step 6: Ask the user to commit the evaluator entry points**
+- [x] **Step 6: Ask the user to commit the evaluator entry points**
 
 ```powershell
 git add -- README.md tests/test_final_evidence.py
@@ -420,7 +420,7 @@ git commit -m "docs: 增加课程机制演示入口"
 - Confirm unchanged: `src/specgate/**`
 - Confirm unchanged: `REFLECTION.md`
 
-- [ ] **Step 1: Run the full final-evidence suite**
+- [x] **Step 1: Run the full final-evidence suite**
 
 ```powershell
 python -m unittest -v tests.test_final_evidence
@@ -428,7 +428,7 @@ python -m unittest -v tests.test_final_evidence
 
 Expected: all final-evidence tests pass with `OK`.
 
-- [ ] **Step 2: Run the deterministic mechanism demo bundle**
+- [x] **Step 2: Run the deterministic mechanism demo bundle**
 
 ```powershell
 python -m unittest -v tests.test_runner.RunnerTests.test_guardrail_block_is_recorded tests.test_runner.RunnerTests.test_gate_failure_feedback_changes_next_action tests.test_cli.CliTests.test_cli_pending_approve_resume_applies_queue_and_writes_report
@@ -436,7 +436,7 @@ python -m unittest -v tests.test_runner.RunnerTests.test_guardrail_block_is_reco
 
 Expected: `Ran 3 tests` and `OK`.
 
-- [ ] **Step 3: Run static evidence scans**
+- [x] **Step 3: Run static evidence scans**
 
 ```powershell
 rg -n "\[x\] Task (1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18):" PLAN.md
@@ -446,7 +446,7 @@ rg -n "公开容器 registry 仍待后续 GHCR 分发阶段|公开容器 registr
 
 Expected: the first command reports all 18 tasks, the second reports both evaluator entries, and the third command has no matches.
 
-- [ ] **Step 4: Compile all Python source and tests**
+- [x] **Step 4: Compile all Python source and tests**
 
 ```powershell
 python -m compileall -q src tests
@@ -454,7 +454,7 @@ python -m compileall -q src tests
 
 Expected: exit code 0 with no output.
 
-- [ ] **Step 5: Run the complete offline test suite**
+- [x] **Step 5: Run the complete offline test suite**
 
 ```powershell
 python -m unittest discover -s tests -v
@@ -462,7 +462,11 @@ python -m unittest discover -s tests -v
 
 Expected: all tests pass with `OK`; the existing platform-dependent skips remain skips rather than failures.
 
-- [ ] **Step 6: Ask the user to verify the final diff boundary**
+Review refresh on 2026-07-31: final evidence `Ran 34 tests in 0.325s`,
+mechanism demos `Ran 3 tests in 2.037s`, compile exit code 0, and complete
+offline suite `Ran 1136 tests in 415.001s` with `OK (skipped=29)`.
+
+- [x] **Step 6: Ask the user to verify the final diff boundary**
 
 The user runs:
 
@@ -487,7 +491,7 @@ tests/test_final_evidence.py
 
 `REFLECTION.md` and every file under `src/specgate/` must be absent.
 
-- [ ] **Step 7: Ask the user to make the final verification commit if any verification-only text changed**
+- [x] **Step 7: Ask the user to make the final verification commit if any verification-only text changed**
 
 If no files changed during verification, no extra commit is required. If only truthful verification results were appended to `AGENT_LOG.md`, give the user:
 

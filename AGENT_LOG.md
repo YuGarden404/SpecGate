@@ -1071,6 +1071,7 @@
 - 命令问题复盘：首次 OCI revision 检查使用嵌套 Go template，PowerShell 先处理内部双引号，Docker 因而把标签键错误解析成模板函数并报告 `function "org" not defined`；这是命令引用问题，不是镜像缺陷。随后改用 `docker image inspect` JSON 与 `ConvertFrom-Json`，成功取得 digest 和 OCI revision。
 - 匿名 smoke：一次性空 `DOCKER_CONFIG` 中 pull、CLI help、Mock Demo 与 Web help 均退出码 0；实际 digest、预期 digest、实际 revision、预期 revision 完全一致，finally 清理后 `Anonymous config exists: False`。`v0.1.1` 已完成匿名拉取验证。
 - 截图归档：原始附件只做二进制复制，生成 `docs/evidence/github-actions-ghcr-v0.1.1-success.png`、`docs/evidence/github-package-specgate-v0.1.1-public.png`、`docs/evidence/ghcr-v0.1.1-anonymous-smoke.png`；对应 SHA-256 为 `0093D19A993C1E692B5F7395C90920BEE69EB18E993C7C67F18661E18A5B102D`、`532ACA46AAAC39558F1595A98212D6F0E19B0C2868F1C979E60047B49C979C42`、`F442317D92DBA670098C32D7B0C8BB629C5AF580162BDE487B97728063BB7043`。PNG 聚焦测试 `Ran 2 tests in 0.296s`、`OK`。
+- Stage B 证据同步分支验证：imports `Ran 1 test`、CLI `Ran 51 tests in 55.310s`、workflow `Ran 5 tests`、最终证据 `Ran 28 tests in 0.434s`，全部 `OK`；Python 编译与 JavaScript 语法退出码 0，疑似真实密钥模式扫描无命中。完整套件得到 `Ran 955 tests in 404.159s`、`OK (skipped=27)`，退出码 0；新增 1 项是发布事实与历史保留契约，不替换教师基线。
 
 ## 2026-07-31 v0.2.0 Agent Runtime 分层迁移
 
@@ -1102,6 +1103,47 @@
 - 验证：Task 18 入口/报告/版本聚焦套件得到 `Ran 189 tests in 214.819s`、`OK (skipped=2)`；审批恢复收敛后的关键 5 项得到 `Ran 5 tests in 2.020s`、`OK`，Runner/AgentService/Approvals 回归得到 `Ran 147 tests in 64.994s`、`OK (skipped=7)`。完整离线套件先得到 `Ran 1130 tests in 455.485s`、`OK (skipped=29)`；清理遗留死代码并写入记录后独立复跑得到 `Ran 1130 tests in 456.059s`、`OK (skipped=29)`，两次退出码均为 0。
 - 最终门禁：`AgentLoop` 具体工具/角色/Workflow 名称搜索无匹配，旧 repair 字符串、`_legacy_run_loop` 与 `_run_approval_continuation` 搜索无匹配；CLI、eval、Web 均直接调用 `build_agent_service()`。`python -m compileall -q src tests` 与 Mock Demo 均退出码 0；`index.html`、`runs/latest/trace.jsonl`、`reports/latest/index.html` 均生成，最终 Gate 通过且 trust 为 `trusted`。
 - 部署边界：公网交互式 Web 后端未部署；发布公开 CLI 镜像不等于部署公网交互式 Web 后端。GHCR、Package、匿名 pull 与 `specgate-web --help` 不构成公网服务部署证据。
+
+### Task 级过程证据
+
+| 时间 / Task | Superpowers 技能 | 关键 prompt / context | Subagent 输出或 commit | 人工干预 | 学到的教训 |
+| --- | --- | --- | --- | --- | --- |
+| 2026-07-31 / Task 1 | `subagent-driven-development`、`test-driven-development` | 声明 Runtime 直接依赖，并用导入契约约束安装结果 | `61add59` | 用户复核差异并执行 Git 暂存与提交 | 运行时实际导入的包必须是直接依赖，不能依赖传递安装 |
+| 2026-07-31 / Task 2 | `subagent-driven-development`、`test-driven-development` | 只允许组件产生 StateDelta，由 RunStateStore 唯一合并 | `b3526b9` | 用户复核状态协议与测试后提交 | 增量 patch 所有权明确后，Loop 才不会被外围组件隐式改写 |
+| 2026-07-31 / Task 3 | `subagent-driven-development`、`test-driven-development` | 区分继续、挂起、终止与取消，并保持恢复状态 | `02394f7` | 用户复核停止语义后提交 | 审批等待是可恢复挂起，不应被建模为永久终止 |
+| 2026-07-31 / Task 4 | `subagent-driven-development`、`test-driven-development` | Loop、Pipeline、Gate 和审批共享强制 RunEventSink | `7f6bffb` | 用户复核 Trace 变更后提交 | 统一事件流比各层独立埋点更容易保证因果与关联字段一致 |
+| 2026-07-31 / Task 5 | `subagent-driven-development`、`test-driven-development` | 固定 ToolDefinition、Registry 与 Handler 的执行边界 | `9aff214` | 用户复核工具定义和兼容测试后提交 | 工具元数据与执行逻辑分离后，新增工具不需要修改 AgentLoop |
+| 2026-07-31 / Task 6 | `subagent-driven-development`、`test-driven-development` | 补齐依赖许可证，并让旧工具入口统一经过 ToolRuntime | `556a5cb`、`8677fd5` | 用户把许可证与运行时改动分两次提交 | 许可证证据与执行链都应直接可审计，兼容 facade 不能维护第二套逻辑 |
+| 2026-07-31 / Task 7 | `subagent-driven-development`、`test-driven-development` | Hook 只做生命周期观察和附加限制，不取代强制治理 | `b2a030d` | 用户复核 HookBus 生命周期测试后提交 | 可插拔扩展与不可关闭规则必须分层，否则业务 Hook 会成为绕过点 |
+| 2026-07-31 / Task 8 | `subagent-driven-development`、`test-driven-development` | 权限、路径、配额和审批规则下沉 GovernanceEngine | `a179788` | 用户复核治理与审批边界后提交 | 平台治理必须 fail closed，不能依赖调用方自愿注册 Hook |
+| 2026-07-31 / Task 9 | `subagent-driven-development`、`test-driven-development` | 组合前置验证、治理、工具执行、后置 Gate 与事件记录 | `6f823e9` | 用户复核 ActionPipeline 聚焦测试后提交 | Validation、Governance 与 Gate 的阶段顺序需要显式固定 |
+| 2026-07-31 / Task 10 | `subagent-driven-development`、`test-driven-development` | AgentLoop 不包含工具名、角色名、Skill 或 Workflow 分支 | `999e909` | 用户复核角色无关循环后提交 | 通用 Loop 只依赖协议，角色差异应留在 AgentDefinition 和 Workflow |
+| 2026-07-31 / Task 11 | `subagent-driven-development`、`test-driven-development` | 补做单 Agent Runner 接入，确认后续切换 Inline Execution | `cffc6e9` | 用户明确要求先完成 Task 11，再切换执行模式并提交 | 迁移入口时必须保留兼容结果映射，同时删除旧循环所有权 |
+| 2026-07-31 / Task 12 | `executing-plans`（Inline）、`test-driven-development` | SkillRegistry 校验路径、身份和渐进加载边界 | `78634b9` | 用户复核安全 Registry 后提交 | Skill catalog 与资源读取都必须经过规范化路径和固定根目录 |
+| 2026-07-31 / Task 13 | `executing-plans`（Inline）、`test-driven-development` | 注册 Skill 工具并只把已加载内容贡献给上下文 | `d8ae083` | 用户复核工具注册与 ContextBuilder 测试后提交 | 渐进加载可避免把全部 Skill 内容无界塞进每轮上下文 |
+| 2026-07-31 / Task 14 | `executing-plans`（Inline）、`test-driven-development` | AgentService 统一 run、状态持久化、恢复和预算边界 | `04743ec` | 用户复核服务边界与 Store 测试后提交 | 可恢复运行需要稳定 run_id 和持久化 CAS，而不是重建临时循环 |
+| 2026-07-31 / Task 15 | `executing-plans`（Inline）、`test-driven-development` | 审批结果通过 AgentService 恢复同一个 AgentLoop | `89bd035` | 用户复核审批恢复路径后提交 | 恢复链路若自带 continuation loop，会造成两套停止与事件语义 |
+| 2026-07-31 / Task 16 | `executing-plans`（Inline）、`test-driven-development` | 用版本化 AgentArtifact 传递 planner、implementer、reviewer 产物 | `575af44` | 用户复核 Artifact 与 Workflow 测试后提交 | 多 Agent 间应传递结构化版本化产物，不应耦合自由文本格式 |
+| 2026-07-31 / Task 17 | `executing-plans`（Inline）、`test-driven-development` | 迁移旧多角色入口，并由 Workflow 统一预算和隔离上下文 | `47f639a` | 用户复核多 Agent 回归后提交 | Workflow 负责编排和全局预算，底层 Loop 仍保持角色无关 |
+| 2026-07-31 / Task 18 | `executing-plans`（Inline）、`test-driven-development`、`verification-before-completion` | 收敛 CLI、eval、Web composition root，更新报告与版本并全量验收 | `674a1f4` | 用户审阅 25 个文件并执行最终迁移提交 | 静态搜索发现的重复审批 continuation loop 必须删除，不能只靠测试间接覆盖 |
+
+### 课程合规证据同步
+
+- 时间：2026-07-31（Asia/Shanghai）；范围限定为课程证据文档和 `tests/test_final_evidence.py`，不修改生产 Runtime 或学生本人撰写的 `REFLECTION.md`。
+- 提交链：证据契约 `f702284`、Task 与 Agent 记录 `a226737`、架构与过程同步 `99d25da`、Release 与机制演示入口 `5cea20b`，均由用户复核并执行 Git 操作。
+- 关键 context：把 `SPEC.md` / `SPEC_PROCESS.md`、`PLAN.md` / `AGENT_LOG.md`、README 入口和确定性测试组成单向证据链；按用户确认，本项目以 GitHub Release 作为交付入口，不扩展为公网服务部署任务。
+- 人工介入：用户逐批执行暂存、差异检查与提交；发现 v0.1.1 的 `Stage B 证据同步分支验证` 被误移出历史小节后，要求恢复到原有阶段归属。
+- 验证：最终证据 `Ran 31 tests in 0.354s`、`OK`；三项机制演示 `Ran 3 tests in 2.324s`、`OK`；完整离线套件 `Ran 1133 tests in 488.628s`、`OK (skipped=29)`；`compileall` 退出码 0，行尾空白扫描无命中。
+- 学到的教训：证据同步不能只检查关键词是否存在，还要限制 Markdown 章节边界，并把 Task 与 commit 绑定在同一行；历史验证结果必须留在其原始阶段，避免新章节误领旧证据。
+
+### 合规审查收尾验证
+
+- 时间：2026-07-31（Asia/Shanghai）；技能：`receiving-code-review`、`test-driven-development`、`verification-before-completion`；执行模式继续为 Inline Execution。
+- 审查裁定：按用户确认的项目适用口径，GitHub Release 即满足交付入口，不新增公网服务部署任务；其余意见经仓库核实后成立。
+- TDD 修正：`SPEC.md` 的 Docker 默认入口改为 `specgate --help`，WebUI 明确要求 `--entrypoint specgate-web`；Markdown 证据 helper 截止到下一个同级或上级标题；Task 与 commit 必须位于同一行；18 个 Task 补齐课程要求的过程字段。
+- 验证：最终证据 `Ran 34 tests in 0.325s`、`OK`；三项机制演示 `Ran 3 tests in 2.037s`、`OK`；完整离线套件 `Ran 1136 tests in 415.001s`、`OK (skipped=29)`；`compileall` 退出码 0，18 个 Task 与 README 两个入口扫描符合预期，过期 registry 状态为 0。
+- 人工介入：用户纠正了“需要公网部署”的审查假设，要求保持 Release 交付口径；所有 Git 操作仍由用户执行。
+- 学到的教训：外部 review 需要逐项对照项目口径和仓库事实；正确的反馈进入 RED/GREEN 修复，冲突于用户已确认交付边界的建议应明确驳回而不是扩大范围。
 
 ### 人工决策与经验
 

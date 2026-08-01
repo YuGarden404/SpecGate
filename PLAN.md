@@ -2290,6 +2290,7 @@ TDD 定向安全回归：`Ran 422 tests in 153.419s`、`OK (skipped=17)`。第�
 - 镜像链：[GHCR #2 / run 29679264248](https://github.com/YuGarden404/SpecGate/actions/runs/29679264248) 成功发布 `ghcr.io/yugarden404/specgate:0.1.1`；digest 为 `sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f`，OCI revision 为 `9cf909341cd1a5feb8ed2b244ce31f0495016c4c`。Public Package 列出 `latest`、`sha-9cf909341cd1`、`0.1.1` 与 `0.1`。
 - 匿名验证：一次性空 `DOCKER_CONFIG` 中 pull、CLI help、Mock Demo、Web help 均退出码 0；digest 与预期一致，OCI revision 与 `main` 一致，临时匿名配置清理后不存在。`v0.1.1` 已完成匿名拉取验证。
 - 新证据包：`docs/evidence/github-actions-ghcr-v0.1.1-success.png`、`docs/evidence/github-package-specgate-v0.1.1-public.png`、`docs/evidence/ghcr-v0.1.1-anonymous-smoke.png`。三张原始附件只做二进制复制，并纳入 PNG signature、chunk、CRC、zlib 与 IEND 完整性契约。
+- Stage B 证据同步分支验证：imports 1 项、CLI 51 项、workflow 5 项、最终证据 28 项均通过；Python 编译与 JavaScript 语法退出码 0，疑似真实密钥模式扫描无命中。完整套件得到 `Ran 955 tests in 404.159s`、`OK (skipped=27)`，退出码 0；新增 1 项是发布事实契约，不替换教师基线。
 
 # 2026-07-31 v0.2.0 Agent Runtime 分层迁移
 
