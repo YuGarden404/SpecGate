@@ -1,8 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from specgate.context import (
+    ContextContributor,
+    LegacyContextBuilder,
     build_context_pack,
     build_context_pack_with_metadata,
     build_role_context_pack_with_metadata,
@@ -10,11 +13,141 @@ from specgate.context import (
 from specgate.context_lifecycle import CompressionConfig
 from specgate.retrieval import RetrievalConfig
 from specgate.gate import GateCheck, GateIssue, GateResult
+from specgate.policy import WorkspacePolicy
+from specgate.run_state import Observation, RunState
 from specgate.trace import TraceStore
+from specgate.tool_registry import default_tool_registry
 from specgate.workspace_fs import WorkspacePathError
 
 
 class ContextTests(unittest.TestCase):
+    def test_context_pack_renders_the_injected_tool_registry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            context, _metadata = build_context_pack_with_metadata(
+                Path(tmp),
+                None,
+                tool_registry=default_tool_registry(include_skill_tools=True),
+            )
+
+        self.assertIn("load_skill [read]", context)
+        self.assertIn("read_skill_resource [read]", context)
+
+    def test_context_pack_renders_explicit_contributors_with_run_state(self):
+        class StepContributor:
+            def render(self, state: RunState) -> tuple[str, str]:
+                return "Extension", f"run={state.run_id}; step={state.step}"
+
+        contributor: ContextContributor = StepContributor()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context, _metadata = build_context_pack_with_metadata(
+                root,
+                None,
+                context_contributors=(contributor,),
+                state=RunState("run-1", step=3),
+            )
+
+        self.assertIn("## Extension", context)
+        self.assertIn("run=run-1; step=3", context)
+
+    def test_context_pack_requires_state_when_contributors_are_present(self):
+        class Contributor:
+            def render(self, state: RunState) -> tuple[str, str]:
+                return "Extension", state.run_id
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                build_context_pack_with_metadata(
+                    Path(tmp),
+                    None,
+                    context_contributors=(Contributor(),),
+                )
+
+    def test_legacy_context_builder_preserves_configuration_and_observation_feedback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            retrieval = RetrievalConfig(top_k=2, budget_chars=700)
+            compression = CompressionConfig(max_tool_result_chars=150)
+            gate = GateResult(False, [], [], "repair the artifact")
+            state = RunState(
+                "run-1",
+                observations=(
+                    Observation(
+                        "tool_result",
+                        {
+                            "action": "write_file",
+                            "ok": True,
+                            "blocked": False,
+                            "code": "ok",
+                            "message": "tool completed",
+                            "rule_family": "none",
+                            "data": {"path": "index.html"},
+                        },
+                    ),
+                    Observation(
+                        "gate_result",
+                        {
+                            "passed": False,
+                            "summary": gate.summary,
+                            "checks": [{"code": "html", "passed": False}],
+                            "issues": [{"code": "missing_title"}],
+                            "artifact_sha256": "artifact-hash",
+                            "checklist_sha256": "checklist-hash",
+                        },
+                    ),
+                ),
+                latest_gate=gate,
+            )
+            builder = LegacyContextBuilder(
+                root=root,
+                strategy="compressed-rag",
+                policy=policy,
+                context_budget_chars=1400,
+                retrieval_config=retrieval,
+                compression_config=compression,
+            )
+
+            with mock.patch(
+                "specgate.context.build_context_pack_with_metadata",
+                return_value=("rendered context", {"retrieval": {"used_chars": 10}}),
+            ) as build_context:
+                built = builder.build(state)
+
+            self.assertEqual(built.text, "rendered context")
+            self.assertEqual(built.metadata, {"retrieval": {"used_chars": 10}})
+            build_context.assert_called_once_with(
+                root,
+                gate,
+                [
+                    {
+                        "step": 0,
+                        "type": "tool_result",
+                        "action": "write_file",
+                        "ok": True,
+                        "blocked": False,
+                        "message": "tool completed",
+                        "data": {"path": "index.html"},
+                    },
+                    {
+                        "step": 0,
+                        "type": "gate_result",
+                        "passed": False,
+                        "summary": gate.summary,
+                    },
+                ],
+                strategy="compressed-rag",
+                policy=policy,
+                context_budget_chars=1400,
+                retrieval_config=retrieval,
+                compression_config=compression,
+            )
+
     def test_trace_store_rejects_link_without_overwriting_external_file(self):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
             root = Path(tmp)

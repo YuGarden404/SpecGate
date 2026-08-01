@@ -8,6 +8,8 @@ from threading import Condition, Event, Lock, Thread
 from time import monotonic
 from typing import Callable, Literal, Mapping
 
+from specgate.run_control import CancellationToken, RunCancelled, RunTimedOut
+
 
 @dataclass(frozen=True)
 class WebRuntimeConfig:
@@ -67,14 +69,6 @@ class RuntimeCapacityExceeded(ValueError):
         super().__init__("Web 运行队列已满 / Web runtime capacity is full")
 
 
-class RunCancelled(RuntimeError):
-    pass
-
-
-class RunTimedOut(RuntimeError):
-    pass
-
-
 @dataclass(frozen=True)
 class RunTask:
     run_id: int
@@ -83,7 +77,7 @@ class RunTask:
 
 
 @dataclass
-class RunControl:
+class RunControl(CancellationToken):
     cancel_event: Event
     deadline_at: str
     deadline_monotonic: float

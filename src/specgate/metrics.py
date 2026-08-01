@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 
 
 @dataclass(frozen=True)
@@ -12,6 +12,7 @@ class RunMetrics:
     successful_tool_calls: int = 0
     blocked_actions: int = 0
     parse_errors: int = 0
+    tool_validation_failures: int = 0
     gate_runs: int = 0
     gate_failures: int = 0
     finish_actions: int = 0
@@ -41,6 +42,24 @@ class RunMetrics:
 
     def to_dict(self) -> dict[str, int | bool]:
         return asdict(self)
+
+
+def add_run_metrics(current: RunMetrics, delta: RunMetrics) -> RunMetrics:
+    values: dict[str, int | bool] = {}
+    for metric_field in fields(RunMetrics):
+        current_value = getattr(current, metric_field.name)
+        delta_value = getattr(delta, metric_field.name)
+        if type(current_value) is bool and type(delta_value) is bool:
+            values[metric_field.name] = current_value or delta_value
+        elif type(current_value) is int and type(delta_value) is int:
+            values[metric_field.name] = current_value + delta_value
+        else:
+            raise TypeError(
+                "unsupported RunMetrics field type for additive merge: "
+                f"{metric_field.name} "
+                f"({type(current_value).__name__}, {type(delta_value).__name__})"
+            )
+    return RunMetrics(**values)
 
 
 @dataclass(frozen=True)
@@ -108,6 +127,8 @@ def build_trust_summary(final_gate_passed: bool, metrics: RunMetrics) -> TrustSu
         reasons.append("role_blocked_actions_present")
     if metrics.parse_errors:
         reasons.append("parse_errors_present")
+    if metrics.tool_validation_failures:
+        reasons.append("tool_validation_failures_present")
     if metrics.pending_approvals:
         reasons.append("pending_approvals_present")
     if metrics.denied_approvals:

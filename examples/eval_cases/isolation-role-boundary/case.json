@@ -21,21 +21,21 @@
         "schema_version": "1",
         "action": "finish",
         "args": {
-          "summary": "Plan: preserve role isolation evidence page."
+          "summary": "{\"schema_version\":\"1\",\"producer_run_id\":\"fixture\",\"references\":[],\"kind\":\"plan\",\"steps\":[\"Preserve the role isolation evidence page.\"]}"
         }
       },
       {
         "schema_version": "1",
         "action": "finish",
         "args": {
-          "summary": "Existing role isolation page already satisfies the task."
+          "summary": "{\"schema_version\":\"1\",\"producer_run_id\":\"fixture\",\"references\":[],\"kind\":\"implementation\",\"changed_paths\":[],\"summary\":\"Existing role isolation page already satisfies the task.\"}"
         }
       },
       {
         "schema_version": "1",
         "action": "finish",
         "args": {
-          "summary": "Review: role isolation evidence page passes."
+          "summary": "{\"schema_version\":\"1\",\"producer_run_id\":\"fixture\",\"references\":[],\"kind\":\"review\",\"accepted\":true,\"repair_required\":false,\"issues\":[]}"
         }
       }
     ]

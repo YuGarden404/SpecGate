@@ -1,19 +1,27 @@
 import hashlib
+import inspect
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from specgate.actions import ActionParseError, parse_action
+from specgate.agent_service import AgentService
+from specgate.artifacts import (
+    ImplementationArtifact,
+    PlanArtifact,
+    ReviewArtifact,
+)
 from specgate.context_lifecycle import CompressionConfig
 from specgate.gate import GateResult
 from specgate.llm import MockLLM
 from specgate.metrics import RunMetrics
 from specgate.policy import WorkspacePolicy
-from specgate.runner import AgentRunner
+from specgate.run_state import Observation, RunState, StateDelta
+from specgate.runner import AgentRunner, _LegacyRunStateStore
 from specgate.retrieval import RetrievalConfig
 from specgate.approvals import ActionRisk, ApprovalQueue, GovernanceConfig, PendingApproval, approval_queue_path
+from specgate.trace import TraceStore
 from specgate.tools import ToolResult
 from specgate.workspace_fs import WorkspacePathError
 
@@ -28,6 +36,41 @@ FIXED_HTML = (
     )
     + "<script>function highlightRelations(){} function filterNodes(){}</script></body></html>"
 )
+
+
+def artifact_finish(artifact):
+    return {
+        "schema_version": "1",
+        "action": "finish",
+        "args": {"summary": artifact.model_dump_json()},
+    }
+
+
+def plan_finish(*steps):
+    return artifact_finish(
+        PlanArtifact(producer_run_id="runtime", steps=steps or ("inspect",))
+    )
+
+
+def implementation_finish(summary="No workspace changes."):
+    return artifact_finish(
+        ImplementationArtifact(
+            producer_run_id="runtime",
+            changed_paths=(),
+            summary=summary,
+        )
+    )
+
+
+def review_finish(*, accepted=True, repair_required=False, issues=()):
+    return artifact_finish(
+        ReviewArtifact(
+            producer_run_id="runtime",
+            accepted=accepted,
+            repair_required=repair_required,
+            issues=issues,
+        )
+    )
 
 
 class MutatingLLM:
@@ -126,6 +169,89 @@ class FinishAfterExternalMutationLLM:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_agent_runner_is_only_a_compatibility_facade(self):
+        source = inspect.getsource(AgentRunner)
+
+        for forbidden in (
+            "while ",
+            "for step",
+            "write_file",
+            "replace_file",
+            "planner",
+            "reviewer",
+            "multi-agent-isolated",
+            "_legacy_run_loop",
+            "_run_approval_continuation",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+    def test_legacy_state_store_preserves_strict_agent_artifact_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = _LegacyRunStateStore(TraceStore(Path(tmp) / "trace.jsonl"))
+            store.create(RunState(run_id="run-1"))
+            artifact = PlanArtifact(
+                producer_run_id="planner-1",
+                steps=("inspect",),
+            ).model_dump(mode="json")
+
+            updated = store.apply(
+                "run-1",
+                0,
+                StateDelta(
+                    step=1,
+                    append_observations=(
+                        Observation("agent_artifact", {"artifact": artifact}),
+                    ),
+                ),
+            )
+
+            self.assertEqual(
+                updated.observations[0].payload,
+                {"artifact": artifact},
+            )
+
+    def test_multi_agent_runtime_has_no_legacy_string_control_flow(self):
+        source = (Path(__file__).parents[1] / "src/specgate/runner.py").read_text(
+            encoding="utf-8"
+        )
+        multi_agent_source = (
+            Path(__file__).parents[1] / "src/specgate/multi_agent.py"
+        ).read_text(encoding="utf-8")
+
+        for legacy_name in (
+            "summary_requests_repair",
+            "_run_multi_agent_loop",
+            "_run_multi_agent_role_once",
+            "_run_approval_continuation",
+        ):
+            self.assertNotIn(legacy_name, source)
+        self.assertNotIn("request_repair", multi_agent_source)
+
+    def test_multi_agent_wrong_artifact_kind_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("Build page", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md"},
+                set(),
+            )
+            llm = MockLLM([review_finish()])
+
+            result = AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=3,
+                context_strategy="multi-agent-isolated",
+            ).run()
+
+            self.assertFalse(result.passed)
+            trace = (root / "runs/latest/trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("artifact_schema_invalid", trace)
+
     def test_invalid_utf8_artifact_returns_failed_result_without_runner_crash(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -473,11 +599,7 @@ class RunnerTests(unittest.TestCase):
             (root / "CHECKLIST.md").write_text("", encoding="utf-8")
             llm = MockLLM(
                 [
-                    {
-                        "schema_version": "1",
-                        "action": "finish",
-                        "args": {"summary": "plan"},
-                    },
+                    plan_finish("Build the page"),
                     {
                         "schema_version": "1",
                         "action": "write_file",
@@ -523,30 +645,6 @@ class RunnerTests(unittest.TestCase):
 
             gate.assert_not_called()
 
-    def test_write_actions_require_string_path_and_content(self):
-        invalid_args = (
-            {"path": "index.html"},
-            {"path": "index.html", "content": 3},
-            {"content": "page"},
-            {"path": 3, "content": "page"},
-        )
-
-        for action_name in ("write_file", "replace_file"):
-            for args in invalid_args:
-                with self.subTest(action=action_name, args=args):
-                    raw = json.dumps(
-                        {
-                            "schema_version": "1",
-                            "action": action_name,
-                            "args": args,
-                        }
-                    )
-                    with self.assertRaisesRegex(
-                        ActionParseError,
-                        "invalid_action_payload",
-                    ):
-                        parse_action(raw)
-
     def test_invalid_write_payload_never_enters_approval_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -581,7 +679,8 @@ class RunnerTests(unittest.TestCase):
                 governance_config=governance,
             ).run()
 
-            self.assertEqual(result.metrics.parse_errors, 1)
+            self.assertEqual(result.metrics.parse_errors, 0)
+            self.assertEqual(result.metrics.tool_validation_failures, 1)
             self.assertEqual(result.metrics.approval_requests, 0)
             self.assertEqual(ApprovalQueue.read(approval_queue_path(root)).approvals, [])
 
@@ -749,11 +848,7 @@ class RunnerTests(unittest.TestCase):
             (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
             llm = ContextRecordingMockLLM(
                 [
-                    {
-                        "schema_version": "1",
-                        "action": "finish",
-                        "args": {"summary": "Plan: write valid Search Details HTML"},
-                    },
+                    plan_finish("Write valid Search Details HTML"),
                     {
                         "schema_version": "1",
                         "action": "replace_file",
@@ -766,7 +861,7 @@ class RunnerTests(unittest.TestCase):
                             ),
                         },
                     },
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "review complete"}},
+                    review_finish(),
                 ]
             )
             policy = WorkspacePolicy(
@@ -784,7 +879,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result.metrics.planner_runs, 1)
             self.assertEqual(result.metrics.implementer_runs, 1)
             self.assertEqual(result.metrics.reviewer_runs, 1)
-            self.assertIn("Plan: write valid Search Details HTML", llm.contexts[1])
+            self.assertIn("Write valid Search Details HTML", llm.contexts[1])
             trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
             self.assertLess(trace_text.index('"role": "planner"'), trace_text.index('"role": "implementer"'))
             self.assertLess(trace_text.index('"role": "implementer"'), trace_text.index('"role": "reviewer"'))
@@ -802,9 +897,9 @@ class RunnerTests(unittest.TestCase):
             )
             llm = ContextRecordingMockLLM(
                 [
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "Plan: no changes"}},
+                    plan_finish("No changes required"),
                     {"schema_version": "1", "action": "delete_file", "args": {"path": "index.html"}},
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "review complete"}},
+                    review_finish(),
                 ]
             )
             policy = WorkspacePolicy(
@@ -816,12 +911,31 @@ class RunnerTests(unittest.TestCase):
 
             result = AgentRunner(root, llm, policy, max_steps=5, context_strategy="multi-agent-isolated").run()
 
-            self.assertTrue(result.passed)
+            self.assertFalse(result.passed)
             self.assertIsNotNone(result.metrics)
             self.assertEqual(result.metrics.role_blocked_actions, 1)
             self.assertIsNotNone(result.trust)
-            self.assertEqual(result.trust.status, "warning")
-            self.assertIn("role_blocked_actions_present", result.trust.reasons)
+            self.assertEqual(result.trust.status, "failed")
+            trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("role_action_blocked", trace_text)
+            isolation = json.loads(
+                (root / "runs" / "latest" / "isolation.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            implementer = next(
+                item
+                for item in isolation["executions"]
+                if item["role"] == "implementer"
+            )
+            self.assertEqual(implementer["attempted_action"], "delete_file")
+            self.assertFalse(implementer["action_allowed_by_role"])
+            self.assertEqual(
+                implementer["blocked_reason"],
+                "role implementer cannot perform delete_file",
+            )
 
     def test_multi_agent_blocks_planner_write_before_tool_dispatch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -841,8 +955,8 @@ class RunnerTests(unittest.TestCase):
                         "action": "write_file",
                         "args": {"path": "index.html", "content": "bad"},
                     },
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "no-op"}},
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "review"}},
+                    plan_finish("No workspace changes"),
+                    review_finish(),
                 ]
             )
 
@@ -869,7 +983,7 @@ class RunnerTests(unittest.TestCase):
             )
             llm = MockLLM(
                 [
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
+                    plan_finish("Build the page"),
                     {
                         "schema_version": "1",
                         "action": "replace_file",
@@ -907,13 +1021,13 @@ class RunnerTests(unittest.TestCase):
             )
             llm = MockLLM(
                 [
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
+                    plan_finish("Build the page"),
                     {
                         "schema_version": "1",
                         "action": "write_file",
                         "args": {"path": "index.html", "content": "blocked by policy"},
                     },
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "review"}},
+                    review_finish(),
                 ]
             )
 
@@ -943,13 +1057,13 @@ class RunnerTests(unittest.TestCase):
             )
             llm = MockLLM(
                 [
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
+                    plan_finish("Build the page"),
                     {
                         "schema_version": "1",
                         "action": "replace_file",
                         "args": {"path": "index.html", "content": "needs approval"},
                     },
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "review"}},
+                    review_finish(),
                 ]
             )
 
@@ -991,7 +1105,7 @@ class RunnerTests(unittest.TestCase):
             )
             llm = MockLLM(
                 [
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "Plan Search Details"}},
+                    plan_finish("Build Search and Details"),
                     {
                         "schema_version": "1",
                         "action": "replace_file",
@@ -1003,11 +1117,11 @@ class RunnerTests(unittest.TestCase):
                             ),
                         },
                     },
-                    {
-                        "schema_version": "1",
-                        "action": "finish",
-                        "args": {"summary": "request_repair: missing Details"},
-                    },
+                    review_finish(
+                        accepted=False,
+                        repair_required=True,
+                        issues=("Missing Details",),
+                    ),
                     {
                         "schema_version": "1",
                         "action": "replace_file",
@@ -1020,7 +1134,7 @@ class RunnerTests(unittest.TestCase):
                             ),
                         },
                     },
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "review complete"}},
+                    review_finish(),
                 ]
             )
 
@@ -1052,27 +1166,27 @@ class RunnerTests(unittest.TestCase):
             )
             llm = MockLLM(
                 [
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "Plan Search Details"}},
+                    plan_finish("Build Search and Details"),
                     {
                         "schema_version": "1",
                         "action": "replace_file",
                         "args": {"path": "index.html", "content": incomplete_html},
                     },
-                    {
-                        "schema_version": "1",
-                        "action": "finish",
-                        "args": {"summary": "request_repair: missing Details"},
-                    },
+                    review_finish(
+                        accepted=False,
+                        repair_required=True,
+                        issues=("Missing Details",),
+                    ),
                     {
                         "schema_version": "1",
                         "action": "replace_file",
                         "args": {"path": "index.html", "content": incomplete_html},
                     },
-                    {
-                        "schema_version": "1",
-                        "action": "finish",
-                        "args": {"summary": "request_repair: still missing Details"},
-                    },
+                    review_finish(
+                        accepted=False,
+                        repair_required=True,
+                        issues=("Still missing Details",),
+                    ),
                 ]
             )
 
@@ -1098,7 +1212,7 @@ class RunnerTests(unittest.TestCase):
             )
             llm = MockLLM(
                 [
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "Plan Search Details"}},
+                    plan_finish("Build Search and Details"),
                     {
                         "schema_version": "1",
                         "action": "replace_file",
@@ -1125,7 +1239,14 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("max_steps_reached", result.trust.reasons)
             trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("role_step_limit_reached", trace_text)
-            self.assertNotIn('"role": "reviewer"', trace_text)
+            trace_events = [json.loads(line) for line in trace_text.splitlines()]
+            self.assertFalse(
+                any(
+                    event["event_type"] == "role_started"
+                    and event["payload"].get("role") == "reviewer"
+                    for event in trace_events
+                )
+            )
 
     def test_multi_agent_reviewer_parse_error_fails_closed(self):
         class ReviewerParseErrorLLM:
@@ -1135,7 +1256,7 @@ class RunnerTests(unittest.TestCase):
             def complete(self, context: str) -> str:
                 self.calls += 1
                 if self.calls == 1:
-                    return '{"schema_version":"1","action":"finish","args":{"summary":"Plan Search Details"}}'
+                    return json.dumps(plan_finish("Build Search and Details"))
                 if self.calls == 2:
                     return (
                         '{"schema_version":"1","action":"replace_file","args":{"path":"index.html",'
@@ -1172,7 +1293,15 @@ class RunnerTests(unittest.TestCase):
             self.assertIsNotNone(result.trust)
             self.assertEqual(result.trust.status, "failed")
             trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("reviewer_failed", trace_text)
+            trace_events = [json.loads(line) for line in trace_text.splitlines()]
+            self.assertTrue(
+                any(
+                    event["event_type"] == "role_finished"
+                    and event["payload"].get("role") == "reviewer"
+                    and event["payload"].get("status") == "failed"
+                    for event in trace_events
+                )
+            )
 
     def test_rag_select_run_records_retrieval_evidence_and_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1641,7 +1770,7 @@ class RunnerTests(unittest.TestCase):
             root = Path(tmp)
             (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
             (root / "CHECKLIST.md").write_text("", encoding="utf-8")
-            llm = MockLLM(
+            llm = ContextRecordingMockLLM(
                 [
                     {
                         "schema_version": "1",
@@ -1667,6 +1796,8 @@ class RunnerTests(unittest.TestCase):
             result = AgentRunner(root, llm, policy, max_steps=3).run()
 
             self.assertTrue(result.passed)
+            self.assertEqual(result.outcome, "completed")
+            self.assertEqual(result.steps, 2)
             self.assertEqual(result.profile, "strict")
             self.assertIsNotNone(result.metrics)
             self.assertEqual(result.metrics.llm_calls, 2)
@@ -1675,8 +1806,151 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result.metrics.gate_runs, 2)
             self.assertEqual(result.metrics.gate_failures, 0)
             self.assertEqual(result.metrics.finish_actions, 1)
+            self.assertIsNotNone(result.permission_decisions)
+            self.assertEqual(
+                [(decision.action, decision.allowed) for decision in result.permission_decisions],
+                [("write_file", True), ("finish", True)],
+            )
+            self.assertIsNotNone(result.final_gate)
+            self.assertTrue(result.final_gate.passed)
+            self.assertIn(result.final_gate.summary, llm.contexts[1])
             self.assertIsNotNone(result.trust)
             self.assertEqual(result.trust.status, "trusted")
+
+            trace_path = root / "runs" / "latest" / "trace.jsonl"
+            self.assertTrue(trace_path.is_file())
+            trace_events = [
+                json.loads(line)["event_type"]
+                for line in trace_path.read_text(encoding="utf-8").splitlines()
+            ]
+            for legacy_event in (
+                "context_built",
+                "llm_response",
+                "permission_decision",
+                "tool_result",
+                "gate_result",
+                "run_summary",
+            ):
+                self.assertIn(legacy_event, trace_events)
+            unified_events = (
+                "RunStarted",
+                "ToolCompleted",
+                "GateCompleted",
+                "RunFinished",
+            )
+            unified_positions = [trace_events.index(event) for event in unified_events]
+            self.assertEqual(unified_positions, sorted(unified_positions))
+
+    def test_single_agent_context_metrics_match_legacy_loop(self):
+        for strategy in ("compressed-rag", "isolated-harness"):
+            with self.subTest(strategy=strategy), tempfile.TemporaryDirectory() as new_tmp, tempfile.TemporaryDirectory() as legacy_tmp:
+                results = []
+                for tmp in (new_tmp, legacy_tmp):
+                    root = Path(tmp)
+                    (root / "TASK_SPEC.md").write_text(
+                        "Build a searchable knowledge navigator.",
+                        encoding="utf-8",
+                    )
+                    (root / "CHECKLIST.md").write_text(
+                        "- include searchable knowledge navigation\n",
+                        encoding="utf-8",
+                    )
+                    (root / "notes.md").write_text(
+                        "searchable knowledge navigation " * 80,
+                        encoding="utf-8",
+                    )
+                    policy = WorkspacePolicy(
+                        root,
+                        {"write_file", "finish"},
+                        {"TASK_SPEC.md", "CHECKLIST.md", "notes.md", "index.html"},
+                        {"index.html"},
+                    )
+                    llm = MockLLM(
+                        [
+                            {
+                                "schema_version": "1",
+                                "action": "write_file",
+                                "args": {"path": "index.html", "content": FIXED_HTML},
+                            },
+                            {
+                                "schema_version": "1",
+                                "action": "finish",
+                                "args": {"summary": "done"},
+                            },
+                        ]
+                    )
+                    runner = AgentRunner(
+                        root,
+                        llm,
+                        policy,
+                        max_steps=3,
+                        context_strategy=strategy,
+                        context_budget_chars=1800,
+                        retrieval_config=RetrievalConfig(top_k=2, budget_chars=600),
+                        compression_config=CompressionConfig(
+                            max_tool_result_chars=120,
+                            summary_budget_chars=500,
+                        ),
+                    )
+                    result = runner.run()
+                    results.append(result)
+
+                self.assertEqual(results[0].outcome, results[1].outcome)
+                self.assertEqual(results[0].metrics, results[1].metrics)
+
+    def test_blocked_action_legacy_trace_payload_matches_legacy_loop(self):
+        traces = []
+        results = []
+        with tempfile.TemporaryDirectory() as new_tmp, tempfile.TemporaryDirectory() as legacy_tmp:
+            for tmp in (new_tmp, legacy_tmp):
+                root = Path(tmp)
+                (root / "TASK_SPEC.md").write_text("Keep files safe.", encoding="utf-8")
+                (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+                (root / "README.md").write_text("original", encoding="utf-8")
+                (root / "index.html").write_text(FIXED_HTML, encoding="utf-8")
+                policy = WorkspacePolicy(
+                    root,
+                    {"replace_file", "finish"},
+                    {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                    {"README.md"},
+                )
+                runner = AgentRunner(
+                    root,
+                    MockLLM(
+                        [
+                            {
+                                "schema_version": "1",
+                                "action": "replace_file",
+                                "args": {"path": "README.md", "content": "changed"},
+                            },
+                            {
+                                "schema_version": "1",
+                                "action": "finish",
+                                "args": {"summary": "done"},
+                            },
+                        ]
+                    ),
+                    policy,
+                    max_steps=2,
+                    governance_config=GovernanceConfig(
+                        profile="strict",
+                        review_paths={"README.md"},
+                    ),
+                )
+                result = runner.run()
+                events = [
+                    json.loads(line)
+                    for line in (root / "runs" / "latest" / "trace.jsonl")
+                    .read_text(encoding="utf-8")
+                    .splitlines()
+                ]
+                traces.append(
+                    next(event["payload"] for event in events if event["event_type"] == "tool_result")
+                )
+                results.append(result)
+
+        self.assertEqual(traces[0], traces[1])
+        self.assertEqual(results[0].metrics, results[1].metrics)
 
     def test_blocked_env_write_records_permission_decision_and_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1743,7 +2017,8 @@ class RunnerTests(unittest.TestCase):
             self.assertIsNotNone(result.permission_decisions)
             self.assertEqual(result.permission_decisions, [])
             self.assertIsNotNone(result.metrics)
-            self.assertEqual(result.metrics.parse_errors, 1)
+            self.assertEqual(result.metrics.parse_errors, 0)
+            self.assertEqual(result.metrics.tool_validation_failures, 1)
             self.assertEqual(result.metrics.tool_calls, 0)
             self.assertEqual(result.metrics.successful_tool_calls, 0)
 
@@ -1827,9 +2102,9 @@ class RunnerTests(unittest.TestCase):
                 (root / "index.html").write_text(FIXED_HTML, encoding="utf-8")
                 llm = MockLLM(
                     [
-                        {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
+                        plan_finish("Read the task"),
                         {"schema_version": "1", "action": "read_file", "args": {"path": "TASK_SPEC.md"}},
-                        {"schema_version": "1", "action": "finish", "args": {"summary": "review complete"}},
+                        review_finish(),
                     ]
                 )
                 policy = WorkspacePolicy(
@@ -2609,7 +2884,7 @@ class RunnerTests(unittest.TestCase):
                 {"README.md"},
             )
 
-            result = AgentRunner(
+            runner = AgentRunner(
                 root,
                 llm,
                 policy,
@@ -2619,9 +2894,19 @@ class RunnerTests(unittest.TestCase):
                     review_actions={"replace_file"},
                     review_paths={"README.md"},
                 ),
-            ).resume_from_approval()
+            )
+            resume_calls = []
+            original_resume = AgentService.resume
+
+            def resume_through_service(service, run_id, decision, cancel_token=None):
+                resume_calls.append((run_id, decision))
+                return original_resume(service, run_id, decision, cancel_token)
+
+            with mock.patch.object(AgentService, "resume", new=resume_through_service):
+                result = runner.resume_from_approval()
 
             self.assertTrue(result.passed)
+            self.assertEqual(len(resume_calls), 1)
             self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "original")
             queue = ApprovalQueue.read(approval_queue_path(root))
             self.assertEqual(queue.approvals[0].status, "rejected")
@@ -2802,20 +3087,20 @@ class RunnerContextStrategyTests(unittest.TestCase):
             )
             llm = ContextRecordingMockLLM(
                 [
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "done"}},
-                    {"schema_version": "1", "action": "finish", "args": {"summary": "review"}},
+                    plan_finish("Keep valid HTML"),
+                    implementation_finish(),
+                    review_finish(),
                 ]
             )
             retrieval = RetrievalConfig(top_k=2, budget_chars=700)
             compression = CompressionConfig(max_tool_result_chars=150)
 
             with mock.patch(
-                "specgate.runner.build_role_context_pack_with_metadata",
+                "specgate.runner.build_context_pack_with_metadata",
                 wraps=__import__(
                     "specgate.context",
-                    fromlist=["build_role_context_pack_with_metadata"],
-                ).build_role_context_pack_with_metadata,
+                    fromlist=["build_context_pack_with_metadata"],
+                ).build_context_pack_with_metadata,
             ) as builder:
                 AgentRunner(
                     root,

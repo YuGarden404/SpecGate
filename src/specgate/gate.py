@@ -5,9 +5,11 @@ import hashlib
 from html.parser import HTMLParser
 from pathlib import Path
 import re
+from typing import Protocol
 
 from specgate import workspace_fs
 from specgate.checklist_rules import evaluate_rule, parse_checklist, parse_html_features
+from specgate.policy import WorkspacePolicy
 from specgate.security import contains_secret_like_text
 
 
@@ -35,6 +37,64 @@ class GateResult:
     summary: str
     artifact_sha256: str | None = None
     checklist_sha256: str | None = None
+
+
+@dataclass(frozen=True)
+class GateContext:
+    root: Path
+    policy: WorkspacePolicy
+    artifact_path: str = "index.html"
+    checklist_path: str = "CHECKLIST.md"
+
+    def __post_init__(self) -> None:
+        if self.root != self.policy.root:
+            raise ValueError("gate root must match workspace policy root")
+
+
+class GateRunner(Protocol):
+    def run(self, context: GateContext) -> GateResult: ...
+
+
+class HtmlGateRunner:
+    def run(self, context: GateContext) -> GateResult:
+        artifact_path = _policy_readable_path(
+            context,
+            context.artifact_path,
+        )
+        if artifact_path is None:
+            message = "artifact is not readable under the workspace policy"
+            issue = GateIssue(
+                "artifact_not_readable",
+                "error",
+                message,
+                context.artifact_path,
+                "Allow the artifact path for reading before validation",
+            )
+            return GateResult(
+                False,
+                [GateCheck("artifact_policy_readable", False, message)],
+                [issue],
+                "Gate failed: artifact is not policy-readable",
+            )
+
+        checklist_path = _policy_readable_path(
+            context,
+            context.checklist_path,
+        )
+        return run_html_gate(artifact_path, checklist_path)
+
+
+def _policy_readable_path(
+    context: GateContext,
+    logical_path: str,
+) -> Path | None:
+    try:
+        normalized = workspace_fs.normalize_workspace_relative(logical_path)
+    except workspace_fs.WorkspacePathError:
+        return None
+    if normalized not in context.policy.allowed_read_paths:
+        return None
+    return context.root / Path(normalized)
 
 
 class _HtmlFeatureParser(HTMLParser):

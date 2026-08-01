@@ -374,9 +374,15 @@ def _strip_action_payload(value: object) -> object:
 def _render_run_events(root: Path) -> str:
     text = _read_optional_report_text(root, "runs/latest/trace.jsonl")
     if text is None:
-        return "<p>No trace events found.</p>"
+        return _render_empty_runtime_event_groups()
 
     items: list[str] = []
+    grouped: dict[str, list[str]] = {
+        "Hook Events": [],
+        "Gate Events": [],
+        "Skill Events": [],
+        "Workflow Events": [],
+    }
     for line in text.splitlines():
         if not line.strip():
             continue
@@ -386,14 +392,63 @@ def _render_run_events(root: Path) -> str:
             items.append("<li><strong>malformed trace event</strong></li>")
             continue
         event_type = str(event.get("event_type", "unknown"))
-        payload = json.dumps(redact(_strip_action_payload(event.get("payload", {}))), ensure_ascii=False)
+        raw_payload = redact(_strip_action_payload(event.get("payload", {})))
+        payload = json.dumps(raw_payload, ensure_ascii=False)
         if len(payload) > 500:
             payload = payload[:500] + "...[truncated]"
-        items.append(f"<li><strong>{escape(event_type)}</strong>: <code>{escape(payload)}</code></li>")
+        item = (
+            f"<li><strong>{escape(event_type)}</strong>: "
+            f"<code>{escape(payload)}</code></li>"
+        )
+        items.append(item)
+        phase = (
+            str(raw_payload.get("phase", "")).lower()
+            if isinstance(raw_payload, dict)
+            else ""
+        )
+        lowered = event_type.lower()
+        if phase == "hook" or lowered in {
+            "runstarted",
+            "runfinished",
+            "runresumed",
+            "userpromptsubmitted",
+            "beforetool",
+            "aftertool",
+            "stop",
+        }:
+            grouped["Hook Events"].append(item)
+        if phase == "gate" or "gate" in lowered:
+            grouped["Gate Events"].append(item)
+        if phase == "skill" or "skill" in lowered:
+            grouped["Skill Events"].append(item)
+        if (
+            phase == "workflow"
+            or "workflow" in lowered
+            or lowered.startswith("role_")
+        ):
+            grouped["Workflow Events"].append(item)
 
     if not items:
-        return "<p>No trace events found.</p>"
-    return "<ol>" + "\n".join(items) + "</ol>"
+        return _render_empty_runtime_event_groups()
+    sections = ["<h3>All Runtime Events</h3><ol>" + "\n".join(items) + "</ol>"]
+    for heading, event_items in grouped.items():
+        body = (
+            "<ol>" + "\n".join(event_items) + "</ol>"
+            if event_items
+            else "<p>No events recorded.</p>"
+        )
+        sections.append(f"<h3>{heading}</h3>{body}")
+    return "".join(sections)
+
+
+def _render_empty_runtime_event_groups() -> str:
+    return (
+        "<p>No trace events found.</p>"
+        "<h3>Hook Events</h3><p>No events recorded.</p>"
+        "<h3>Gate Events</h3><p>No events recorded.</p>"
+        "<h3>Skill Events</h3><p>No events recorded.</p>"
+        "<h3>Workflow Events</h3><p>No events recorded.</p>"
+    )
 
 
 def generate_report(

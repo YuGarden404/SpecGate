@@ -1,28 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
-from specgate.isolation import RoleExecution
+from specgate.agent_service import AgentBudget, AgentDefinition
 
 
 ROLE_SEQUENCE = ("planner", "implementer", "reviewer")
-
-
-@dataclass
-class MultiAgentState:
-    plan: str = ""
-    review_notes: str = ""
-    repair_requested: bool = False
-    review_repairs: int = 0
-    executions: list[RoleExecution] = field(default_factory=list)
-
-    def to_shared_state(self) -> dict[str, object]:
-        return {
-            "plan": self.plan,
-            "review_notes": self.review_notes,
-            "repair_requested": self.repair_requested,
-            "review_repairs": self.review_repairs,
-        }
 
 
 def phase_for_role(role: str) -> str:
@@ -32,6 +13,59 @@ def phase_for_role(role: str) -> str:
     return phases[role]
 
 
-def summary_requests_repair(summary: str) -> bool:
-    lowered = summary.lower()
-    return "request_repair" in lowered or "repair requested" in lowered
+def build_agent_definitions(
+    *,
+    context_chars: int,
+    include_skill_tools: bool = False,
+) -> tuple[AgentDefinition, ...]:
+    skill_capabilities = (
+        frozenset({"load_skill", "read_skill_resource"})
+        if include_skill_tools
+        else frozenset()
+    )
+    read_capabilities = frozenset(
+        {"read_file", "list_files", "finish"}
+    ) | skill_capabilities
+    write_capabilities = read_capabilities | frozenset(
+        {"write_file", "replace_file"}
+    )
+    budget = AgentBudget(
+        max_steps=1,
+        context_chars=context_chars,
+        child_runs=0,
+    )
+    return (
+        AgentDefinition(
+            agent_id="planner",
+            instructions=(
+                "Produce a PlanArtifact. Call finish once with the complete "
+                "PlanArtifact JSON in args.summary."
+            ),
+            capability_set=read_capabilities,
+            context_policy="multi-agent-isolated",
+            budget=budget,
+        ),
+        AgentDefinition(
+            agent_id="implementer",
+            instructions=(
+                "Apply one implementation action from the supplied artifacts. "
+                "A successful workspace write produces an "
+                "ImplementationArtifact. If no write is needed, call finish "
+                "with complete ImplementationArtifact JSON in args.summary."
+            ),
+            capability_set=write_capabilities,
+            context_policy="multi-agent-isolated",
+            budget=budget,
+        ),
+        AgentDefinition(
+            agent_id="reviewer",
+            instructions=(
+                "Produce a ReviewArtifact. Call finish once with the complete "
+                "ReviewArtifact JSON in args.summary. Use the typed "
+                "repair_required field to request a repair."
+            ),
+            capability_set=read_capabilities,
+            context_policy="multi-agent-isolated",
+            budget=budget,
+        ),
+    )

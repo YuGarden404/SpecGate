@@ -444,7 +444,7 @@ Mock 模式不需要 key。CLI 的 `specgate credentials status/set/clear <provi
 
 ### 9.2 分发
 
-本地与 CI 构建形态为 Docker，镜像默认启动交互式 WebUI；README 和 `docs/DEPLOYMENT.md` 记录本地构建与后续服务器运行所需的持久化数据目录、Web 主密钥、安全 cookie 和固定 worker/队列配置。Mock 模式无需凭据即可启动。存在 `Dockerfile` 或 CI smoke 只证明构建路径，公开容器 registry 仍待后续 GHCR 分发阶段；发布镜像不等于部署服务。
+本地与 CI 构建形态为 Docker，镜像默认启动 `specgate` CLI，并以 `--help` 作为默认参数；WebUI 需显式使用 `--entrypoint specgate-web` 启动。README 和 `docs/DEPLOYMENT.md` 记录本地构建与后续服务器运行所需的持久化数据目录、Web 主密钥、安全 cookie 和固定 worker/队列配置。Mock 模式无需凭据即可启动。公开 GHCR CLI 镜像 `ghcr.io/yugarden404/specgate:0.1.1` 已发布并完成匿名拉取验证；发布镜像不等于部署公网交互式 Web 后端。
 
 ### 9.3 WebUI URL
 
@@ -491,11 +491,12 @@ MVP 完成时必须满足：
 
 - 风险：项目变成通用 coding agent。决策：MVP 只做静态单页 HTML。
 - 风险：WebUI 范围膨胀。决策：交互式产品壳只服务静态 HTML harness 工作流，真实模型仅替换决策源；GitHub Pages 保留为静态评审入口。
-- 风险：把静态 Pages、Dockerfile 或 CI build 误写成公网交互式后端或公开镜像分发。决策：公开静态评审入口与本地交互式 WebUI 已完成；公网交互式 Web 后端和公开容器 registry 待后续独立阶段完成，先完成合规再部署。
+- 风险：把静态 Pages、Dockerfile 或 CI build 误写成公网交互式后端或公开镜像分发。决策：当时先完成合规再部署；目前公开静态评审入口、本地交互式 WebUI 和公开 GHCR 镜像已完成，公网交互式 Web 后端仍未部署。
 - 风险：安全只停留在 prompt。决策：guardrail 必须是可单测的确定性代码。
 - 风险：反馈闭环描述模糊。决策：Gate result 必须结构化，并进入下一轮 context pack。
 - 风险：真实 LLM 不稳定掩盖机制。决策：`MockLLM` 是主要 demo 和测试路径。
 - 风险：课程过程证据不足。决策：从项目开始维护 `SPEC_PROCESS.md` 和 `AGENT_LOG.md`。
+
 # 2026-07-10 Context Harness Deepening 补充规格
 
 本节记录 SpecGate 在 MVP、真实 LLM 兼容、Context Eval、治理指标和 HITL Review Gate 之后的下一阶段主贡献。该阶段不改变 SpecGate 作为自研 Coding Agent Harness 的定位，而是在已有 harness 内核上继续深入 Context Engineering 与 Harness Engineering。
@@ -532,3 +533,19 @@ MVP 完成时必须满足：
 - `isolation-role-boundary`：展示 `isolated-harness` 的 planner / implementer / reviewer 角色隔离证据，同时不改变既有权限执行路径。
 
 这些 case 均使用 MockLLM / StubLLM，真实 LLM 仍然只作为后续可选人工实验，不作为核心验收条件。
+
+# 2026-07-31 v0.2.0 Agent Runtime 补充规格
+
+本阶段把集中式 Runner 迁移为分层 Agent Runtime。入口层通过 AgentService 运行或恢复 Agent；AgentLoop 只负责上下文、模型调用、动作解析、状态推进和停止决策；ActionPipeline 统一组合 Hook、Governance、工具执行和执行后 Gate；Tool 与 Skill Runtime 提供可注册能力；RunState、RunEvent、WorkspacePolicy、审批和 Trace 形成不可绕过的运行基础。
+
+核心边界如下：
+
+- `AgentLoop` 不包含具体工具、角色、Skill 或 Workflow 名称分支。
+- 工具链固定为 `ToolDefinition -> ToolRegistry -> ToolRuntime -> ToolHandler`，新增工具不修改 AgentLoop。
+- `HookBus` 提供细粒度生命周期观察和附加限制；`GovernanceEngine` 承担不可关闭的平台权限、路径、配额和审批规则。
+- Gate 保持独立，负责执行后结果检查和完成前最终验收，不降级为普通 Hook。
+- `SkillRegistry` 采用 Catalog、Instructions、Resources 渐进加载，每个 AgentRun 使用独立 SkillSession。
+- `AgentService` 统一运行、挂起、恢复、取消和预算边界；`SequentialReviewWorkflow` 只编排 AgentDefinition，并通过版本化 `AgentArtifact` 传递结果。
+- 所有组件只产生类型化 StateDelta，由 RunStateStore 唯一应用；统一 RunEvent 流覆盖 Loop、Pipeline、Gate、审批、Skill 和 Workflow。
+
+CLI、eval 和 Web 通过同一个 composition root 构造运行时。`AgentRunner` 仅保留兼容 facade，不再维护独立工具循环、角色循环或审批 continuation loop。

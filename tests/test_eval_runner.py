@@ -1,8 +1,10 @@
 import json
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
 
+from specgate.artifacts import PlanArtifact, ReviewArtifact
 from specgate.eval_runner import (
     _context_had_untrusted_boundary,
     discover_eval_cases,
@@ -10,6 +12,31 @@ from specgate.eval_runner import (
 )
 from specgate.llm import LLMProviderError
 from specgate.security_eval import SecurityExpectation
+
+
+def artifact_finish(artifact):
+    return {
+        "schema_version": "1",
+        "action": "finish",
+        "args": {"summary": artifact.model_dump_json()},
+    }
+
+
+def plan_finish(*steps):
+    return artifact_finish(
+        PlanArtifact(producer_run_id="runtime", steps=steps or ("inspect",))
+    )
+
+
+def review_finish(*, accepted=True, repair_required=False, issues=()):
+    return artifact_finish(
+        ReviewArtifact(
+            producer_run_id="runtime",
+            accepted=accepted,
+            repair_required=repair_required,
+            issues=issues,
+        )
+    )
 
 
 class EvalRunnerDiscoveryTests(unittest.TestCase):
@@ -340,6 +367,11 @@ class EvalRunnerDiscoveryTests(unittest.TestCase):
 
 
 class EvalRunnerExecutionTests(unittest.TestCase):
+    def test_eval_entry_point_uses_unified_agent_service_builder(self):
+        import specgate.eval_runner as eval_runner
+
+        self.assertIn("build_agent_service(", inspect.getsource(eval_runner))
+
     def _case_dir(self, root: Path, case_id: str) -> Path:
         case = root / case_id
         case.mkdir()
@@ -483,7 +515,7 @@ class EvalRunnerExecutionTests(unittest.TestCase):
                         ],
                         "mock_responses_by_strategy": {
                             "multi-agent-isolated": [
-                                {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
+                                plan_finish("Use the strategy-specific implementation"),
                                 {
                                     "schema_version": "1",
                                     "action": "write_file",
@@ -496,7 +528,7 @@ class EvalRunnerExecutionTests(unittest.TestCase):
                                         ),
                                     },
                                 },
-                                {"schema_version": "1", "action": "finish", "args": {"summary": "review"}},
+                                review_finish(),
                             ]
                         },
                     }
@@ -782,7 +814,7 @@ class EvalRunnerExecutionTests(unittest.TestCase):
                         "suite": "isolation",
                         "expected": {"should_pass": True, "must_block": False},
                         "mock_responses": [
-                            {"schema_version": "1", "action": "finish", "args": {"summary": "plan"}},
+                            plan_finish("Build Search Details"),
                             {
                                 "schema_version": "1",
                                 "action": "replace_file",
@@ -797,7 +829,7 @@ class EvalRunnerExecutionTests(unittest.TestCase):
                                     ),
                                 },
                             },
-                            {"schema_version": "1", "action": "finish", "args": {"summary": "review"}},
+                            review_finish(),
                         ],
                     }
                 ),
@@ -1161,13 +1193,13 @@ class EvalRunnerSecurityTests(unittest.TestCase):
                         "category": "security",
                         "suite": "security",
                         "expected": {
-                            "should_pass": True,
+                            "should_pass": False,
                             "must_block": True,
                             "blocked_actions": 1,
-                            "trust": "warning",
+                            "trust": "failed",
                             "security": {
                                 "expected_findings": ["blocked_action"],
-                                "expected_trust": "warning",
+                                "expected_trust": "failed",
                                 "expected_blocked_actions": 1,
                             },
                         },

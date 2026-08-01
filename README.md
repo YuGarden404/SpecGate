@@ -12,6 +12,7 @@ SpecGate 是 AI4SE 期末项目的 A 类选题：一个从零实现、以 GitHub
 - 项目讲解稿：`docs/PROJECT_WALKTHROUGH.md`
 - Lab 9-12 对齐说明：`docs/AI4SE_Lab_9_12_Alignment.md`
 - SpecGate Skill：`skills/specgate-static-html-harness/SKILL.md`
+- GitHub Release：[v0.1.1](https://github.com/YuGarden404/SpecGate/releases/tag/v0.1.1)
 - 公开静态评审首页：`https://yugarden404.github.io/SpecGate/`
 - 知识图谱 demo：`https://yugarden404.github.io/SpecGate/demo/`
 - 运行报告：`https://yugarden404.github.io/SpecGate/report/`
@@ -89,6 +90,35 @@ cd .\SpecGate
 - Web 默认使用 MockLLM；API key、Base URL、Model 完整后，新 run 可使用 OpenAI-compatible 真实模型，失败不会降级到 Mock。
 - Docker 本地与 GitHub Actions 构建、GitLab `unit-test`、GitHub Pages 和公开静态评审入口；NJU GitLab unit-test-only Pipeline 已通过；GHCR 公开镜像已完成匿名拉取验证；公网交互式 Web 后端未部署。
 
+## v0.2.0 Agent Runtime 架构
+
+v0.2.0 将原先集中在 Runner 中的执行职责拆分为稳定协议。CLI、评测器和 Web worker 通过同一个 `build_agent_service()` composition root 组装运行时；`AgentRunner` 仅作为旧调用方式的兼容 facade，不再承载工具或角色循环。
+
+```mermaid
+flowchart LR
+    Entry["CLI / Eval / Web"] --> Service["AgentService"]
+    Service --> Loop["AgentLoop"]
+    Loop --> Pipeline["ActionPipeline"]
+    Pipeline --> Hook["HookBus"]
+    Pipeline --> Governance["GovernanceEngine"]
+    Pipeline --> Tool["ToolRegistry -> ToolRuntime -> ToolHandler"]
+    Pipeline --> Gate["Deterministic Gate"]
+    Service --> Skill["SkillRegistry / SkillSession"]
+    Workflow["SequentialReviewWorkflow"] --> Service
+    Workflow --> Artifact["Typed AgentArtifact"]
+```
+
+边界约定：
+
+- `AgentLoop` 只负责上下文、模型调用、动作解析、状态推进和停止决策，不判断具体工具、Skill 或角色。
+- Tool 链负责参数模型、注册、分派与受控 Handler；工作区文件操作继续经过 `WorkspacePolicy`、snapshot 和 `workspace_fs`。
+- Hook 是细粒度、可插拔的生命周期观察与附加限制；平台权限、路径和审批属于不可绕过的 Governance。
+- Gate 保持独立，负责工具执行后的确定性结果检查以及完成前的最终验收，不降级为普通 Hook。
+- Skill 使用显式根目录、Catalog、Instructions、Resources 和每次 AgentRun 独立的 `SkillSession` 渐进加载。
+- `AgentService` 统一运行身份、状态、预算、取消、挂起和审批恢复；Workflow 只编排 AgentDefinition，并通过版本化 Artifact 传递结果。
+
+真实模型凭据只通过操作系统 keyring 或当前进程环境变量提供。仓库、用户配置和运行 Trace 均不保存 API key；SpecGate 不读取或写入 `.env`，也不提供 `.env` 凭据回退流程。
+
 ## 安装
 
 要求 Python 3.11 或更高版本。在刚克隆的仓库根目录执行：
@@ -146,6 +176,30 @@ skills/                       SpecGate 可复用 Skill
 ```powershell
 python -m unittest discover -s tests
 ```
+
+## 课程机制演示
+
+下面三项使用 MockLLM、临时工作区和确定性本地规则，不需要真实模型、网络或私有凭据：
+
+1. Guardrail 阻止危险动作：
+
+   ```powershell
+   python -m unittest -v tests.test_runner.RunnerTests.test_guardrail_block_is_recorded
+   ```
+
+2. Gate 失败反馈改变下一步动作：
+
+   ```powershell
+   python -m unittest -v tests.test_runner.RunnerTests.test_gate_failure_feedback_changes_next_action
+   ```
+
+3. HITL 审批挂起与恢复：
+
+   ```powershell
+   python -m unittest -v tests.test_cli.CliTests.test_cli_pending_approve_resume_applies_queue_and_writes_report
+   ```
+
+三项均应显示 `OK`。它们分别证明确定性安全拦截、Gate 反馈闭环，以及审批决定后重新校验并继续同一 Agent Runtime。
 
 ## 真实模型运行
 
@@ -575,7 +629,9 @@ NJU GitLab Pipeline #312781 在 `main@5fd86fa` 上运行：`unit-test` 已通过
 | `fastapi` | `>=0.115,<1` | Web API 框架 | MIT | https://github.com/fastapi/fastapi |
 | `httpx` | `>=0.27,<1` | 测试与 HTTP 客户端支持 | BSD-3-Clause | https://github.com/encode/httpx |
 | `keyring` | `>=25,<26` | CLI 操作系统凭据存储 | MIT | https://github.com/jaraco/keyring |
+| `pydantic` | `>=2.10,<3` | Agent Runtime 工具参数与结果模型 | MIT | https://github.com/pydantic/pydantic |
 | `python-multipart` | `>=0.0.9,<1` | Web 表单与文件上传解析 | Apache-2.0 | https://github.com/Kludex/python-multipart |
+| `PyYAML` | `>=6,<7` | Skill 元数据安全解析 | MIT | https://github.com/yaml/pyyaml |
 | `uvicorn` | `>=0.30,<1` | ASGI Web 服务器 | BSD-3-Clause | https://github.com/Kludex/uvicorn |
 
 该表只覆盖直接运行时依赖，完整传递依赖以安装环境中的包元数据为准。

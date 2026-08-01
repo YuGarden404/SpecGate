@@ -1,5 +1,7 @@
 import unittest
 
+from specgate.agent_service import AgentBudget, AgentDefinition, AgentRunResult
+from specgate.artifacts import PlanArtifact
 from specgate.isolation import (
     RoleContext,
     RoleExecution,
@@ -8,6 +10,9 @@ from specgate.isolation import (
     build_role_contexts,
     filter_state_for_role,
 )
+from specgate.metrics import RunMetrics
+from specgate.multi_agent import build_agent_definitions
+from specgate.run_state import Observation, RunState, RunStatus
 
 
 class IsolationTests(unittest.TestCase):
@@ -42,6 +47,79 @@ class IsolationTests(unittest.TestCase):
 
 
 class IsolationCapabilityTests(unittest.TestCase):
+    def test_agent_definitions_are_the_only_role_capability_source(self):
+        definitions = build_agent_definitions(context_chars=1200)
+        by_id = {definition.agent_id: definition for definition in definitions}
+
+        self.assertEqual(
+            by_id["planner"].capability_set,
+            frozenset({"read_file", "list_files", "finish"}),
+        )
+        self.assertEqual(
+            by_id["reviewer"].capability_set,
+            frozenset({"read_file", "list_files", "finish"}),
+        )
+        self.assertEqual(
+            by_id["implementer"].capability_set,
+            frozenset(
+                {
+                    "read_file",
+                    "list_files",
+                    "write_file",
+                    "replace_file",
+                    "finish",
+                }
+            ),
+        )
+        self.assertTrue(all(item.budget.max_steps == 1 for item in definitions))
+
+    def test_workflow_evidence_uses_definition_and_typed_agent_result(self):
+        definition = AgentDefinition(
+            agent_id="planner",
+            instructions="Plan the task.",
+            capability_set=frozenset({"read_file", "finish"}),
+            context_policy="multi-agent-isolated",
+            budget=AgentBudget(1, 1000, 0),
+        )
+        artifact = PlanArtifact(
+            producer_run_id="planner-run",
+            steps=("Inspect",),
+        )
+        run = AgentRunResult(
+            run_id="planner-run",
+            agent_run_id="planner-planner-run",
+            parent_run_id=None,
+            definition_id="planner",
+            effective_capabilities=definition.capability_set,
+            active_skills=(),
+            state=RunState(
+                "planner-run",
+                status=RunStatus.COMPLETED,
+                step=1,
+                observations=(
+                    Observation(
+                        "tool_result",
+                        {"action": "finish", "ok": True, "blocked": False},
+                    ),
+                    Observation(
+                        "agent_artifact",
+                        artifact.model_dump(mode="json"),
+                    ),
+                ),
+                metrics=RunMetrics(context_chars_max=321),
+            ),
+        )
+
+        evidence = build_isolation_evidence(
+            strategy="multi-agent-isolated",
+            definitions=(definition,),
+            agent_runs=(run,),
+        )
+
+        self.assertEqual(evidence["roles"][0]["allowed_actions"], ["finish", "read_file"])
+        self.assertEqual(evidence["executions"][0]["summary"], "Inspect")
+        self.assertEqual(evidence["executions"][0]["context_chars"], 321)
+
     def test_planner_and_reviewer_cannot_write_files(self):
         self.assertFalse(action_allowed_for_role("planner", "write_file"))
         self.assertFalse(action_allowed_for_role("planner", "replace_file"))

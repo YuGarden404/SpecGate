@@ -4,12 +4,32 @@ from specgate.metrics import (
     PermissionDecision,
     RunMetrics,
     TrustSummary,
+    add_run_metrics,
     build_trust_summary,
     classify_rule_family,
 )
 
 
 class MetricsTests(unittest.TestCase):
+    def test_add_run_metrics_adds_integer_counters(self):
+        current = RunMetrics(steps=2, llm_calls=3, tool_calls=4)
+        delta = RunMetrics(steps=5, llm_calls=7, tool_calls=11)
+
+        combined = add_run_metrics(current, delta)
+
+        self.assertEqual(combined.steps, 7)
+        self.assertEqual(combined.llm_calls, 10)
+        self.assertEqual(combined.tool_calls, 15)
+
+    def test_add_run_metrics_combines_boolean_fields_with_or(self):
+        current = RunMetrics(role_cycle_limit_reached=True)
+        delta = RunMetrics(max_steps_reached=True)
+
+        combined = add_run_metrics(current, delta)
+
+        self.assertTrue(combined.role_cycle_limit_reached)
+        self.assertTrue(combined.max_steps_reached)
+
     def test_classifies_rule_family_from_reason(self):
         self.assertEqual(classify_rule_family("unknown action: run_command"), "action")
         self.assertEqual(classify_rule_family("unimplemented action: network"), "action")
@@ -37,6 +57,7 @@ class MetricsTests(unittest.TestCase):
                 "successful_tool_calls": 0,
                 "blocked_actions": 0,
                 "parse_errors": 0,
+                "tool_validation_failures": 0,
                 "gate_runs": 0,
                 "gate_failures": 0,
                 "finish_actions": 0,
@@ -75,6 +96,7 @@ class MetricsTests(unittest.TestCase):
             successful_tool_calls=4,
             blocked_actions=3,
             parse_errors=2,
+            tool_validation_failures=1,
             gate_runs=2,
             gate_failures=1,
             finish_actions=1,
@@ -113,6 +135,7 @@ class MetricsTests(unittest.TestCase):
                 "successful_tool_calls": 4,
                 "blocked_actions": 3,
                 "parse_errors": 2,
+                "tool_validation_failures": 1,
                 "gate_runs": 2,
                 "gate_failures": 1,
                 "finish_actions": 1,
@@ -282,6 +305,15 @@ class MetricsTests(unittest.TestCase):
 
         self.assertEqual(trust.status, "warning")
         self.assertIn("parse_errors_present", trust.reasons)
+
+    def test_warning_summary_when_tool_validation_fails(self):
+        trust = build_trust_summary(
+            True,
+            RunMetrics(finish_actions=1, tool_validation_failures=1),
+        )
+
+        self.assertEqual(trust.status, "warning")
+        self.assertIn("tool_validation_failures_present", trust.reasons)
 
     def test_warning_summary_when_gate_passes_with_pending_approval(self):
         metrics = RunMetrics(steps=2, finish_actions=1, approval_requests=1, pending_approvals=1)

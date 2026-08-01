@@ -14,6 +14,10 @@ from specgate.approvals import (
     read_approval_queue_if_present,
     read_existing_approval_queue,
 )
+from specgate.agent_service import (
+    build_agent_service,
+    build_resumable_agent_service,
+)
 from specgate.benchmark import summarize_benchmark
 from specgate.config import WorkspaceConfig, load_workspace_config
 from specgate.context import VALID_CONTEXT_STRATEGIES
@@ -24,7 +28,9 @@ from specgate.gate import run_html_gate
 from specgate.llm import LLMProviderError, MockLLM, OpenAICompatibleLLM
 from specgate.policy import WorkspacePolicy
 from specgate.report import generate_report
-from specgate.runner import AgentRunner
+from specgate.run_control import CallbackCancellationToken
+from specgate.runner import AgentRunner, configure_agent_service
+from specgate.runtime_config import RunRuntimeConfig
 from specgate.trace import redact
 from specgate.user_config import (
     UserConfigError,
@@ -38,6 +44,39 @@ from specgate.workspace_fs import WorkspacePathError
 
 
 GOVERNANCE_PROFILES = ("strict", "demo", "review")
+
+
+def _build_cli_runner(
+    root: Path,
+    llm,
+    policy: WorkspacePolicy,
+    *,
+    max_steps: int,
+    governance_profile: str | None,
+    governance_config: GovernanceConfig,
+    reset_audit: bool = True,
+) -> AgentRunner:
+    profile = governance_profile or governance_config.profile
+    runtime_config = RunRuntimeConfig(
+        governance_profile=profile,
+        context_strategy="baseline",
+        max_steps=max_steps,
+    )
+    service_args = {
+        "root": root,
+        "llm": llm,
+        "policy": policy,
+        "audit_dir": root / "runs" / "latest",
+        "approval_queue_file": approval_queue_path(root),
+        "runtime_config": runtime_config,
+        "cancel_token": CallbackCancellationToken(lambda: None),
+    }
+    if reset_audit:
+        service = build_agent_service(**service_args)
+    else:
+        service = build_resumable_agent_service(**service_args)
+    configure_agent_service(service, governance_config=governance_config)
+    return AgentRunner(agent_service=service)
 
 
 def _fixed_demo_html() -> str:
@@ -525,7 +564,7 @@ def run_mock_demo(root: Path, governance_profile: str | None = None) -> int:
         ]
     )
     settings = _load_workspace_settings(root)
-    result = AgentRunner(
+    result = _build_cli_runner(
         root,
         llm,
         settings.policy,
@@ -558,13 +597,14 @@ def run_resume(root: Path, max_steps: int, governance_profile: str | None = None
         ]
     )
     try:
-        result = AgentRunner(
+        result = _build_cli_runner(
             root,
             llm,
             settings.policy,
             max_steps=max_steps,
             governance_profile=governance_profile,
             governance_config=settings.governance,
+            reset_audit=False,
         ).resume_from_approval()
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         print(f"could not resume: {redact(str(exc))}")
@@ -614,7 +654,7 @@ def run_real_llm(
     )
     settings = _load_workspace_settings(root)
     try:
-        result = AgentRunner(
+        result = _build_cli_runner(
             root,
             llm,
             settings.policy,

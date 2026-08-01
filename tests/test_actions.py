@@ -51,6 +51,14 @@ class ActionParserTests(unittest.TestCase):
 
         self.assertIn("unsupported schema_version", str(ctx.exception))
 
+    def test_tool_specific_validation_is_left_to_the_tool_definition(self):
+        raw = '{"schema_version":"1","action":"write_file","args":{"path":"index.html"}}'
+
+        action = parse_action(raw)
+
+        self.assertEqual(action.action, "write_file")
+        self.assertEqual(action.args, {"path": "index.html"})
+
 
 if __name__ == "__main__":
     unittest.main()

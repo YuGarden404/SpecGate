@@ -71,6 +71,26 @@ V011_RELEASE_FACTS = (
     "sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f",
     "9cf909341cd1a5feb8ed2b244ce31f0495016c4c",
 )
+V020_TASK_COMMITS = {
+    1: ("61add59",),
+    2: ("b3526b9",),
+    3: ("02394f7",),
+    4: ("7f6bffb",),
+    5: ("9aff214",),
+    6: ("556a5cb", "8677fd5"),
+    7: ("b2a030d",),
+    8: ("a179788",),
+    9: ("6f823e9",),
+    10: ("999e909",),
+    11: ("cffc6e9",),
+    12: ("78634b9",),
+    13: ("d8ae083",),
+    14: ("04743ec",),
+    15: ("89bd035",),
+    16: ("575af44",),
+    17: ("47f639a",),
+    18: ("674a1f4",),
+}
 KEY_EVIDENCE_PATHS = (
     "src/specgate/runner.py",
     "src/specgate/actions.py",
@@ -105,6 +125,39 @@ def read_text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def markdown_section_text(text: str, heading: str) -> str:
+    heading_match = re.fullmatch(r"(?P<marks>#{1,6})\s+.+", heading)
+    if heading_match is None:
+        raise AssertionError(f"invalid Markdown heading: {heading!r}")
+
+    matches = list(re.finditer(rf"^{re.escape(heading)}\s*$", text, re.MULTILINE))
+    if len(matches) != 1:
+        raise AssertionError(
+            f"expected one {heading!r} section, found {len(matches)}"
+        )
+
+    level = len(heading_match.group("marks"))
+    section_tail = text[matches[0].end() :]
+    next_heading = re.search(rf"^#{{1,{level}}}\s+", section_tail, re.MULTILINE)
+    section = section_tail[: next_heading.start()] if next_heading else section_tail
+    return section.strip("\r\n")
+
+
+def task_line_has_commits(
+    section: str,
+    task: int,
+    commits: tuple[str, ...],
+) -> bool:
+    task_lines = re.findall(
+        rf"^- (?:\[x\] )?Task {task}:.*$",
+        section,
+        re.MULTILINE,
+    )
+    return len(task_lines) == 1 and all(
+        f"`{commit}`" in task_lines[0] for commit in commits
+    )
+
+
 def extract_teacher_verified_run(snapshot: str) -> tuple[str, str, float]:
     pattern = re.compile(
         r"^- 教师已验证源码基线（2026-07-19）：`"
@@ -123,6 +176,40 @@ def extract_teacher_verified_run(snapshot: str) -> tuple[str, str, float]:
     if duration <= 0:
         raise AssertionError("teacher-verified run duration must be positive")
     return match.group(0), match.group("result"), duration
+
+
+class EvidenceHelperTests(unittest.TestCase):
+    def test_markdown_section_stops_at_next_same_level_heading(self):
+        document = """# Previous
+old
+# Current
+kept
+## Child
+also kept
+# Next
+must not leak
+"""
+
+        self.assertEqual(
+            markdown_section_text(document, "# Current"),
+            "kept\n## Child\nalso kept",
+        )
+
+    def test_task_commit_binding_requires_commits_on_the_task_line(self):
+        self.assertTrue(
+            task_line_has_commits(
+                "- Task 3: stop semantics (`abc1234`).",
+                3,
+                ("abc1234",),
+            )
+        )
+        self.assertFalse(
+            task_line_has_commits(
+                "- Task 3: stop semantics.\n- Unrelated: `abc1234`.",
+                3,
+                ("abc1234",),
+            )
+        )
 
 
 def validate_png_bytes(raw: bytes) -> tuple[int, int]:
@@ -221,15 +308,10 @@ def validate_png_bytes(raw: bytes) -> tuple[int, int]:
 
 def markdown_section(relative: str, heading: str) -> str:
     text = read_text(relative)
-    heading_matches = list(re.finditer(rf"^{re.escape(heading)}\s*$", text, re.MULTILINE))
-    if len(heading_matches) != 1:
-        raise AssertionError(
-            f"expected one {heading!r} section in {relative}, found {len(heading_matches)}"
-        )
-
-    section_tail = text[heading_matches[0].end() :]
-    next_heading = re.search(r"^##\s+", section_tail, re.MULTILINE)
-    return section_tail[: next_heading.start()] if next_heading else section_tail
+    try:
+        return markdown_section_text(text, heading)
+    except AssertionError as exc:
+        raise AssertionError(f"{exc} in {relative}") from exc
 
 
 def markdown_image_targets_in_section(relative: str, heading: str) -> tuple[str, ...]:
@@ -1118,10 +1200,12 @@ class FinalEvidenceTests(unittest.TestCase):
             "fastapi": ("MIT", "https://github.com/fastapi/fastapi"),
             "httpx": ("BSD-3-Clause", "https://github.com/encode/httpx"),
             "keyring": ("MIT", "https://github.com/jaraco/keyring"),
+            "pydantic": ("MIT", "https://github.com/pydantic/pydantic"),
             "python-multipart": (
                 "Apache-2.0",
                 "https://github.com/Kludex/python-multipart",
             ),
+            "pyyaml": ("MIT", "https://github.com/yaml/pyyaml"),
             "uvicorn": (
                 "BSD-3-Clause",
                 "https://github.com/Kludex/uvicorn",
@@ -1455,6 +1539,161 @@ class FinalEvidenceTests(unittest.TestCase):
         ):
             with self.subTest(stale=stale):
                 self.assertNotIn(stale, current_release_sections)
+
+    def test_v020_task_commits_are_traceable(self):
+        plan = read_text("PLAN.md")
+        agent_log = read_text("AGENT_LOG.md")
+        plan_heading = "# 2026-07-31 v0.2.0 Agent Runtime 分层迁移"
+        log_heading = "## 2026-07-31 v0.2.0 Agent Runtime 分层迁移"
+        self.assertEqual(plan.count(plan_heading), 1)
+        self.assertEqual(agent_log.count(log_heading), 1)
+        plan_section = markdown_section_text(plan, plan_heading)
+        log_section = markdown_section_text(agent_log, log_heading)
+
+        for task, commits in V020_TASK_COMMITS.items():
+            with self.subTest(task=task, document="PLAN"):
+                self.assertTrue(
+                    task_line_has_commits(plan_section, task, commits),
+                    f"PLAN Task {task} must bind its commit on the same line",
+                )
+            with self.subTest(task=task, document="AGENT_LOG"):
+                self.assertTrue(
+                    task_line_has_commits(log_section, task, commits),
+                    f"AGENT_LOG Task {task} must bind its commit on the same line",
+                )
+
+        for commit in ("72b791a", "fcd8026"):
+            with self.subTest(design_commit=commit):
+                self.assertIn(f"`{commit}`", plan_section)
+                self.assertIn(f"`{commit}`", log_section)
+
+    def test_v020_agent_log_records_required_process_fields(self):
+        agent_log = read_text("AGENT_LOG.md")
+        runtime_heading = "## 2026-07-31 v0.2.0 Agent Runtime 分层迁移"
+        runtime_section = markdown_section_text(agent_log, runtime_heading)
+
+        process_heading = "### Task 级过程证据"
+        self.assertIn(process_heading, runtime_section)
+        process_section = markdown_section_text(runtime_section, process_heading)
+        self.assertIn(
+            "| 时间 / Task | Superpowers 技能 | 关键 prompt / context | "
+            "Subagent 输出或 commit | 人工干预 | 学到的教训 |",
+            process_section,
+        )
+        task_rows = [
+            line
+            for line in process_section.splitlines()
+            if line.startswith("| 2026-07-31 / Task ")
+        ]
+        self.assertEqual(len(task_rows), len(V020_TASK_COMMITS))
+        for task, commits in V020_TASK_COMMITS.items():
+            matching = [
+                row
+                for row in task_rows
+                if row.startswith(f"| 2026-07-31 / Task {task} |")
+            ]
+            with self.subTest(task=task):
+                self.assertEqual(len(matching), 1)
+                cells = [cell.strip() for cell in matching[0].strip("|").split("|")]
+                self.assertEqual(len(cells), 6)
+                self.assertTrue(all(cells))
+                for commit in commits:
+                    self.assertIn(f"`{commit}`", matching[0])
+
+        sync_heading = "### 课程合规证据同步"
+        self.assertIn(sync_heading, runtime_section)
+        sync_section = markdown_section_text(runtime_section, sync_heading)
+        for commit in ("f702284", "a226737", "99d25da", "5cea20b"):
+            with self.subTest(sync_commit=commit):
+                self.assertIn(f"`{commit}`", sync_section)
+        for result in (
+            "Ran 31 tests in 0.354s",
+            "Ran 3 tests in 2.324s",
+            "Ran 1133 tests in 488.628s",
+            "OK (skipped=29)",
+        ):
+            with self.subTest(sync_result=result):
+                self.assertIn(result, sync_section)
+
+        review_heading = "### 合规审查收尾验证"
+        self.assertIn(review_heading, runtime_section)
+        review_section = markdown_section_text(runtime_section, review_heading)
+        for result in (
+            "Ran 34 tests in 0.325s",
+            "Ran 3 tests in 2.037s",
+            "Ran 1136 tests in 415.001s",
+            "OK (skipped=29)",
+        ):
+            with self.subTest(review_result=result):
+                self.assertIn(result, review_section)
+
+    def test_v020_architecture_and_process_docs_are_current(self):
+        spec = read_text("SPEC.md")
+        process = read_text("SPEC_PROCESS.md")
+
+        for phrase in (
+            "# 2026-07-31 v0.2.0 Agent Runtime 补充规格",
+            "AgentLoop",
+            "ActionPipeline",
+            "ToolDefinition -> ToolRegistry -> ToolRuntime -> ToolHandler",
+            "HookBus",
+            "GovernanceEngine",
+            "Gate 保持独立",
+            "SkillRegistry",
+            "AgentService",
+            "AgentArtifact",
+            "SequentialReviewWorkflow",
+        ):
+            with self.subTest(document="SPEC", phrase=phrase):
+                self.assertIn(phrase, spec)
+
+        for stale in (
+            "公开容器 registry 仍待后续 GHCR 分发阶段",
+            "公开容器 registry 待后续独立阶段完成",
+            "镜像默认启动交互式 WebUI",
+        ):
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, spec)
+
+        for phrase in (
+            "镜像默认启动 `specgate` CLI",
+            "`--entrypoint specgate-web`",
+        ):
+            with self.subTest(document="SPEC", distribution=phrase):
+                self.assertIn(phrase, spec)
+
+        for phrase in (
+            "## 2026-07-31 v0.2.0 Agent Runtime 过程记录",
+            "能力矩阵",
+            "外部 LLM 评审",
+            "Gate 与 Hook",
+            "Subagent-Driven",
+            "Inline Execution",
+            "所有 Git 操作由用户执行",
+            "不采用 `.env`",
+        ):
+            with self.subTest(document="SPEC_PROCESS", phrase=phrase):
+                self.assertIn(phrase, process)
+
+    def test_readme_exposes_release_and_deterministic_mechanism_demos(self):
+        readme = read_text("README.md")
+        release_url = "https://github.com/YuGarden404/SpecGate/releases/tag/v0.1.1"
+        self.assertIn(release_url, readme)
+
+        heading = "## 课程机制演示"
+        self.assertEqual(readme.count(heading), 1)
+        section = readme.split(heading, 1)[1].split("\n## ", 1)[0]
+        for phrase in (
+            "Guardrail 阻止危险动作",
+            "Gate 失败反馈改变下一步动作",
+            "HITL 审批挂起与恢复",
+            "tests.test_runner.RunnerTests.test_guardrail_block_is_recorded",
+            "tests.test_runner.RunnerTests.test_gate_failure_feedback_changes_next_action",
+            "tests.test_cli.CliTests.test_cli_pending_approve_resume_applies_queue_and_writes_report",
+            "不需要真实模型、网络或私有凭据",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, section)
 
     def test_matrix_references_existing_implementation_and_test_paths(self):
         matrix = MATRIX.read_text(encoding="utf-8")

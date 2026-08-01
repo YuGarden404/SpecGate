@@ -32,7 +32,7 @@
         "schema_version": "1",
         "action": "finish",
         "args": {
-          "summary": "Plan: write valid Search Details HTML."
+          "summary": "{\"schema_version\":\"1\",\"producer_run_id\":\"fixture\",\"references\":[],\"kind\":\"plan\",\"steps\":[\"Write valid Search Details HTML.\"]}"
         }
       },
       {
@@ -47,7 +47,7 @@
         "schema_version": "1",
         "action": "finish",
         "args": {
-          "summary": "Review: Search Details page passes."
+          "summary": "{\"schema_version\":\"1\",\"producer_run_id\":\"fixture\",\"references\":[],\"kind\":\"review\",\"accepted\":true,\"repair_required\":false,\"issues\":[]}"
         }
       }
     ]

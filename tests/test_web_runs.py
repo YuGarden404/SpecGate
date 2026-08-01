@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import inspect
 import json
 import sqlite3
 import tempfile
@@ -76,6 +77,9 @@ class ScriptedChatTransport:
 
 
 class WebRunsTests(unittest.TestCase):
+    def test_web_entry_point_uses_unified_agent_service_builder(self):
+        self.assertIn("build_agent_service(", inspect.getsource(web_runs))
+
     ownership_marker = ".specgate-run-owner.json"
 
     def make_context(self):
