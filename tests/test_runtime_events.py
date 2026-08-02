@@ -11,7 +11,7 @@ from specgate.runtime_events import (
     TraceRunEventSink,
 )
 from specgate.trace import TraceStore
-from shell_support import FailingSink, RecordingSink
+from tests.shell_support import FailingSink, RecordingSink
 
 
 class RuntimeEventTests(unittest.TestCase):

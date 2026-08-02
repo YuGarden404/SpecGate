@@ -25,7 +25,7 @@ from specgate.approvals import ActionRisk, ApprovalQueue, GovernanceConfig, Pend
 from specgate.trace import TraceStore
 from specgate.tools import ToolResult
 from specgate.workspace_fs import WorkspacePathError
-from shell_support import RecordingSink
+from tests.shell_support import RecordingSink
 
 
 BROKEN_HTML = "<html><head><title>x</title></head><body></body></html>"

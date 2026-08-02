@@ -1,6 +1,6 @@
 import unittest
 
-from shell_support import ScriptedTerminal
+from tests.shell_support import ScriptedTerminal
 from specgate.runtime_events import RunEventContext
 from specgate.shell_renderer import ShellEventRenderer, render_event_line
 

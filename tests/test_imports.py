@@ -1,3 +1,4 @@
+import importlib
 from pathlib import Path
 import unittest
 
@@ -14,6 +15,20 @@ class ImportTests(unittest.TestCase):
         )
 
         self.assertIn('version = "0.3.0"', pyproject)
+
+    def test_shell_test_modules_import_as_package_modules(self):
+        for module_name in (
+            "tests.test_action_pipeline",
+            "tests.test_interactive_shell",
+            "tests.test_runner",
+            "tests.test_runtime_events",
+            "tests.test_shell_config",
+            "tests.test_shell_e2e",
+            "tests.test_shell_renderer",
+            "tests.test_shell_runtime",
+        ):
+            with self.subTest(module=module_name):
+                importlib.import_module(module_name)
 
 
 class RuntimeDependencyTests(unittest.TestCase):

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from shell_support import ScriptedTerminal
+from tests.shell_support import ScriptedTerminal
 from specgate.credential_store import CredentialStoreUnavailable
 from specgate.shell_config import ShellConfigController
 from specgate.user_config import (

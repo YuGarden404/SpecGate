@@ -12,13 +12,13 @@
 - 阶段 A 发布准备分支验证的同步后独立复跑：`Ran 954 tests in 417.907s`、`OK (skipped=27)`，退出码 0。两次运行数量和跳过数一致。
 - Stage B 证据同步分支验证（2026-07-19）：`Ran 955 tests in 404.159s`、`OK (skipped=27)`，退出码 0。新增 1 项是 `v0.1.1` 发布事实与历史保留契约；该分支结果不替换教师基线。
 - 教师源码基线的远端证据：PR #27 合并后的 CI #67、Pages #38 与 NJU Pipeline #313088 / job #596503 均成功。
-- 当前源码与发布证据：PR #30 合并后的 `main@f95e08c`（完整 commit `f95e08caae0ddf4dfee23912fe87153a8afb8dff`）由 [CI #73 / run 30678670251](https://github.com/YuGarden404/SpecGate/actions/runs/30678670251)、[Pages #41 / run 30678670260](https://github.com/YuGarden404/SpecGate/actions/runs/30678670260) 与 [GHCR #3 / run 30679259458](https://github.com/YuGarden404/SpecGate/actions/runs/30679259458) 覆盖并通过。
+- 当前源码与发布证据：PR #32 合并后的 `main@e3ec022`（完整 commit `e3ec02236f6e65ccce2c49ab444ba0676db5a7ed`）由 [CI #77 / run 30728989649](https://github.com/YuGarden404/SpecGate/actions/runs/30728989649)、[Pages #43 / run 30728989651](https://github.com/YuGarden404/SpecGate/actions/runs/30728989651) 与 [GHCR #4 / run 30729409707](https://github.com/YuGarden404/SpecGate/actions/runs/30729409707) 覆盖并通过。
 - 教师真实模型 smoke：使用 `glm-5.2` 完成 `passed=True, steps=2`，最终 Gate 通过、trust 为 `trusted`、`parse_errors=0`，随后已清除系统 keyring 凭据。
-- 当前发布：[v0.2.0](https://github.com/YuGarden404/SpecGate/releases/tag/v0.2.0) 已发布，`ghcr.io/yugarden404/specgate:0.2.0` 的 RepoDigest 为 `sha256:fe982389424bf56ca723febf8e8a590de5f7e34d5a5ca7964f7b812f257e3050`，OCI revision 为 `f95e08caae0ddf4dfee23912fe87153a8afb8dff`。匿名拉取、CLI help、Mock Demo、Web help 均退出码 0，显式校验输出 `RepoDigest verified` 与 `OCI revision verified`，临时 Docker 配置已清理。当前证据为 `docs/evidence/github-actions-ghcr-v0.2.0-success.png`、`docs/evidence/github-actions-ghcr-v0.2.0-summary.png` 与 `docs/evidence/github-release-v0.2.0.png`。
-- 历史发布：`v0.1.1` 的 PR #28、`main@9cf9093`、[CI #69 / run 29678498485](https://github.com/YuGarden404/SpecGate/actions/runs/29678498485)、[Pages #39 / run 29678498457](https://github.com/YuGarden404/SpecGate/actions/runs/29678498457)、[GHCR #2 / run 29679264248](https://github.com/YuGarden404/SpecGate/actions/runs/29679264248)、NJU Pipeline #313118 / job #596642 原样保留；annotated tag object 为 `adb74ca0586b20e3cb5e32767bb409370e70c2ef`，peeled commit 与 OCI revision 为 `9cf909341cd1a5feb8ed2b244ce31f0495016c4c`，镜像 `ghcr.io/yugarden404/specgate:0.1.1` 的 digest 为 `sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f`，证据为 `docs/evidence/github-actions-ghcr-v0.1.1-success.png`、`docs/evidence/github-package-specgate-v0.1.1-public.png`、`docs/evidence/ghcr-v0.1.1-anonymous-smoke.png`。`v0.1.0` 的 `main@44b236f`、PR #25、[CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245)、[Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246)、[GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933)、digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 与五张证据图也继续保留。
+- 当前发布：[v0.3.0](https://github.com/YuGarden404/SpecGate/releases/tag/v0.3.0) 已发布，`ghcr.io/yugarden404/specgate:0.3.0` 的 RepoDigest 为 `sha256:baa5c61bd791f2b5e266e98fbd17affb1e9e6fd6dab6e829279a05d934f021e0`，OCI revision 为 `e3ec02236f6e65ccce2c49ab444ba0676db5a7ed`，OCI version 为 `0.3.0`。匿名拉取、CLI help、Mock Demo、Web help 均退出码 0，显式校验输出 `RepoDigest verified`、`OCI revision verified` 与 `OCI version verified`。第一次尝试时 Docker Desktop 尚未运行，启动后重试通过；临时 Docker 配置已清理。当前证据为 `docs/evidence/github-actions-ghcr-v0.3.0-success.png`、`docs/evidence/github-actions-ghcr-v0.3.0-summary.png` 与 `docs/evidence/github-release-v0.3.0.png`。
+- 历史发布：`v0.2.0` 继续绑定 PR #30、`main@f95e08c`、CI #73 / run 30678670251、Pages #41 / run 30678670260、GHCR #3 / run 30679259458、Release <https://github.com/YuGarden404/SpecGate/releases/tag/v0.2.0>、镜像 `ghcr.io/yugarden404/specgate:0.2.0`、RepoDigest `sha256:fe982389424bf56ca723febf8e8a590de5f7e34d5a5ca7964f7b812f257e3050` 与 OCI revision `f95e08caae0ddf4dfee23912fe87153a8afb8dff`，三张证据图保持不变。`v0.1.1` 的 PR #28、`main@9cf9093`、[CI #69 / run 29678498485](https://github.com/YuGarden404/SpecGate/actions/runs/29678498485)、[Pages #39 / run 29678498457](https://github.com/YuGarden404/SpecGate/actions/runs/29678498457)、[GHCR #2 / run 29679264248](https://github.com/YuGarden404/SpecGate/actions/runs/29679264248)、NJU Pipeline #313118 / job #596642 原样保留；annotated tag object 为 `adb74ca0586b20e3cb5e32767bb409370e70c2ef`，peeled commit 与 OCI revision 为 `9cf909341cd1a5feb8ed2b244ce31f0495016c4c`，镜像 `ghcr.io/yugarden404/specgate:0.1.1` 的 digest 为 `sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f`，证据为 `docs/evidence/github-actions-ghcr-v0.1.1-success.png`、`docs/evidence/github-package-specgate-v0.1.1-public.png`、`docs/evidence/ghcr-v0.1.1-anonymous-smoke.png`。`v0.1.0` 的 `main@44b236f`、PR #25、[CI #63](https://github.com/YuGarden404/SpecGate/actions/runs/29649068245)、[Pages #36](https://github.com/YuGarden404/SpecGate/actions/runs/29649068246)、[GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933)、digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 与五张证据图也继续保留。
 - 执行归属历史：PR #18、PR #19、PR #20 均已记录主开发 Agent 为 OpenAI Codex，并区分人工参与与 Mock/Fake/Stub 自动测试边界。
 - 历史远端证据：PR #20 的 `main@c39d101`、[CI #53](https://github.com/YuGarden404/SpecGate/actions/runs/29476693238)、[Pages #31](https://github.com/YuGarden404/SpecGate/actions/runs/29476693242) 与 `docs/evidence/github-actions-pr20-final.png` 继续保留，完整 job 映射见第 6 节。
-- 双仓库边界：SpecGate 是 CLI-first Harness；GitHub 开发主仓库保留 commit、PR、完整 GitHub Actions、Docker 构建与 Pages 证据，[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 已公开并只保留 `unit-test`。历史 Pipeline #312806、教师源码基线 Pipeline #313088 / job #596503 与 `v0.1.1` 的 Pipeline #313118 / job #596642 均保留。两次 `git push nju main:main` 均因 `OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0` 失败，因此 `v0.2.0` 的 NJU `main` 与标签仍待重试，不能声明已经同步。
+- 双仓库边界：SpecGate 是 CLI-first Harness；GitHub 开发主仓库保留 commit、PR、完整 GitHub Actions、Docker 构建与 Pages 证据，[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 已公开并只保留 `unit-test`。历史 Pipeline #312806、教师源码基线 Pipeline #313088 / job #596503 与 `v0.1.1` 的 Pipeline #313118 / job #596642 均保留。两次 `git push nju main:main` 均因 `OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0` 失败，因此当前 `main` 与后续版本标签仍待重试，不能声明已经同步。
 - 公开入口：<https://yugarden404.github.io/SpecGate/>。
 
 ## 3. 课程交付物
@@ -33,7 +33,7 @@
 | 本地交互式 WebUI | 已完成 | `Dockerfile`、Web 运行时与确定性测试 | Docker/本地启动与确定性测试 |
 | 公网交互式 Web 后端 | 待完成 | 后续独立部署阶段 | 任务 6 人工门禁之后另行部署与核验 |
 | Docker 本地与 CI 构建 | 已完成 | `Dockerfile`、`.github/workflows/ci.yml` | Docker build/smoke 与 GitHub Actions |
-| 公开容器 registry | 已完成 | `ghcr.io/yugarden404/specgate:0.2.0`、Public Package 与三张 `v0.2.0` 证据图 | 匿名 pull、CLI help、Mock Demo、Web help、RepoDigest 与 OCI revision 均已核验 |
+| 公开容器 registry | 已完成 | `ghcr.io/yugarden404/specgate:0.3.0`、Public Package 与三张 `v0.3.0` 证据图 | 匿名 pull、CLI help、Mock Demo、Web help、RepoDigest、OCI revision 与 OCI version 均已核验 |
 | 学生反思 | 已由学生确认 | `REFLECTION.md`、`docs/REFLECTION_FACT_CHECK.md` | PR #17 与学生确认记录 |
 
 ## 4. 核心机制
@@ -150,7 +150,19 @@ Pages 详情截图显示总状态 `Success`，`build-pages` 和 `deploy-pages` �
 
 ![v0.2.0 GitHub Release](evidence/github-release-v0.2.0.png)
 
-Release 页面绑定 `v0.2.0@f95e08c`，提供源码 zip/tar.gz 与 Docker 下载命令。三张当前图的仓库路径为 `docs/evidence/github-actions-ghcr-v0.2.0-success.png`、`docs/evidence/github-actions-ghcr-v0.2.0-summary.png`、`docs/evidence/github-release-v0.2.0.png`，均未见 API key、token 或密码。
+Release 页面绑定 `v0.2.0@f95e08c`，提供源码 zip/tar.gz 与 Docker 下载命令。三张 v0.2.0 历史图的仓库路径为 `docs/evidence/github-actions-ghcr-v0.2.0-success.png`、`docs/evidence/github-actions-ghcr-v0.2.0-summary.png`、`docs/evidence/github-release-v0.2.0.png`，均未见 API key、token 或密码。
+
+![v0.3.0 GHCR workflow 成功](evidence/github-actions-ghcr-v0.3.0-success.png)
+
+[GHCR #4](https://github.com/YuGarden404/SpecGate/actions/runs/30729409707) 由 `v0.3.0` 触发，绑定 `main@e3ec022`，`publish-ghcr` 成功。
+
+![v0.3.0 GHCR 摘要与 digest](evidence/github-actions-ghcr-v0.3.0-summary.png)
+
+工作流摘要显示镜像 `ghcr.io/yugarden404/specgate:0.3.0` 与 RepoDigest `sha256:baa5c61bd791f2b5e266e98fbd17affb1e9e6fd6dab6e829279a05d934f021e0`。
+
+![v0.3.0 GitHub Release](evidence/github-release-v0.3.0.png)
+
+Release 页面绑定 `v0.3.0@e3ec022`，标记为 Latest，并提供源码 zip/tar.gz。三张 v0.3.0 图均未见 API key、token 或密码。
 
 ![NJU GitLab 初始 Pipeline 失败](evidence/gitlab-pipeline-initial-failure.png)
 
@@ -253,3 +265,14 @@ git diff --check
 - 截图：`docs/evidence/github-actions-ghcr-v0.2.0-success.png`、`docs/evidence/github-actions-ghcr-v0.2.0-summary.png`、`docs/evidence/github-release-v0.2.0.png`。
 - NJU GitLab：两次推送 `main` 均报 `OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0`。这是外部 TLS/网络阻塞；NJU `main` 与 `v0.2.0` 标签待重试，不影响已经完成的 GitHub Release 与 GHCR 发布。
 - 历史与部署边界：`v0.1.1`、`ghcr.io/yugarden404/specgate:0.1.1`、`v0.1.0`、`ghcr.io/yugarden404/specgate:0.1.0` 和 digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 继续作为历史保留。公网交互式 Web 后端未部署；发布镜像不等于部署服务。
+
+## 12. 2026-08-02 v0.3.0 发布证据
+
+- 源码与标签：PR #32 合并到 `main@e3ec022`，完整 commit、`v0.3.0` peeled commit 与 OCI revision 均为 `e3ec02236f6e65ccce2c49ab444ba0676db5a7ed`；Release URL 为 <https://github.com/YuGarden404/SpecGate/releases/tag/v0.3.0>。
+- GitHub Actions：[CI #77 / run 30728989649](https://github.com/YuGarden404/SpecGate/actions/runs/30728989649)、[Pages #43 / run 30728989651](https://github.com/YuGarden404/SpecGate/actions/runs/30728989651) 与 [GHCR #4 / run 30729409707](https://github.com/YuGarden404/SpecGate/actions/runs/30729409707) 均成功。
+- 镜像：`ghcr.io/yugarden404/specgate:0.3.0`；RepoDigest 为 `sha256:baa5c61bd791f2b5e266e98fbd17affb1e9e6fd6dab6e829279a05d934f021e0`；OCI revision 为 `e3ec02236f6e65ccce2c49ab444ba0676db5a7ed`；OCI version 为 `0.3.0`。
+- 匿名验证：第一次 pull 因 Docker Desktop Linux Engine 未运行而失败；启动后在一次性空配置中完成匿名拉取、CLI help、Mock Demo 与 Web help，并得到 `RepoDigest verified`、`OCI revision verified`、`OCI version verified`，临时配置已清理。
+- 截图：`docs/evidence/github-actions-ghcr-v0.3.0-success.png`、`docs/evidence/github-actions-ghcr-v0.3.0-summary.png`、`docs/evidence/github-release-v0.3.0.png`。
+- NJU GitLab：既有外部 TLS/网络错误继续阻塞同步，当前 `main` 与版本标签待重试，不影响已经完成的 GitHub Release 与 GHCR 发布。
+- 本分支验证：最终证据得到 `Ran 37 tests in 0.530s`、`OK`；三项确定性机制得到 `Ran 3 tests in 2.718s`、`OK`；测试模块包导入回归得到 `Ran 1 test in 0.654s`、`OK`；`python -m compileall -q src tests` 退出码 0；完整离线套件得到 `Ran 1225 tests in 497.257s`、`OK (skipped=29)`，退出码 0。
+- 历史与部署边界：v0.2.0/v0.1.x 全部事实和截图继续保留。公网交互式 Web 后端未部署；发布镜像不等于部署服务。

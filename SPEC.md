@@ -565,3 +565,9 @@ v0.3.0 在既有 Agent Runtime 外增加本地交互式 Shell。裸执行 `specg
 跨进程终端历史只保存白名单中的非敏感斜杠命令。自然语言请求、工作区路径、Base URL、模型名、API key 和配置向导输入不写入历史文件；密钥输入继续使用无历史的隐藏输入会话。
 
 工作区写入继续经过 `WorkspacePolicy`、Governance、快照校验、文件锁和原子替换。Shell 不增加直接文件写入、任意系统命令或绕过审批的快捷路径。v0.3.0 的交付路径仍是 GitHub Release；本地交互式 Shell 不要求公网部署，且不能把静态 Pages 或公开镜像写成公网交互式 Web 后端。
+
+# 2026-08-02 v0.3.0 发布证据补充规格
+
+PR #32 已合并到 `main@e3ec022`，完整 commit、`v0.3.0` tag peeled commit 与 OCI revision 均为 `e3ec02236f6e65ccce2c49ab444ba0676db5a7ed`。[v0.3.0 Release](https://github.com/YuGarden404/SpecGate/releases/tag/v0.3.0) 与公开 CLI 镜像 `ghcr.io/yugarden404/specgate:0.3.0` 已发布；RepoDigest 为 `sha256:baa5c61bd791f2b5e266e98fbd17affb1e9e6fd6dab6e829279a05d934f021e0`。
+
+匿名镜像验证覆盖 pull、CLI help、Mock Demo、Web help、RepoDigest、OCI revision 和 OCI version。`v0.2.0`、`v0.1.1` 与 `v0.1.0` 的发布事实继续作为历史保留。公网交互式 Web 后端未部署；公开 CLI 镜像和本地 Shell 均不代表公网常驻服务。
