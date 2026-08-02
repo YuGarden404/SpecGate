@@ -2337,3 +2337,22 @@ TDD 定向安全回归：`Ran 422 tests in 153.419s`、`OK (skipped=17)`。第�
 - [x] 历史保留：`v0.1.1`、`ghcr.io/yugarden404/specgate:0.1.1`、`v0.1.0`、`ghcr.io/yugarden404/specgate:0.1.0` 与历史 digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 保持可追溯。
 - [x] 完成门禁：发布证据 RED 后 GREEN；最终证据得到 `Ran 35 tests in 0.470s`、`OK`，三项机制演示得到 `Ran 3 tests in 2.627s`、`OK`，完整离线套件得到 `Ran 1137 tests in 365.513s`、`OK (skipped=29)`。`python -m compileall -q src tests` 退出码 0；当前事实扫描命中 `v0.2.0` 链，过期当前状态与行尾空白扫描无有效命中。
 - 部署边界：公网交互式 Web 后端未部署；GitHub Release 与公开 CLI 镜像已经满足本项目的发布交付路径，发布镜像不等于部署服务。
+
+# 2026-08-01 v0.3.0 交互式 Agent Shell
+
+- 目标：让裸 `specgate` 进入可持续使用的本地 Agent Shell，显示脱敏运行阶段，同时复用 v0.2.0 Agent Runtime、治理、审批、Gate、Trace、Memory 和工作区安全边界。
+- 设计：`e821131` 固化交互式 Shell 设计与实施计划；执行分支为 `v030-interactive-shell`，Git 操作由用户完成。
+- [x] Task 1：扩展 schema v2 用户配置并保持 keyring-only 边界（`6055c31`）。
+- [x] Task 2：增加 prompt-toolkit 终端适配器（`341c7b1`）。
+- [x] Task 3：注入按请求生命周期存在的 Shell 上下文（`e374fc5`）。
+- [x] Task 4：向 Shell 暴露结构化、脱敏的 Runtime Event（`babc7ba`）。
+- [x] Task 5：渲染 Context、Governance、Tool、Gate、Approval 和终止状态（`7967a7a`）。
+- [x] Task 6：增加按请求隔离的 Shell Runtime 与证据归档（`71a8b24`）。
+- [x] Task 7：实现首次设置和核心配置命令（`6bdc9f7`）。
+- [x] Task 8：实现 Mock 确认、审批、取消和退出语义（`b3c8e09`）。
+- [x] Task 9：裸 CLI 进入 Shell，原有子命令保持兼容（`9fcfbf7`）。
+- [x] Task 10：增加完整 Mock Shell、安全泄漏和证据契约回归（`9d759df`）。
+- [x] Task 11：同步 `0.3.0` 版本、用户文档和完整验证；最终自动结果为 `Ran 1223 tests in 330.657s`、`OK (skipped=29)`。Windows TTY 已验证 Mock、配置恢复，以及 `deepseek-v4-flash` 的连接、真实自然语言 Action、运行中取消、两次人工审批恢复、Gate 修复和最终产物；DeepSeek V4 Pro 兼容性未确认。
+- [x] Task 12：修正首次 TTY smoke 发现的 Shell-only keyring、man 风格帮助、pending-only 审批说明与安全跨进程历史；RED/GREEN、聚焦兼容回归与完整离线套件已完成，第二轮 Windows TTY 已逐项验证，最终复跑结果为 `Ran 1223 tests in 330.657s`、`OK (skipped=29)`。
+- 安全边界：交互式 Shell 的 API key 只来自 OS keyring且忽略环境变量；显式 CLI/CI/Docker 保持环境变量兼容；Mock 不处理任意需求；每条请求创建独立 AgentRun；终端和持久化证据统一脱敏；所有文件写入继续经过工作区锁、快照和原子发布。
+- 发布边界：当前公开 Release 仍是 `v0.2.0`。本分支不得声称已有 `v0.3.0` tag、Release、GHCR、PR、合并或 NJU 同步；本地 Shell 不要求公网部署。

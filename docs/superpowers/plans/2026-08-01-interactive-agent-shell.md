@@ -1296,7 +1296,7 @@ git commit -m "test: cover interactive shell end to end"
 - Modify: `PLAN.md`
 - Modify: `AGENT_LOG.md`
 
-- [ ] **Step 1: Write version assertions first**
+- [x] **Step 1: Write version assertions first**
 
 Change the expected values in `tests/test_imports.py` to `0.3.0`, then run:
 
@@ -1306,7 +1306,7 @@ python -m unittest discover -s tests -p "test_imports.py" -v
 
 Expected: FAIL because package and project metadata still report `0.2.0`.
 
-- [ ] **Step 2: Bump package metadata**
+- [x] **Step 2: Bump package metadata**
 
 Set both values exactly:
 
@@ -1318,13 +1318,13 @@ version = "0.3.0"
 __version__ = "0.3.0"
 ```
 
-- [ ] **Step 3: Document the actual interactive workflow**
+- [x] **Step 3: Document the actual interactive workflow**
 
-Add README examples for bare startup, first setup, Real/Mock switching, natural-language generation, `/help`, `/status`, `/workspace`, `/model`, `/url`, `/api-key`, `/verbose`, `/approvals`, `/clear`, and exit variants. State that Mock is fixed, Real mode may incur provider charges, credentials use keyring/environment precedence, and no public deployment is required.
+Add README examples for bare startup, first setup, Real/Mock switching, natural-language generation, `/help`, `/status`, `/workspace`, `/model`, `/url`, `/api-key`, `/verbose`, `/approvals`, `/clear`, and exit variants. State that Mock is fixed, Real mode may incur provider charges, interactive Shell credentials use keyring only, explicit noninteractive commands retain environment/keyring precedence, and no public deployment is required.
 
 Update `SPEC.md` and `SPEC_PROCESS.md` with the approved Shell boundary and decisions. Add v0.3.0 task rows to `PLAN.md` and chronological implementation/verification entries to `AGENT_LOG.md`; do not claim a Release, tag, PR, full-suite pass, or DeepSeek compatibility test until each has actually happened.
 
-- [ ] **Step 4: Run the full verification gate**
+- [x] **Step 4: Run the full verification gate**
 
 Run:
 
@@ -1336,7 +1336,7 @@ python -m unittest discover -s tests -v
 
 Expected: compileall exits 0; the complete suite reports `OK` with only documented skips. Record the exact test count and skip count in `AGENT_LOG.md` only after this output exists.
 
-- [ ] **Step 5: Perform the manual Windows Shell smoke test**
+- [x] **Step 5: Perform the manual Windows Shell smoke test**
 
 Run:
 
@@ -1357,6 +1357,8 @@ Verify in order:
 9. restarting restores non-secret settings without showing the API key.
 
 If a DeepSeek V4 Pro OpenAI-compatible endpoint and credential are available, repeat steps 3-7 with that model and capture: connection-test result, strict JSON Action success, one Gate repair, malformed-response handling, timeout handling, and cancellation. If credentials or the named model are unavailable, record the smoke test as not run; do not infer compatibility from another model.
+
+Observed: `deepseek-v4-flash` passed the connection test and completed a real natural-language run with cancellation, two inline approvals, one Gate repair, final Gate success, and archived HTML/Report/Trace evidence. `deepseek-v4-pro` returned `llm_address_not_public`, so no Pro compatibility claim is made.
 
 - [ ] **Step 6: User-executed Git checkpoint**
 
@@ -1388,3 +1390,89 @@ The implementation is ready for review only if:
 - existing explicit CLI commands retain v0.2.0 behavior.
 
 Release creation is a separate, user-approved operation after PR merge. Do not tag, push a Release, publish a container, or claim DeepSeek V4 Pro compatibility from implementation tests alone.
+
+### Task 12: Correct Manual Shell UX Findings
+
+**Files:**
+- Modify: `src/specgate/shell_config.py`
+- Modify: `src/specgate/shell_runtime.py`
+- Modify: `src/specgate/shell_terminal.py`
+- Modify: `src/specgate/interactive_shell.py`
+- Modify: `tests/test_shell_config.py`
+- Modify: `tests/test_shell_runtime.py`
+- Modify: `tests/test_shell_terminal.py`
+- Modify: `tests/test_interactive_shell.py`
+- Verify: `tests/test_cli.py`
+
+- [x] **Step 1: Write credential-boundary regression tests**
+
+Add tests proving that Mock status says API key is not required, Real setup prompts when keyring is empty even if `OPENAI_COMPATIBLE_API_KEY` exists, and Shell Runtime receives the keyring value rather than the environment value. Keep an explicit CLI test proving `specgate run` still accepts the environment credential.
+
+- [x] **Step 2: Run credential tests and verify RED**
+
+Run:
+
+```powershell
+python -m unittest discover -s tests -p "test_shell_config.py" -v
+python -m unittest discover -s tests -p "test_shell_runtime.py" -v
+python -m unittest discover -s tests -p "test_cli.py" -v
+```
+
+Expected: the new Shell-only assertions fail while the existing explicit CLI compatibility assertion passes.
+
+- [x] **Step 3: Implement Shell-only keyring credentials**
+
+Make `ShellConfigController` determine status directly from its injected keyring store, without consulting environment variables. In Mock status print `API key: not required in Mock mode`. Inject the same keyring-only reader into `SpecGateShellRuntime`; do not change `specgate.credentials.read_credential` or existing explicit CLI commands.
+
+- [x] **Step 4: Write help, approval explanation, and safe-history tests**
+
+Add tests proving `/help` documents command syntax and effects, empty `/approvals` explains pending-only semantics and both latest evidence paths, and two terminal instances share only safe slash-command history. Assert that natural-language requests, `/workspace` paths, `/url` values, `/model` values, configuration prompt answers, and secret input are absent from the history file.
+
+- [x] **Step 5: Run UX tests and verify RED**
+
+Run:
+
+```powershell
+python -m unittest discover -s tests -p "test_shell_terminal.py" -v
+python -m unittest discover -s tests -p "test_shell_config.py" -v
+python -m unittest discover -s tests -p "test_interactive_shell.py" -v
+```
+
+Expected: failures show the current one-line help, pending-only message without evidence guidance, and in-memory-only history.
+
+- [x] **Step 6: Implement detailed help, approval guidance, and filtered file history**
+
+Render a stable help table containing command, accepted arguments, and effect. Keep `/approvals` as an unresolved-approval queue; when empty, explain the semantics and print absolute `reports/latest/index.html` and `runs/latest/trace.jsonl` paths. Use a prompt-toolkit file history under the user configuration directory whose write filter accepts only non-sensitive known slash commands; keep secret prompts on `DummyHistory`.
+
+- [x] **Step 7: Run focused and compatibility verification**
+
+Run:
+
+```powershell
+python -m unittest discover -s tests -p "test_shell_*.py" -v
+python -m unittest discover -s tests -p "test_interactive_shell.py" -v
+python -m unittest discover -s tests -p "test_cli.py" -v
+python -m unittest discover -s tests -p "test_credentials.py" -v
+python -m compileall -q src tests
+git diff --check
+```
+
+Expected: all tests pass, compileall exits 0, and diff check reports no whitespace errors.
+
+- [x] **Step 8: Re-run full automatic verification**
+
+Run `python -m unittest discover -s tests -v` and record only the observed result.
+
+- [x] **Step 9: Re-run the manual Windows smoke**
+
+Repeat the user-reported sequence with an environment API key deliberately present. Confirm Mock ignores it, Real still asks for a keyring credential, help is self-describing, approval guidance is accurate, and only safe slash commands survive a restart. Record only observed results in `PLAN.md` and `AGENT_LOG.md`.
+
+Observed: all five UX boundaries passed in a real Windows PowerShell TTY. Cross-process history recalled `/exit`, `/mode mock`, and `/help`, and the history file contained only those commands. A `deepseek-v4-flash` connection test passed, while `deepseek-v4-pro` returned `llm_address_not_public`; no Pro compatibility claim is made.
+
+- [ ] **Step 10: User-executed Git checkpoint**
+
+```powershell
+git add -- src/specgate/shell_config.py src/specgate/shell_runtime.py src/specgate/shell_terminal.py src/specgate/interactive_shell.py tests/test_shell_config.py tests/test_shell_runtime.py tests/test_shell_terminal.py tests/test_interactive_shell.py docs/superpowers/specs/2026-08-01-interactive-agent-shell-design.md docs/superpowers/plans/2026-08-01-interactive-agent-shell.md
+git diff --cached --check
+git commit -m "fix: 完善交互式 Shell 人工验收体验"
+```

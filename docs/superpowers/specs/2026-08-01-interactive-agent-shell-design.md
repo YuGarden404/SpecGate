@@ -245,7 +245,9 @@ API key：
 - 不允许静默降级为明文存储；
 - 状态只显示 `securely configured` 或 `not configured`。
 
-现有环境变量凭据入口继续兼容并保持其当前优先级。通过 `/api-key` 输入的新密钥只写入 keyring；当环境变量正在覆盖 keyring 时，`/status` 只显示安全来源状态，不显示任何凭据内容。
+交互式 Shell 不读取环境变量凭据。Shell 只有在 OS keyring 中存在通过密文输入保存的凭据时，才把 API key 视为已配置；第一次进入 Real 模式且 keyring 为空时，必须先提示用户输入 API key。Mock 模式不检查、不显示也不使用 API key。通过 `/api-key` 输入的新密钥只写入 keyring，且 Shell 创建真实 LLM 与执行连接测试时也只读取同一个 keyring 来源。
+
+这一限制只属于交互式 Shell。`specgate run`、`eval`、`configure`、`credentials`、CI 和 Docker 等现有非交互入口继续兼容环境变量，并保持 v0.2.0 的环境变量优先于 keyring 行为。
 
 ## 12. 审批、取消与恢复
 
@@ -314,7 +316,8 @@ CLI 入口调整为：
 
 - 首次配置与完整配置快速启动；
 - Mock 确认和 Real 模式切换；
-- 当前进程历史不跨会话保存；
+- 跨进程历史只保存经过白名单过滤的安全斜杠命令；
+- 自然语言请求、工作区路径、URL、模型名、API key 及配置向导输入均不进入历史；
 - `Ctrl+C` 取消当前运行以及空闲退出；
 - 非 TTY、`NO_COLOR` 和 Renderer 降级。
 
@@ -356,6 +359,9 @@ DeepSeek V4 Pro 只有在支持 OpenAI-compatible `/chat/completions`，并能�
 8. API key 不出现在任何明文持久化文件和用户可见输出中。
 9. `exit`、`quit`、`q` 及大小写变体可正常退出。
 10. 现有完整测试套件和新增 Shell 测试全部通过，现有 CLI 子命令无回归。
+11. `/help` 以类似 man 页的格式说明每条命令的语法、参数和作用。
+12. `/approvals` 为空时明确说明它只列出未决审批，并指向当前工作区的 `reports/latest/index.html` 与 `runs/latest/trace.jsonl` 查看历史证据。
+13. 重启 Shell 后可通过上下键恢复安全斜杠命令，但不能恢复自然语言请求或敏感配置输入。
 
 ## 17. 实施约束
 

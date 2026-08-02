@@ -1168,3 +1168,29 @@
 - 截图归档：原始附件只做二进制复制，生成 `docs/evidence/github-actions-ghcr-v0.2.0-success.png`、`docs/evidence/github-actions-ghcr-v0.2.0-summary.png`、`docs/evidence/github-release-v0.2.0.png`。SHA-256 分别为 `049D08F7819B88E1ED64C18593DBDA8124B997EFB4FFBCFCB7D98BA8C3EA245F`、`A5FE0DC9DB9647D9EAB7D0C2BEECC1C97ACD36091135C7B4FFCFBCDF703B278F`、`1D4734D3348F24C8A98125D3460ADBF230EB5A0D0DC4F5080DF09C0246773E79`。
 - 历史与边界：`v0.1.1`、`ghcr.io/yugarden404/specgate:0.1.1`、`v0.1.0`、`ghcr.io/yugarden404/specgate:0.1.0` 和 digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 保留为历史。公网交互式 Web 后端未部署；发布公开 CLI 镜像不等于部署服务。
 - 完成门禁：发布证据契约先因缺少日期化章节 RED，文档与截图同步后 GREEN。最终证据得到 `Ran 35 tests in 0.470s`、`OK`；三项确定性机制得到 `Ran 3 tests in 2.627s`、`OK`；完整离线套件得到 `Ran 1137 tests in 365.513s`、`OK (skipped=29)`，退出码 0。`python -m compileall -q src tests` 退出码 0；当前事实扫描命中 `v0.2.0` Release/镜像/Actions/NJU 待重试边界，行尾空白扫描无命中。新增 1 项测试来自本阶段发布证据契约，不替换 PR 合并前的 `Ran 1136 tests in 296.092s` 结果。
+
+## 2026-08-01 v0.3.0 交互式 Agent Shell
+
+- 动机：用户指出原有 CLI 像黑盒，希望以 `SpecGate >>` 持续输入自然语言，并实时看到 Context、工具、治理、Gate、审批、完成状态和产物路径。
+- 决策：brainstorming 逐项采用用户选择的方案 A；最终确定裸入口、Mock/Real 首次设置、12 个 slash 命令、配置恢复、Mock 固定 Demo、Real 原始请求、显式连接测试、运行中取消和同会话审批。
+- 执行方式：用户选择 Inline Execution，不调用子 Agent；分支按用户要求从 `codex/v030-interactive-shell` 改为 `v030-interactive-shell`；所有 Git 操作由用户执行。
+- 设计与计划：`e821131`；配置 `6055c31`；终端 `341c7b1`；临时请求上下文 `e374fc5`；脱敏运行事件 `babc7ba`；事件渲染 `7967a7a`；Shell Runtime `71a8b24`；配置命令 `6bdc9f7`；可取消 REPL `b3c8e09`；裸 CLI `9fcfbf7`；端到端安全回归 `9d759df`。
+- TDD：版本测试先将期望改为 `0.3.0`，首次运行得到 3 项中 2 项预期失败，分别指向 `pyproject.toml` 与 `specgate.__version__`；更新两个版本值后得到 `Ran 3 tests in 0.004s`、`OK`。
+- Task 10 验证：Shell `Ran 37 tests in 9.621s`；凭据 `Ran 7 tests`；Workspace FS `Ran 96 tests in 0.973s`、`OK (skipped=7)`；最终证据 `Ran 36 tests in 0.517s`；LLM `Ran 8 tests in 0.010s`；LLM Transport `Ran 19 tests in 0.983s`；AgentLoop `Ran 13 tests in 0.007s`；Shell Runtime `Ran 7 tests in 5.179s`，全部退出码 0。
+- 问题与修复：Task 10 首次完整证据回归因 `prompt-toolkit` 已加入直接依赖但 README 许可证表和期望元数据未同步而失败；补充 BSD-3-Clause 与官方仓库后，完整证据 36 项通过。没有删除或放宽许可证测试。
+- 安全：端到端测试使用密钥哨兵，完整 Shell 生成 HTML、两份 Trace 和归档报告，并确认终端、配置、JSON 与 JSONL 不含密钥原文。Mock 不访问网络；交互式 Real 模式只从 OS keyring 读取凭据，现有显式 CLI/CI/Docker 仍兼容环境变量。
+- 完整自动门禁：`python -m compileall -q src tests` 退出码 0；`python -m unittest discover -s tests -v` 得到 `Ran 1219 tests in 317.224s`、`OK (skipped=29)`，退出码 0。
+- 当前边界：手工 Windows TTY smoke 尚未执行；DeepSeek V4 Pro 兼容性未测试；`v0.3.0` tag、Release、GHCR、PR、合并和 NJU 同步均未发生；公网交互式 Web 后端不属于本项目要求。
+
+### Task 12 首次 TTY smoke 反馈修正
+
+- 人工反馈：Mock 状态把环境变量误报为已配置 API key；Mock 切换 Real 因环境变量而跳过 keyring 录入；`/help` 只有名称；`/approvals` 未说明只列未决项；安全 slash 命令不能跨进程通过上下键恢复。
+- 用户裁定：采用方案 A。交互式 Shell 完全忽略环境变量凭据，Mock 不检查或使用 API key，Real keyring 为空时必须密文录入；`specgate run`、eval、configure、credentials、CI 和 Docker 的环境变量兼容性不变。
+- 根因：`ShellConfigController` 调用通用 `credential_status(..., environ=...)`，`SpecGateShellRuntime` 默认调用通用 `read_credential`；帮助和空审批各只有一行固定输出；终端使用 `InMemoryHistory`。
+- TDD RED/GREEN：新增配置、Runtime、审批说明和安全历史断言后，分别得到 4、1、1 项预期失败以及缺少 `SafeFileHistory` 的预期导入错误；最小实现后配置 `Ran 17 tests`、Runtime `Ran 8 tests`、Shell 控制 `Ran 17 tests`、终端 `Ran 8 tests`，均 `OK`。
+- 兼容回归：Shell 专项 `Ran 40 tests in 6.879s`、CLI `Ran 57 tests in 86.312s`、凭据 `Ran 7 tests`、用户配置 `Ran 13 tests`，均 `OK`；`compileall` 与 `git diff --check` 退出码 0。CLI 回归继续覆盖显式真实 run 的环境变量凭据路径。
+- 文档契约：最终证据新增 Shell-only keyring、man 风格帮助、pending-only 审批说明和安全历史四项断言，首次运行按预期失败；材料同步后得到 `Ran 36 tests in 0.469s`、`OK`。
+- 完整自动门禁：移除 `tests/test_shell_e2e.py` 中过期的 `ShellConfigController(environ=...)` 测试参数后，在全部人工验收事实写入后运行 `python -m unittest discover -s tests -v`，最终得到 `Ran 1223 tests in 330.657s`、`OK (skipped=29)`，退出码 0；`python -m compileall -q src tests` 与 `git diff --check` 退出码均为 0。
+- 第二轮 Windows TTY：在环境 API key 存在时，Mock 正确显示不需要凭据；切换 Real 仍密文请求 keyring；man 风格 `/help`、pending-only `/approvals` 与 latest report/trace 路径均符合设计。重启后方向键依次召回 `/exit`、`/mode mock`、`/help`，持久化文件只包含这些安全 slash 命令，没有保存工作区、自然语言请求、URL、模型或密钥。
+- 真实模型人工门禁：`https://njusehub.info/v1` 与 `deepseek-v4-flash` 连接测试通过。首个自然语言请求在活跃调用期间 `Ctrl+C` 后依次输出 Cancelling、Cancelled 并返回提示符；第二个请求在 `write_file` 与 `replace_file` 前分别产生 `approval-step-1` 和 `approval-step-4`，人工批准后在同一 run 中恢复，经历一次 Gate 失败反馈、修复和最终 Gate 通过，最终生成 HTML、Report 与 Trace。完成后的 `/approvals` 显示没有未决审批并指向 latest 证据。
+- 兼容性边界：`deepseek-v4-pro` 在 `/v1` 地址返回稳定错误 `llm_address_not_public`，没有完成 Action/Gate 流程，因此只记录 `deepseek-v4-flash` 的本次兼容性实测，不声称 DeepSeek V4 Pro 兼容。

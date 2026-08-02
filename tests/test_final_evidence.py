@@ -554,9 +554,18 @@ class FinalEvidenceTests(unittest.TestCase):
 
         self.assertIn("Task 10: Add End-To-End Mock And Security Regression Coverage", plan)
         self.assertIn("Task 11: Synchronize v0.3.0 Version And User Documentation", plan)
+        self.assertIn("Task 12: Correct Manual Shell UX Findings", plan)
         self.assertIn("specgate --help", readme)
         self.assertIn("真实模型凭据只通过操作系统 keyring", readme)
         self.assertIn("`run-mock-demo` 的任务内容是固定的", readme)
+        for phrase in (
+            "交互式 Shell 不读取环境变量凭据",
+            "`/help` 会显示每条命令的语法、参数和作用",
+            "`/approvals` 只列出尚未决定的审批",
+            "只跨进程保存经过白名单过滤的安全斜杠命令",
+        ):
+            with self.subTest(document="readme", phrase=phrase):
+                self.assertIn(phrase, readme)
 
     def test_supplemental_cold_start_records_required_evidence(self):
         self.assertTrue(COLD_START_AUDIT.is_file())
