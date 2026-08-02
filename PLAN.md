@@ -2356,3 +2356,20 @@ TDD 定向安全回归：`Ran 422 tests in 153.419s`、`OK (skipped=17)`。第�
 - [x] Task 12：修正首次 TTY smoke 发现的 Shell-only keyring、man 风格帮助、pending-only 审批说明与安全跨进程历史；RED/GREEN、聚焦兼容回归与完整离线套件已完成，第二轮 Windows TTY 已逐项验证，最终复跑结果为 `Ran 1223 tests in 330.657s`、`OK (skipped=29)`。
 - 安全边界：交互式 Shell 的 API key 只来自 OS keyring且忽略环境变量；显式 CLI/CI/Docker 保持环境变量兼容；Mock 不处理任意需求；每条请求创建独立 AgentRun；终端和持久化证据统一脱敏；所有文件写入继续经过工作区锁、快照和原子发布。
 - 发布边界：当前公开 Release 仍是 `v0.2.0`。本分支不得声称已有 `v0.3.0` tag、Release、GHCR、PR、合并或 NJU 同步；本地 Shell 不要求公网部署。
+
+# 2026-08-02 v0.3.0 发布证据同步
+
+- 目标：把 PR #32、`main@e3ec022`、`v0.3.0` Release、CI/Pages/GHCR、匿名镜像验证、不可变 digest/revision/version 和三张截图同步到当前交付材料；完整保留 v0.2.0/v0.1.x 历史，不修改生产 Runtime 或 `REFLECTION.md`。
+- 执行方式：在 `v030-release-evidence` worktree 按 Superpowers 计划、TDD 与复核流程执行；文档历史契约修复使用独立子 Agent 复核，所有 Git add、commit、push、PR、合并和清理继续由用户完成。
+- [x] 失败契约：新增 `test_v030_release_evidence_is_current_and_preserves_history` 后聚焦运行，因缺少 `# 2026-08-02 v0.3.0 发布证据同步` 得到预期 RED。
+- [x] 源码链：PR #32 合并后的 `main@e3ec022`，完整 commit、tag peeled commit 与 OCI revision 均为 `e3ec02236f6e65ccce2c49ab444ba0676db5a7ed`。
+- [x] Actions 链：[CI #77 / run 30728989649](https://github.com/YuGarden404/SpecGate/actions/runs/30728989649)、[Pages #43 / run 30728989651](https://github.com/YuGarden404/SpecGate/actions/runs/30728989651) 与 [GHCR #4 / run 30729409707](https://github.com/YuGarden404/SpecGate/actions/runs/30729409707) 均为 completed/success，并绑定同一 commit。
+- [x] Release 链：<https://github.com/YuGarden404/SpecGate/releases/tag/v0.3.0> 已发布且不是 draft/prerelease；镜像为 `ghcr.io/yugarden404/specgate:0.3.0`，RepoDigest 为 `sha256:baa5c61bd791f2b5e266e98fbd17affb1e9e6fd6dab6e829279a05d934f021e0`，OCI version 为 `0.3.0`。
+- [x] 匿名 smoke：一次性空 `DOCKER_CONFIG` 中匿名拉取、CLI help、Mock Demo 与 Web help 均退出码 0，显式检查得到 `RepoDigest verified`、`OCI revision verified` 与 `OCI version verified`，临时目录已清理。
+- [x] 问题记录：第一次匿名 pull 时 Docker Desktop Linux Engine 尚未运行；启动后重试通过。该问题不是镜像缺陷。
+- [x] 截图证据：`docs/evidence/github-actions-ghcr-v0.3.0-success.png`、`docs/evidence/github-actions-ghcr-v0.3.0-summary.png`、`docs/evidence/github-release-v0.3.0.png` 已原样归档并纳入 PNG 完整性契约。
+- [x] NJU GitLab 边界：既有两次 `OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0` 继续按外部 TLS/网络阻塞记录；当前 `main` 与版本标签待重试，不声称双仓库已同步。
+- [x] 历史保留：`v0.2.0`、`ghcr.io/yugarden404/specgate:0.2.0`、`v0.1.1`、`v0.1.0` 及其 run、digest、revision 和截图继续可追溯。
+- [x] 测试入口回归：精确机制命令首次暴露 8 个测试模块依赖 `discover -s tests` 临时导入路径；新增包导入契约先得到 8 个 `ModuleNotFoundError: No module named 'shell_support'`，统一改为 `tests.shell_support` 后得到 `Ran 1 test in 0.654s`、`OK`。
+- [x] 完成门禁：最终证据得到 `Ran 37 tests in 0.530s`、`OK`；三项确定性机制得到 `Ran 3 tests in 2.718s`、`OK`；`python -m compileall -q src tests` 退出码 0；完整离线套件得到 `Ran 1225 tests in 497.257s`、`OK (skipped=29)`，退出码 0。最终事实扫描和行尾空白检查在 Git handoff 前复跑。
+- 部署边界：公网交互式 Web 后端未部署；GitHub Release 与公开 CLI 镜像满足本项目发布交付路径，发布镜像不等于部署服务。

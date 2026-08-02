@@ -1194,3 +1194,18 @@
 - 第二轮 Windows TTY：在环境 API key 存在时，Mock 正确显示不需要凭据；切换 Real 仍密文请求 keyring；man 风格 `/help`、pending-only `/approvals` 与 latest report/trace 路径均符合设计。重启后方向键依次召回 `/exit`、`/mode mock`、`/help`，持久化文件只包含这些安全 slash 命令，没有保存工作区、自然语言请求、URL、模型或密钥。
 - 真实模型人工门禁：`https://njusehub.info/v1` 与 `deepseek-v4-flash` 连接测试通过。首个自然语言请求在活跃调用期间 `Ctrl+C` 后依次输出 Cancelling、Cancelled 并返回提示符；第二个请求在 `write_file` 与 `replace_file` 前分别产生 `approval-step-1` 和 `approval-step-4`，人工批准后在同一 run 中恢复，经历一次 Gate 失败反馈、修复和最终 Gate 通过，最终生成 HTML、Report 与 Trace。完成后的 `/approvals` 显示没有未决审批并指向 latest 证据。
 - 兼容性边界：`deepseek-v4-pro` 在 `/v1` 地址返回稳定错误 `llm_address_not_public`，没有完成 Action/Gate 流程，因此只记录 `deepseek-v4-flash` 的本次兼容性实测，不声称 DeepSeek V4 Pro 兼容。
+
+## 2026-08-02 v0.3.0 发布证据同步
+
+- 执行模式：在用户创建的 `v030-release-evidence` worktree 中按已批准计划、TDD 与复核流程执行；历史契约修复使用独立子 Agent，所有 Git 写操作继续由用户执行，生产 Runtime 与 `REFLECTION.md` 不在修改范围。
+- TDD RED：新增 `test_v030_release_evidence_is_current_and_preserves_history` 后立即聚焦运行，测试因 PLAN 缺少 `# 2026-08-02 v0.3.0 发布证据同步` 而失败，证明契约捕获的是当前发布材料缺口。
+- 源码与标签：PR #32 合并后的 `main@e3ec022`；完整 commit、`v0.3.0` peeled commit 与 OCI revision 均为 `e3ec02236f6e65ccce2c49ab444ba0676db5a7ed`。GitHub Release 为 <https://github.com/YuGarden404/SpecGate/releases/tag/v0.3.0>，公共 API 显示不是 draft 或 prerelease。
+- GitHub Actions：公共 API 只读核对 [CI #77 / run 30728989649](https://github.com/YuGarden404/SpecGate/actions/runs/30728989649)、[Pages #43 / run 30728989651](https://github.com/YuGarden404/SpecGate/actions/runs/30728989651) 与 [GHCR #4 / run 30729409707](https://github.com/YuGarden404/SpecGate/actions/runs/30729409707)，三者均为 completed/success 并绑定同一 commit。
+- 镜像：`ghcr.io/yugarden404/specgate:0.3.0`；RepoDigest 为 `sha256:baa5c61bd791f2b5e266e98fbd17affb1e9e6fd6dab6e829279a05d934f021e0`；OCI version 为 `0.3.0`。
+- 匿名 smoke：显式绑定 Docker Desktop Linux endpoint，并在一次性空 `DOCKER_CONFIG` 中完成匿名拉取、CLI help、Mock Demo 与 Web help，均退出码 0；JSON 检查输出 `RepoDigest verified`、`OCI revision verified` 与 `OCI version verified`，临时目录清理后不存在。
+- 问题记录：第一次匿名 pull 时 Docker Desktop Linux Engine 未运行，named pipe 不存在；用户启动 Docker Desktop 后完整重试通过。该失败属于本地 daemon 状态，不是镜像缺陷。
+- 截图归档：三个原始附件只做二进制复制，生成 `docs/evidence/github-actions-ghcr-v0.3.0-success.png`、`docs/evidence/github-actions-ghcr-v0.3.0-summary.png`、`docs/evidence/github-release-v0.3.0.png`。SHA-256 分别为 `40B6B068F4F8BF3FAF836F82BF037ABC8E356AA6E974C78724CB0420370FAEA2`、`F7D16CD96B52D3BF631708613D57092C5F579FD8250D573F8931F48CF3604382`、`A51F5D7F4ECBB3002E7AAA126F96AFAADCD3CBAE0598D515E23908E6A5715F6E`。
+- NJU GitLab：既有两次 `git push nju main:main` 均报 `OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0`，继续按外部 TLS/网络阻塞处理；当前 `main` 与版本标签待重试，不把 GitHub 成功替代为 GitLab 成功。
+- 历史与边界：v0.2.0/v0.1.x 的 Release、镜像、digest、revision 和截图完整保留。公网交互式 Web 后端未部署；发布公开 CLI 镜像不等于部署服务。
+- 测试入口问题：计划中的精确机制命令首次运行时，CLI 用例通过，但两个 Runner 用例因 `tests/test_runner.py` 的顶层 `from shell_support import RecordingSink` 报 `ModuleNotFoundError`。根因是该导入只在 `discover -s tests` 把 `tests/` 放入导入路径时成立。新增 8 个 Shell 测试模块的包导入回归，先观察到 8 个预期错误，再统一改为 `from tests.shell_support import ...`；回归得到 `Ran 1 test in 0.654s`、`OK`。
+- 完成门禁：最终证据得到 `Ran 37 tests in 0.530s`、`OK`；修复后的 guardrail、Gate 反馈与审批恢复三项确定性机制得到 `Ran 3 tests in 2.718s`、`OK`；`python -m compileall -q src tests` 退出码 0；完整离线套件得到 `Ran 1225 tests in 497.257s`、`OK (skipped=29)`，退出码 0。最终事实扫描、行尾空白检查与状态检查在 Git handoff 前复跑。
