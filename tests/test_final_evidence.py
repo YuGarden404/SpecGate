@@ -52,6 +52,9 @@ SCREENSHOTS = (
     ROOT / "docs" / "evidence" / "github-actions-ghcr-v0.2.0-success.png",
     ROOT / "docs" / "evidence" / "github-actions-ghcr-v0.2.0-summary.png",
     ROOT / "docs" / "evidence" / "github-release-v0.2.0.png",
+    ROOT / "docs" / "evidence" / "github-actions-ghcr-v0.3.0-success.png",
+    ROOT / "docs" / "evidence" / "github-actions-ghcr-v0.3.0-summary.png",
+    ROOT / "docs" / "evidence" / "github-release-v0.3.0.png",
 )
 V011_EVIDENCE_PATHS = (
     "docs/evidence/github-actions-ghcr-v0.1.1-success.png",
@@ -93,6 +96,27 @@ V020_RELEASE_FACTS = (
     "ghcr.io/yugarden404/specgate:0.2.0",
     "sha256:fe982389424bf56ca723febf8e8a590de5f7e34d5a5ca7964f7b812f257e3050",
     "f95e08caae0ddf4dfee23912fe87153a8afb8dff",
+)
+V030_EVIDENCE_PATHS = (
+    "docs/evidence/github-actions-ghcr-v0.3.0-success.png",
+    "docs/evidence/github-actions-ghcr-v0.3.0-summary.png",
+    "docs/evidence/github-release-v0.3.0.png",
+)
+V030_RELEASE_FACTS = (
+    "PR #32",
+    "main@e3ec022",
+    "CI #77",
+    "30728989649",
+    "Pages #43",
+    "30728989651",
+    "GHCR #4",
+    "30729409707",
+    "v0.3.0",
+    "https://github.com/YuGarden404/SpecGate/releases/tag/v0.3.0",
+    "ghcr.io/yugarden404/specgate:0.3.0",
+    "sha256:baa5c61bd791f2b5e266e98fbd17affb1e9e6fd6dab6e829279a05d934f021e0",
+    "e3ec02236f6e65ccce2c49ab444ba0676db5a7ed",
+    "OCI version",
 )
 V020_TASK_COMMITS = {
     1: ("61add59",),
@@ -1725,6 +1749,102 @@ class FinalEvidenceTests(unittest.TestCase):
             "当前源码发布基线是 PR #28",
             "当前发布基线为 PR #28",
             "双仓库 tags 同步均已完成",
+        ):
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, combined)
+
+    def test_v030_release_evidence_is_current_and_preserves_history(self):
+        plan = read_text("PLAN.md")
+        agent_log = read_text("AGENT_LOG.md")
+        plan_heading = "# 2026-08-02 v0.3.0 发布证据同步"
+        agent_log_heading = "## 2026-08-02 v0.3.0 发布证据同步"
+        self.assertIn(plan_heading, plan)
+        self.assertIn(agent_log_heading, agent_log)
+
+        current_materials = {
+            "README": read_text("README.md"),
+            "deployment": read_text("docs/DEPLOYMENT.md"),
+            "matrix": read_text("docs/FINAL_EVIDENCE_MATRIX.md"),
+            "checklist": read_text("docs/FINAL_SUBMISSION_CHECKLIST.md"),
+            "plan": plan.split(plan_heading, 1)[1],
+            "agent log": agent_log.split(agent_log_heading, 1)[1],
+        }
+        for document, section in current_materials.items():
+            for phrase in V030_RELEASE_FACTS:
+                with self.subTest(document=document, phrase=phrase):
+                    self.assertIn(phrase, section)
+            with self.subTest(document=document, boundary="public backend"):
+                self.assertIn("公网交互式 Web 后端未部署", section)
+
+        release_summary_materials = {
+            "SPEC": read_text("SPEC.md"),
+            "walkthrough": read_text("docs/PROJECT_WALKTHROUGH.md"),
+            "reflection facts": read_text("docs/REFLECTION_FACT_CHECK.md"),
+        }
+        for document, section in release_summary_materials.items():
+            for phrase in (
+                "PR #32",
+                "main@e3ec022",
+                "v0.3.0",
+                "https://github.com/YuGarden404/SpecGate/releases/tag/v0.3.0",
+                "ghcr.io/yugarden404/specgate:0.3.0",
+                V030_RELEASE_FACTS[-3],
+                V030_RELEASE_FACTS[-2],
+                "公网交互式 Web 后端未部署",
+            ):
+                with self.subTest(document=document, summary_fact=phrase):
+                    self.assertIn(phrase, section)
+
+        audit_materials = {
+            key: current_materials[key]
+            for key in ("matrix", "checklist", "plan", "agent log")
+        }
+        for document, section in audit_materials.items():
+            for phrase in (
+                "匿名拉取",
+                "RepoDigest verified",
+                "OCI revision verified",
+                "OCI version verified",
+                "Docker Desktop",
+                "NJU GitLab",
+                "待重试",
+            ):
+                with self.subTest(document=document, audit_fact=phrase):
+                    self.assertIn(phrase, section)
+            for relative in V030_EVIDENCE_PATHS:
+                with self.subTest(document=document, evidence=relative):
+                    self.assertIn(relative, section)
+
+        for relative in V030_EVIDENCE_PATHS:
+            with self.subTest(evidence_file=relative):
+                raw = (ROOT / relative).read_bytes()
+                width, height = validate_png_bytes(raw)
+                self.assertGreaterEqual(width, 1000)
+                self.assertGreaterEqual(height, 500)
+
+        combined = "\n".join(
+            (*current_materials.values(), *release_summary_materials.values())
+        )
+        for historical in (
+            "v0.2.0",
+            "ghcr.io/yugarden404/specgate:0.2.0",
+            V020_RELEASE_FACTS[-2],
+            "v0.1.1",
+            "ghcr.io/yugarden404/specgate:0.1.1",
+            V011_RELEASE_FACTS[-2],
+            "v0.1.0",
+            "ghcr.io/yugarden404/specgate:0.1.0",
+            "sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d",
+        ):
+            with self.subTest(history=historical):
+                self.assertIn(historical, combined)
+
+        for stale in (
+            "当前 [v0.2.0 Release]",
+            "当前源码发布基线是 PR #30",
+            "当前发布基线为 PR #30",
+            "当前发布：[v0.2.0]",
+            "当前公开 CLI 镜像 `ghcr.io/yugarden404/specgate:0.2.0`",
         ):
             with self.subTest(stale=stale):
                 self.assertNotIn(stale, combined)
