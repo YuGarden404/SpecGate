@@ -1,6 +1,8 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from shell_support import NeverCancelled, RecordingSink
 from specgate.llm import LLMProviderError, MockLLM
@@ -149,6 +151,36 @@ class ShellRuntimeTests(unittest.TestCase):
             self.assertFalse(root.joinpath("runs").exists())
             self.assertFalse(root.joinpath("reports").exists())
             self.assertFalse(root.joinpath("MEMORY.md").exists())
+
+    def test_default_shell_credential_reader_ignores_environment_value(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _workspace(root)
+            factory_calls = []
+
+            def factory(**kwargs):
+                factory_calls.append(kwargs)
+                return RecordingConnectionLLM()
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {"OPENAI_COMPATIBLE_API_KEY": "environment-secret"},
+                    clear=True,
+                ),
+                patch(
+                    "specgate.credential_store.keyring.get_password",
+                    return_value="keyring-secret",
+                ),
+            ):
+                runtime = SpecGateShellRuntime(
+                    lambda: _real_config(root),
+                    llm_factory=factory,
+                )
+                result = runtime.test_connection()
+
+            self.assertTrue(result.ok)
+            self.assertEqual(factory_calls[0]["api_key"], "keyring-secret")
 
     def test_connection_test_returns_only_stable_provider_error_code(self):
         with tempfile.TemporaryDirectory() as tmp:

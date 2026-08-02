@@ -1,8 +1,10 @@
 import io
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from specgate.shell_terminal import PromptToolkitTerminal, color_enabled
+from specgate.shell_terminal import PromptToolkitTerminal, SafeFileHistory, color_enabled
 
 
 class FakeSession:
@@ -15,6 +17,51 @@ class FakeSession:
 
 
 class ShellTerminalTests(unittest.TestCase):
+    def test_file_history_persists_only_safe_slash_commands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shell-history"
+            history = SafeFileHistory(path)
+            entries = (
+                "/help",
+                "/status",
+                "/mode mock",
+                "/verbose on",
+                "/approvals",
+                "/api-key",
+                "请根据 spec 生成 html",
+                "/workspace D:/private/project",
+                "/url https://api.example.com/v1",
+                "/model private-model",
+                "/api-key secret-on-command-line",
+                "sk-secret-prompt-value",
+            )
+            for entry in entries:
+                history.append_string(entry)
+
+            restored = list(SafeFileHistory(path).load_history_strings())
+            raw = path.read_text(encoding="utf-8")
+
+            self.assertEqual(
+                restored,
+                [
+                    "/api-key",
+                    "/approvals",
+                    "/verbose on",
+                    "/mode mock",
+                    "/status",
+                    "/help",
+                ],
+            )
+            for sensitive in (
+                "请根据 spec 生成 html",
+                "D:/private/project",
+                "api.example.com",
+                "private-model",
+                "secret-on-command-line",
+                "sk-secret-prompt-value",
+            ):
+                self.assertNotIn(sensitive, raw)
+
     def test_color_requires_tty_and_honors_no_color(self):
         self.assertTrue(color_enabled(is_tty=True, environ={}))
         self.assertFalse(color_enabled(is_tty=False, environ={}))

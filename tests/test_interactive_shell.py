@@ -319,6 +319,24 @@ class InteractiveShellTests(unittest.TestCase):
             self.assertIn("approval-1", terminal.output)
             self.assertIn("approval-2", terminal.output)
 
+    def test_empty_approvals_explains_pending_only_scope_and_evidence_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            terminal = ScriptedTerminal(["/approvals", "q"])
+            runtime = RecordingRuntime(root)
+
+            make_shell(terminal, runtime).run()
+
+            self.assertIn("only lists unresolved approvals", terminal.output)
+            self.assertIn(
+                str((root / "reports" / "latest" / "index.html").resolve()),
+                terminal.output,
+            )
+            self.assertIn(
+                str((root / "runs" / "latest" / "trace.jsonl").resolve()),
+                terminal.output,
+            )
+
     def test_approvals_command_updates_real_persisted_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, replace
 import os
 from pathlib import Path
@@ -8,7 +7,7 @@ from typing import Protocol
 from urllib.parse import urlsplit
 
 from specgate.credential_store import CredentialStore, KeyringCredentialStore
-from specgate.credentials import credential_status, set_credential
+from specgate.credentials import set_credential
 from specgate.llm_transport import LLMEndpointPolicy, LLMTransportError
 from specgate.shell_terminal import ShellTerminal
 from specgate.user_config import (
@@ -93,7 +92,6 @@ class ShellConfigController:
         *,
         path: Path | None = None,
         credential_store: CredentialStore | None = None,
-        environ: Mapping[str, str] | None = None,
     ) -> None:
         self._terminal = terminal
         self._path = user_config_path() if path is None else Path(path)
@@ -102,7 +100,6 @@ class ShellConfigController:
             if credential_store is None
             else credential_store
         )
-        self._environ = os.environ if environ is None else environ
         draft = load_user_shell_config_draft(path=self._path)
         try:
             loaded = load_user_shell_config(path=self._path)
@@ -222,16 +219,17 @@ class ShellConfigController:
                 else "not configured"
             )
         )
-        status = credential_status(
-            SUPPORTED_PROVIDER,
-            store=self._credential_store,
-            environ=self._environ,
-        )
-        self._terminal.write(
-            "API key: "
-            + ("securely configured" if status.configured else "not configured")
-        )
-        self._terminal.write(f"Credential source: {status.source}")
+        if config.mode == "mock":
+            self._terminal.write("API key: not required in Mock mode")
+        else:
+            configured = self._credential_configured()
+            self._terminal.write(
+                "API key: "
+                + ("securely configured" if configured else "not configured")
+            )
+            self._terminal.write(
+                f"Credential source: {'keyring' if configured else 'none'}"
+            )
         self._terminal.write(
             f"Workspace: {config.workspace or 'not configured'}"
         )
@@ -465,11 +463,7 @@ class ShellConfigController:
         return str(path)
 
     def _credential_configured(self) -> bool:
-        return credential_status(
-            SUPPORTED_PROVIDER,
-            store=self._credential_store,
-            environ=self._environ,
-        ).safe_to_run
+        return bool(self._credential_store.get(SUPPORTED_PROVIDER))
 
     def _real_complete(self, config: UserShellConfig) -> bool:
         if config.llm is None or not self._workspace_valid(config.workspace):
@@ -547,6 +541,27 @@ class ShellConfigController:
 
     def _print_help(self) -> None:
         self._terminal.write(
-            "Commands: /help /status /setup /mode /workspace /model /url "
-            "/api-key /verbose /approvals /clear /exit"
+            "NAME\n"
+            "  SpecGate interactive Agent Shell\n\n"
+            "SYNOPSIS\n"
+            "  /command [argument]\n"
+            "  <natural-language request>\n\n"
+            "COMMANDS\n"
+            "  /help                 Show this command reference.\n"
+            "  /status               Show mode, model, URL, credential state, "
+            "workspace, verbosity, and last run.\n"
+            "  /setup                Re-run the complete configuration wizard.\n"
+            "  /mode [mock|real]      Show or switch the LLM mode.\n"
+            "  /workspace [<path>]    Show or select an existing workspace directory.\n"
+            "  /model [<name>]        Show or change the Real LLM model.\n"
+            "  /url [<https-url>]     Show or change the Real LLM Base URL.\n"
+            "  /api-key               Securely replace the Real LLM keyring credential.\n"
+            "  /verbose [on|off]      Show or change detailed progress output.\n"
+            "  /approvals             List and decide unresolved approvals.\n"
+            "  /clear                 Clear the terminal display only.\n"
+            "  /exit                  Exit the Shell.\n\n"
+            "INPUT\n"
+            "  Any other non-empty text starts one Agent run in Real mode or offers "
+            "the fixed Demo in Mock mode.\n"
+            "  exit | quit | q         Exit aliases; matching is case-insensitive."
         )

@@ -12,7 +12,7 @@ import specgate.workspace_fs as workspace_fs
 from specgate.approvals import ApprovalStore, GovernanceConfig, approval_queue_path
 from specgate.config import WorkspaceConfig, load_workspace_config
 from specgate.context_lifecycle import CompressionConfig
-from specgate.credentials import read_credential
+from specgate.credential_store import KeyringCredentialStore
 from specgate.gate import GateResult
 from specgate.llm import LLMClient, LLMProviderError, MockLLM, OpenAICompatibleLLM
 from specgate.llm_transport import (
@@ -112,7 +112,7 @@ class SpecGateShellRuntime:
         llm_factory: Callable[..., LLMClient] | None = None,
         mock_llm_factory: Callable[[], LLMClient] | None = None,
         id_factory: Callable[[], str] | None = None,
-        credential_reader: Callable[[str], str | None] = read_credential,
+        credential_reader: Callable[[str], str | None] | None = None,
         max_steps: int = 5,
         timeout: float = 60.0,
     ) -> None:
@@ -124,7 +124,11 @@ class SpecGateShellRuntime:
         self._llm_factory = llm_factory
         self._mock_llm_factory = mock_llm_factory or (lambda: MockLLM([]))
         self._id_factory = id_factory or (lambda: uuid4().hex)
-        self._credential_reader = credential_reader
+        self._credential_reader = (
+            KeyringCredentialStore().get
+            if credential_reader is None
+            else credential_reader
+        )
         self._max_steps = max_steps
         self._timeout = timeout
         self._resolver: PublicDNSResolver | None = None

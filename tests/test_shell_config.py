@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -58,7 +59,6 @@ def make_controller(
     config: UserShellConfig | None,
     *,
     store=None,
-    environ=None,
 ):
     path = root / "user-config.json"
     if config is not None:
@@ -67,7 +67,6 @@ def make_controller(
         terminal,
         path=path,
         credential_store=store,
-        environ={} if environ is None else environ,
     )
 
 
@@ -314,6 +313,8 @@ class ShellConfigControllerTests(unittest.TestCase):
             )
             self.assertEqual(load_user_shell_config(path=root / "user-config.json"), config)
             self.assertFalse(any(call.secret for call in terminal.read_calls))
+            self.assertIn("API key: not required in Mock mode", terminal.output)
+            self.assertNotIn("Credential source:", terminal.output)
 
     def test_corrupt_model_recovers_other_fields_and_prompts_only_for_model(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -338,7 +339,6 @@ class ShellConfigControllerTests(unittest.TestCase):
                 terminal,
                 path=path,
                 credential_store=MemoryCredentialStore("secret"),
-                environ={},
             )
 
             config = controller.ensure_ready()
@@ -373,7 +373,6 @@ class ShellConfigControllerTests(unittest.TestCase):
                 terminal,
                 path=path,
                 credential_store=MemoryCredentialStore("secret"),
-                environ={},
             )
 
             config = controller.ensure_ready()
@@ -402,7 +401,7 @@ class ShellConfigControllerTests(unittest.TestCase):
             self.assertEqual(result.config, original)
             self.assertFalse(any(call.secret for call in terminal.read_calls))
 
-    def test_environment_credential_source_takes_precedence_in_status(self):
+    def test_real_status_ignores_environment_credential_and_uses_keyring(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             terminal = ScriptedTerminal([])
@@ -411,15 +410,45 @@ class ShellConfigControllerTests(unittest.TestCase):
                 terminal,
                 complete_real_config(root),
                 store=MemoryCredentialStore("keyring-secret"),
-                environ={"OPENAI_COMPATIBLE_API_KEY": "environment-secret"},
             )
 
-            result = controller.execute("status", None)
+            with patch.dict(
+                os.environ,
+                {"OPENAI_COMPATIBLE_API_KEY": "environment-secret"},
+                clear=True,
+            ):
+                result = controller.execute("status", None)
 
             self.assertTrue(result.ok)
-            self.assertIn("Credential source: environment", terminal.output)
+            self.assertIn("Credential source: keyring", terminal.output)
             self.assertNotIn("environment-secret", terminal.output)
             self.assertNotIn("keyring-secret", terminal.output)
+
+    def test_real_setup_requires_keyring_secret_even_when_environment_has_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            terminal = ScriptedTerminal(["new-keyring-secret"])
+            store = MemoryCredentialStore()
+            controller = make_controller(
+                root,
+                terminal,
+                complete_real_config(root),
+                store=store,
+            )
+
+            with patch.dict(
+                os.environ,
+                {"OPENAI_COMPATIBLE_API_KEY": "environment-secret"},
+                clear=True,
+            ):
+                config = controller.ensure_ready()
+
+            self.assertEqual(config.mode, "real")
+            self.assertEqual(store.existing, "new-keyring-secret")
+            self.assertEqual(len(terminal.read_calls), 1)
+            self.assertTrue(terminal.read_calls[0].secret)
+            self.assertNotIn("environment-secret", terminal.output)
+            self.assertNotIn("new-keyring-secret", terminal.output)
 
     def test_help_and_clear_are_local_and_unknown_command_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -433,7 +462,12 @@ class ShellConfigControllerTests(unittest.TestCase):
             )
 
             self.assertTrue(controller.execute("help", None).ok)
-            self.assertIn("/workspace", terminal.output)
+            self.assertIn("SYNOPSIS", terminal.output)
+            self.assertIn("/mode [mock|real]", terminal.output)
+            self.assertIn("/workspace [<path>]", terminal.output)
+            self.assertIn("/verbose [on|off]", terminal.output)
+            self.assertIn("List and decide unresolved approvals", terminal.output)
+            self.assertIn("exit | quit | q", terminal.output)
             self.assertTrue(controller.execute("clear", None).ok)
             self.assertEqual(terminal.clear_calls, 1)
             self.assertFalse(controller.execute("unknown", None).ok)

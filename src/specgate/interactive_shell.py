@@ -314,7 +314,21 @@ class InteractiveShell:
         try:
             approvals = tuple(self._pending_approvals())
             if not approvals:
-                self._terminal.write("No pending approvals.", style="muted")
+                root = self._runtime.workspace
+                self._terminal.write(
+                    "No pending approvals. /approvals only lists unresolved approvals.",
+                    style="muted",
+                )
+                self._terminal.write(
+                    f"Completed-run report: "
+                    f"{(root / 'reports' / 'latest' / 'index.html').resolve()}",
+                    style="muted",
+                )
+                self._terminal.write(
+                    f"Completed-run trace: "
+                    f"{(root / 'runs' / 'latest' / 'trace.jsonl').resolve()}",
+                    style="muted",
+                )
                 return
             for approval in approvals:
                 path = "" if approval.path is None else f" {approval.path}"

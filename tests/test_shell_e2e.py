@@ -56,7 +56,6 @@ def build_test_shell(
         terminal,
         path=config_path,
         credential_store=MemoryCredentialStore(credential),
-        environ={},
     )
     runtime = SpecGateShellRuntime(
         lambda: controller.config,

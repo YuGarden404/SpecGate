@@ -3,13 +3,16 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 from threading import Lock
 from typing import Protocol
 
 from prompt_toolkit import PromptSession, print_formatted_text
 from prompt_toolkit.formatted_text import ANSI
-from prompt_toolkit.history import DummyHistory, InMemoryHistory
+from prompt_toolkit.history import DummyHistory, FileHistory
 from prompt_toolkit.shortcuts import clear
+
+from specgate.user_config import user_config_path
 
 
 _ANSI_STYLES = {
@@ -27,6 +30,37 @@ _ANSI_STYLES = {
 }
 _ANSI_RESET = "\x1b[0m"
 SHELL_PROMPT = "SpecGate >> "
+_SAFE_NO_ARGUMENT_COMMANDS = frozenset(
+    {"help", "status", "setup", "api-key", "approvals", "clear", "exit"}
+)
+
+
+def _safe_history_command(value: str) -> bool:
+    stripped = value.strip()
+    if not stripped.startswith("/"):
+        return False
+    head, separator, tail = stripped[1:].partition(" ")
+    command = head.lower()
+    argument = tail.strip() if separator else ""
+    if command in _SAFE_NO_ARGUMENT_COMMANDS:
+        return not argument
+    if command == "mode":
+        return not argument or argument.lower() in {"mock", "real"}
+    if command == "verbose":
+        return not argument or argument.lower() in {"on", "off"}
+    return False
+
+
+class SafeFileHistory(FileHistory):
+    """Persist only non-sensitive local Shell commands."""
+
+    def store_string(self, string: str) -> None:
+        if _safe_history_command(string):
+            super().store_string(string)
+
+
+def shell_history_path() -> Path:
+    return user_config_path().with_name("shell_history")
 
 
 class ShellTerminal(Protocol):
@@ -57,11 +91,16 @@ class PromptToolkitTerminal:
         output=None,
         is_tty=None,
         environ=None,
+        history_path=None,
     ):
         values = os.environ if environ is None else environ
-        self._session = (
-            PromptSession(history=InMemoryHistory()) if session is None else session
-        )
+        if session is None:
+            persistent_path = (
+                shell_history_path() if history_path is None else Path(history_path)
+            )
+            persistent_path.parent.mkdir(parents=True, exist_ok=True)
+            session = PromptSession(history=SafeFileHistory(persistent_path))
+        self._session = session
         self._secret_session = (
             PromptSession(history=DummyHistory())
             if secret_session is None
