@@ -34,7 +34,7 @@ from specgate.tool_registry import (
 )
 from specgate.tool_runtime import ToolResult, ToolRuntime
 from specgate.validation import DefaultValidationPolicy
-from shell_support import RecordingSink
+from tests.shell_support import RecordingSink
 
 
 class EmptyArgs(BaseModel):

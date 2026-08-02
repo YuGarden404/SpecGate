@@ -5,7 +5,7 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 
-from shell_support import ScriptedTerminal
+from tests.shell_support import ScriptedTerminal
 from specgate.cli import _mock_demo_llm
 from specgate.interactive_shell import InteractiveShell
 from specgate.shell_config import ShellConfigController

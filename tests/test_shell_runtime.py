@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from shell_support import NeverCancelled, RecordingSink
+from tests.shell_support import NeverCancelled, RecordingSink
 from specgate.llm import LLMProviderError, MockLLM
 from specgate.shell_runtime import SpecGateShellRuntime
 from specgate.user_config import UserLLMConfig, UserShellConfig

@@ -3,7 +3,7 @@ import time
 import unittest
 from pathlib import Path
 
-from shell_support import ScriptedTerminal
+from tests.shell_support import ScriptedTerminal
 from specgate.approvals import ApprovalQueue, PendingApproval, approval_queue_path
 from specgate.interactive_shell import (
     MOCK_DEMO_REQUEST,
