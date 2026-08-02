@@ -17,7 +17,7 @@ SpecGate 是 AI4SE 期末项目的 A 类选题：一个从零实现、以 GitHub
 - 知识图谱 demo：`https://yugarden404.github.io/SpecGate/demo/`
 - 运行报告：`https://yugarden404.github.io/SpecGate/report/`
 
-仓库交付采用双仓库分工：GitHub 是开发主仓库，保留完整 commit、PR、GitHub Actions、Docker 构建与 Pages 证据；[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 是公开可克隆的课程镜像，运行 `unit-test` Pipeline。GitHub 平台的 PR/Actions 元数据不会迁移到 GitLab。当前 `main` 以及 `v0.2.0`、`v0.3.0` 标签因外部 TLS/网络错误尚未同步到 NJU，因此最新版本复现应使用 GitHub；NJU 恢复后再同步 `main` 与标签。
+仓库交付采用双仓库分工：GitHub 是开发主仓库，保留完整 commit、PR、GitHub Actions、Docker 构建与 Pages 证据；[NJU GitLab 课程镜像](https://git.nju.edu.cn/YuyuanLiang/specgate) 是公开可克隆的课程镜像，运行 `unit-test` Pipeline。GitHub 平台的 PR/Actions 元数据不会迁移到 GitLab。第一次同步阶段的两次 `git push nju main:main` 因 NJU Git 服务侧 TLS/网络问题失败；第二次重试阶段已成功把 `main@cae77a2`、`v0.2.0` 与 `v0.3.0` 同步到 NJU。
 
 当前 `v0.3.0` 课程检查从 GitHub 开发主仓库克隆：
 
@@ -26,7 +26,7 @@ git clone https://github.com/YuGarden404/SpecGate.git SpecGate
 cd .\SpecGate
 ```
 
-需要核对历史课程镜像时，可从 NJU GitLab 克隆；在当前 `main` 与版本标签同步完成前，该入口不代表最新版本：
+需要从课程镜像复现时，也可从已同步当前 `main` 与版本标签的 NJU GitLab 克隆；PR 与 GitHub Actions 元数据仍以 GitHub 开发主仓库为准：
 
 ```powershell
 git clone https://git.nju.edu.cn/YuyuanLiang/specgate.git SpecGate
@@ -637,7 +637,7 @@ docker run --rm `
   run /workspace
 ```
 
-当前 [v0.3.0 Release](https://github.com/YuGarden404/SpecGate/releases/tag/v0.3.0) 来自 PR #32 合并后的 `main@e3ec022`，完整 commit、tag peeled commit 与 OCI revision 均为 `e3ec02236f6e65ccce2c49ab444ba0676db5a7ed`。[CI #77 / run 30728989649](https://github.com/YuGarden404/SpecGate/actions/runs/30728989649)、[Pages #43 / run 30728989651](https://github.com/YuGarden404/SpecGate/actions/runs/30728989651) 与 [GHCR #4 / run 30729409707](https://github.com/YuGarden404/SpecGate/actions/runs/30729409707) 均成功。镜像 `ghcr.io/yugarden404/specgate:0.3.0` 的 RepoDigest 为 `sha256:baa5c61bd791f2b5e266e98fbd17affb1e9e6fd6dab6e829279a05d934f021e0`，OCI version 为 `0.3.0`。一次性空 Docker 配置中的匿名拉取、CLI help、Mock Demo 和 Web help 均以退出码 0 完成，并显式得到 `RepoDigest verified`、`OCI revision verified` 与 `OCI version verified`。第一次尝试时 Docker Desktop 尚未运行，启动 Linux Engine 后重试通过，临时配置已清理。证据见 `docs/evidence/github-actions-ghcr-v0.3.0-success.png`、`docs/evidence/github-actions-ghcr-v0.3.0-summary.png` 与 `docs/evidence/github-release-v0.3.0.png`。NJU GitLab 的当前 `main` 和版本标签仍受既有外部 TLS/网络问题阻塞，待重试。
+当前 [v0.3.0 Release](https://github.com/YuGarden404/SpecGate/releases/tag/v0.3.0) 来自 PR #32 合并后的 `main@e3ec022`，完整 commit、tag peeled commit 与 OCI revision 均为 `e3ec02236f6e65ccce2c49ab444ba0676db5a7ed`。[CI #77 / run 30728989649](https://github.com/YuGarden404/SpecGate/actions/runs/30728989649)、[Pages #43 / run 30728989651](https://github.com/YuGarden404/SpecGate/actions/runs/30728989651) 与 [GHCR #4 / run 30729409707](https://github.com/YuGarden404/SpecGate/actions/runs/30729409707) 均成功。镜像 `ghcr.io/yugarden404/specgate:0.3.0` 的 RepoDigest 为 `sha256:baa5c61bd791f2b5e266e98fbd17affb1e9e6fd6dab6e829279a05d934f021e0`，OCI version 为 `0.3.0`。一次性空 Docker 配置中的匿名拉取、CLI help、Mock Demo 和 Web help 均以退出码 0 完成，并显式得到 `RepoDigest verified`、`OCI revision verified` 与 `OCI version verified`。第一次尝试时 Docker Desktop 尚未运行，启动 Linux Engine 后重试通过，临时配置已清理。证据见 `docs/evidence/github-actions-ghcr-v0.3.0-success.png`、`docs/evidence/github-actions-ghcr-v0.3.0-summary.png` 与 `docs/evidence/github-release-v0.3.0.png`。PR #33 合并后，第二次 NJU 同步阶段已成功推送 `main@cae77a2`、`v0.2.0` 与 `v0.3.0`；推送 refs 不代表产生了新的 GitLab Pipeline。
 
 `v0.2.0` 已发布并完成匿名拉取验证。历史 [v0.2.0 Release](https://github.com/YuGarden404/SpecGate/releases/tag/v0.2.0) 继续绑定 PR #30、`main@f95e08c`、CI #73 / run 30678670251、Pages #41 / run 30678670260、GHCR #3 / run 30679259458、镜像 `ghcr.io/yugarden404/specgate:0.2.0`、RepoDigest `sha256:fe982389424bf56ca723febf8e8a590de5f7e34d5a5ca7964f7b812f257e3050` 与 OCI revision `f95e08caae0ddf4dfee23912fe87153a8afb8dff`，三张 v0.2.0 证据图保持不变。`v0.1.1` 是已验证的历史公开镜像 `ghcr.io/yugarden404/specgate:0.1.1`，其 PR #28、GHCR #2、digest `sha256:8cb8e5b9c9483a7f6bb70cc27fc3f3053b48be2f4a69374865e7bcbbaca4fd0f`、OCI revision 与三张证据图保持不变。`v0.1.0` 的 `ghcr.io/yugarden404/specgate:0.1.0`、`main@44b236f`、[GHCR #1](https://github.com/YuGarden404/SpecGate/actions/runs/29649149933)、digest `sha256:324fad1d8ae82880990a3e032847408b9339bf52bd81dc53b61e74dcb4b6ea3d` 和五张旧证据图也继续保留。`--env-file` 由 Docker 读取，应放在仓库外且不得提交；SpecGate 本身仍不读取 `.env`。公网交互式 Web 后端未部署，发布公开 CLI 镜像不等于部署公网交互式 Web 后端，发布镜像不等于部署服务。
 
@@ -657,7 +657,7 @@ NJU GitLab 课程镜像从同一 `main` commit 独立运行 `.gitlab-ci.yml`。�
 
 NJU GitLab Pipeline #312781 在 `main@5fd86fa` 上运行：`unit-test` 已通过，`docker-build` 因共享 Runner 未启用 privileged 模式而失败。Pipeline #312784 中 `unit-test` 再次通过，但 `docker-build` 在拉取 `gcr.io/kaniko-project/executor` 时出现 `context deadline exceeded`。Pipeline #312797 成功拉取 `moby/buildkit:rootless` 并进入脚本，随后 RootlessKit 在 `fork/exec /proc/self/exe` 处返回 `operation not permitted`。三次结果共同证明学校共享 Runner 不适合容器构建，而不是 Dockerfile 或 Python 测试失败。
 
-历史 [Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 针对 `main@66ea825` 只运行 `unit-test` 并通过，[job #595758](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/595758) 完成 `Ran 926 tests in 33.684s`、`OK (skipped=18)` 与 CLI smoke。教师源码基线 `main@6dbaa75` 由 Pipeline #313088 / job #596503 覆盖并通过；`v0.1.1` 的 `main@9cf9093` 由 [Pipeline #313118](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/313118) / [job #596642](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/596642) 覆盖并通过。`v0.2.0` 向 NJU GitLab 的同步因外部 TLS/网络错误尚未完成，恢复后需重试 `main` 与标签；GitHub Release 与 GHCR 发布不受该镜像仓库故障影响。
+历史 [Pipeline #312806](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/312806) 针对 `main@66ea825` 只运行 `unit-test` 并通过，[job #595758](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/595758) 完成 `Ran 926 tests in 33.684s`、`OK (skipped=18)` 与 CLI smoke。教师源码基线 `main@6dbaa75` 由 Pipeline #313088 / job #596503 覆盖并通过；`v0.1.1` 的 `main@9cf9093` 由 [Pipeline #313118](https://git.nju.edu.cn/YuyuanLiang/specgate/-/pipelines/313118) / [job #596642](https://git.nju.edu.cn/YuyuanLiang/specgate/-/jobs/596642) 覆盖并通过。第一次同步阶段的两次推送因 NJU Git 服务侧 TLS/网络问题返回 `OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0`；第二次重试阶段正常完成，NJU `main` 已更新到 `cae77a247ac8d39086d0c06e414848e4645cb9af`，并新增 `v0.2.0` 与 `v0.3.0` 标签。该 ref 同步不替代已有 Pipeline 证据，也不影响已经完成的 GitHub Release 与 GHCR 发布。
 
 ## 已知限制
 
