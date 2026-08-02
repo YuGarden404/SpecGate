@@ -17,6 +17,7 @@ from specgate.gate import GateResult
 from specgate.llm import MockLLM
 from specgate.metrics import RunMetrics
 from specgate.policy import WorkspacePolicy
+from specgate.run_control import RunCancelled, RunTimedOut
 from specgate.run_state import Observation, RunState, StateDelta
 from specgate.runner import AgentRunner, _LegacyRunStateStore
 from specgate.retrieval import RetrievalConfig
@@ -24,6 +25,7 @@ from specgate.approvals import ActionRisk, ApprovalQueue, GovernanceConfig, Pend
 from specgate.trace import TraceStore
 from specgate.tools import ToolResult
 from specgate.workspace_fs import WorkspacePathError
+from shell_support import RecordingSink
 
 
 BROKEN_HTML = "<html><head><title>x</title></head><body></body></html>"
@@ -169,6 +171,326 @@ class FinishAfterExternalMutationLLM:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_configured_runtime_events_use_the_agent_service_run_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            sink = RecordingSink()
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            result = AgentRunner(
+                root,
+                RecordingLLM(),
+                policy,
+                max_steps=1,
+                id_factory=lambda: "shell-run-identity",
+                event_sink=sink,
+            ).run(task="Finish the page")
+
+            self.assertEqual(result.run_id, "shell-run-identity")
+            self.assertTrue(sink.events)
+            self.assertEqual(
+                {event[0].run_id for event in sink.events},
+                {"shell-run-identity"},
+            )
+
+    def test_cancelled_run_skips_final_gate_and_memory(self):
+        checks = 0
+
+        def cancel_during_loop():
+            nonlocal checks
+            checks += 1
+            if checks >= 2:
+                raise RunCancelled("cancelled")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            with (
+                mock.patch("specgate.runner.run_html_gate") as gate,
+                mock.patch("specgate.runner.append_memory") as memory,
+            ):
+                result = AgentRunner(
+                    root,
+                    RecordingLLM(),
+                    policy,
+                    max_steps=1,
+                    stop_check=cancel_during_loop,
+                    id_factory=lambda: "cancelled-run",
+                ).run(task="Finish the page")
+
+            self.assertEqual(result.outcome, "cancelled")
+            self.assertFalse(result.passed)
+            self.assertIsNone(result.final_gate)
+            gate.assert_not_called()
+            memory.assert_not_called()
+
+    def test_timed_out_run_skips_final_gate_and_memory(self):
+        checks = 0
+
+        def time_out_during_loop():
+            nonlocal checks
+            checks += 1
+            if checks >= 2:
+                raise RunTimedOut("timed out")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            with (
+                mock.patch("specgate.runner.run_html_gate") as gate,
+                mock.patch("specgate.runner.append_memory") as memory,
+            ):
+                result = AgentRunner(
+                    root,
+                    RecordingLLM(),
+                    policy,
+                    max_steps=1,
+                    stop_check=time_out_during_loop,
+                    id_factory=lambda: "timed-out-run",
+                ).run(task="Finish the page")
+
+            self.assertEqual(result.outcome, "timed_out")
+            self.assertFalse(result.passed)
+            self.assertIsNone(result.final_gate)
+            gate.assert_not_called()
+            memory.assert_not_called()
+
+    def test_external_event_observer_receives_governance_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            sink = RecordingSink()
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            AgentRunner(
+                root,
+                RecordingLLM(),
+                policy,
+                max_steps=1,
+                event_sink=sink,
+            ).run(task="Finish the current page")
+
+            event_types = [event[1] for event in sink.events]
+            self.assertIn("GovernanceEvaluated", event_types)
+            self.assertIn("RunFinished", event_types)
+
+    def test_external_event_observer_failure_does_not_block_trace_or_tool(self):
+        class CountingFailingSink:
+            def __init__(self):
+                self.calls = 0
+
+            def emit(
+                self,
+                context,
+                event_type,
+                payload,
+                *,
+                step=0,
+                phase="runtime",
+            ):
+                del context, event_type, payload, step, phase
+                self.calls += 1
+                raise RuntimeError("observer failed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            sink = CountingFailingSink()
+            policy = WorkspacePolicy(
+                root,
+                {"write_file"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            llm = MockLLM(
+                [
+                    {
+                        "schema_version": "1",
+                        "action": "write_file",
+                        "args": {"path": "index.html", "content": FIXED_HTML},
+                    }
+                ]
+            )
+
+            AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=1,
+                event_sink=sink,
+            ).run(task="Write the page")
+
+            trace_text = (
+                root / "runs" / "latest" / "trace.jsonl"
+            ).read_text(encoding="utf-8")
+            self.assertGreater(sink.calls, 0)
+            self.assertEqual(
+                (root / "index.html").read_text(encoding="utf-8"),
+                FIXED_HTML,
+            )
+            self.assertIn("ToolCompleted", trace_text)
+    def test_agent_runner_passes_explicit_task_to_context_and_returns_run_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            llm = RecordingLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            runner = AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=1,
+                id_factory=lambda: "shell-run-1",
+            )
+
+            result = runner.run(task="Modify the existing index.html")
+
+            self.assertEqual(result.run_id, "shell-run-1")
+            self.assertIn(
+                "## User Request\nModify the existing index.html",
+                llm.contexts[0],
+            )
+            state_text = (
+                root
+                / "runs"
+                / "latest"
+                / "agent-state"
+                / result.run_id
+                / "state.json"
+            ).read_text(encoding="utf-8")
+            self.assertNotIn("Modify the existing index.html", state_text)
+
+    def test_each_explicit_task_uses_only_its_own_ephemeral_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            llm = RecordingLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            identifiers = iter(("shell-run-1", "shell-run-2"))
+            runner = AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=1,
+                id_factory=lambda: next(identifiers),
+            )
+
+            first = runner.run(task="FIRST_REQUEST_SENTINEL")
+            second = runner.run(task="SECOND_REQUEST_SENTINEL")
+
+            self.assertEqual((first.run_id, second.run_id), (
+                "shell-run-1",
+                "shell-run-2",
+            ))
+            self.assertIn("FIRST_REQUEST_SENTINEL", llm.contexts[0])
+            self.assertNotIn("SECOND_REQUEST_SENTINEL", llm.contexts[0])
+            self.assertIn("SECOND_REQUEST_SENTINEL", llm.contexts[1])
+            self.assertNotIn("FIRST_REQUEST_SENTINEL", llm.contexts[1])
+
+    def test_no_argument_run_preserves_default_task_without_user_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            llm = RecordingLLM()
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+            runner = AgentRunner(root, llm, policy, max_steps=1)
+
+            with mock.patch.object(
+                runner._service,
+                "run",
+                wraps=runner._service.run,
+            ) as service_run:
+                runner.run()
+
+            self.assertEqual(
+                service_run.call_args.args[1],
+                "Execute the configured workspace task.",
+            )
+            self.assertNotIn("## User Request", llm.contexts[0])
+
+    def test_explicit_task_trace_contains_only_bounded_redacted_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TASK_SPEC.md").write_text("# task", encoding="utf-8")
+            (root / "CHECKLIST.md").write_text("", encoding="utf-8")
+            (root / "index.html").write_text(BROKEN_HTML, encoding="utf-8")
+            secret = "sk-secret-1234567890"
+            request = f"Update {secret} " + ("long request text " * 20)
+            policy = WorkspacePolicy(
+                root,
+                {"finish"},
+                {"TASK_SPEC.md", "CHECKLIST.md", "index.html"},
+                {"index.html"},
+            )
+
+            AgentRunner(root, RecordingLLM(), policy, max_steps=1).run(
+                task=request
+            )
+
+            trace_text = (
+                root / "runs" / "latest" / "trace.jsonl"
+            ).read_text(encoding="utf-8")
+            self.assertIn("user_request_received", trace_text)
+            self.assertIn(f'"request_chars": {len(request)}', trace_text)
+            self.assertNotIn(request, trace_text)
+            self.assertNotIn(secret, trace_text)
+
     def test_agent_runner_is_only_a_compatibility_facade(self):
         source = inspect.getsource(AgentRunner)
 
@@ -871,7 +1193,14 @@ class RunnerTests(unittest.TestCase):
                 {"index.html"},
             )
 
-            result = AgentRunner(root, llm, policy, max_steps=5, context_strategy="multi-agent-isolated").run()
+            request = "Build the requested Search Details workflow"
+            result = AgentRunner(
+                root,
+                llm,
+                policy,
+                max_steps=5,
+                context_strategy="multi-agent-isolated",
+            ).run(task=request)
 
             self.assertTrue(result.passed)
             self.assertIsNotNone(result.metrics)
@@ -880,6 +1209,10 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result.metrics.implementer_runs, 1)
             self.assertEqual(result.metrics.reviewer_runs, 1)
             self.assertIn("Write valid Search Details HTML", llm.contexts[1])
+            self.assertTrue(all(request in context for context in llm.contexts))
+            self.assertTrue(
+                all("## Agent Assignment" in context for context in llm.contexts)
+            )
             trace_text = (root / "runs" / "latest" / "trace.jsonl").read_text(encoding="utf-8")
             self.assertLess(trace_text.index('"role": "planner"'), trace_text.index('"role": "implementer"'))
             self.assertLess(trace_text.index('"role": "implementer"'), trace_text.index('"role": "reviewer"'))

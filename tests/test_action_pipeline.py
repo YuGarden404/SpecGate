@@ -34,6 +34,7 @@ from specgate.tool_registry import (
 )
 from specgate.tool_runtime import ToolResult, ToolRuntime
 from specgate.validation import DefaultValidationPolicy
+from shell_support import RecordingSink
 
 
 class EmptyArgs(BaseModel):
@@ -46,6 +47,11 @@ class RequiredArgs(BaseModel):
 
 class PayloadResult(BaseModel):
     value: str = "ok"
+
+
+class PathContentArgs(BaseModel):
+    path: str
+    content: str
 
 
 class RecordingHandler:
@@ -156,6 +162,7 @@ class ActionPipelineTests(unittest.TestCase):
         governance=None,
         gate=None,
         runtime=None,
+        event_sink=None,
     ):
         return ActionPipeline(
             runtime or ToolRuntime(ToolRegistry([definition])),
@@ -163,6 +170,7 @@ class ActionPipelineTests(unittest.TestCase):
             governance or RecordingGovernance(self.calls),
             DefaultValidationPolicy(),
             gate or RecordingGate(self.calls),
+            event_sink=event_sink,
         )
 
     def _execute(self, definition, **pipeline_kwargs):
@@ -188,6 +196,139 @@ class ActionPipelineTests(unittest.TestCase):
         self.assertEqual(outcome.status, ExecutionStatus.SUCCEEDED)
         self.assertTrue(outcome.gate_result.passed)
 
+    def test_pipeline_emits_governance_allowed_before_tool_execution(self):
+        class OrderedSink(RecordingSink):
+            def emit(self, *args, **kwargs):
+                self.calls.append("governance_event")
+                super().emit(*args, **kwargs)
+
+        sink = OrderedSink()
+        sink.calls = self.calls
+        definition = self._definition(
+            "write_file",
+            SideEffectClass.WORKSPACE_WRITE,
+        )
+
+        self._pipeline(definition, event_sink=sink).execute(
+            Action("1", definition.name, {}),
+            self.execution_context,
+        )
+
+        event = next(
+            item for item in sink.events if item[1] == "GovernanceEvaluated"
+        )
+        self.assertEqual(event[2]["decision"], "allow")
+        self.assertEqual(event[2]["action"], "write_file")
+        self.assertLess(
+            self.calls.index("governance_event"),
+            self.calls.index("handler"),
+        )
+
+    def test_governance_events_expose_only_safe_fields_for_all_decisions(self):
+        decisions = (
+            GovernanceDecision(
+                GovernanceDecisionKind.ALLOW,
+                "safe",
+                "safe action",
+                "none",
+            ),
+            GovernanceDecision(
+                GovernanceDecisionKind.BLOCK,
+                "capability",
+                "capability denied",
+                "capability",
+            ),
+            GovernanceDecision(
+                GovernanceDecisionKind.REQUIRE_APPROVAL,
+                "review",
+                "review required",
+                "risk",
+            ),
+        )
+        for decision in decisions:
+            with self.subTest(decision=decision.kind.value):
+                self.calls.clear()
+                sink = RecordingSink()
+                requester = RecordingApprovalRequester()
+                context = self._context_with_requester(requester)
+                definition = ToolDefinition(
+                    ToolMetadata("write_file", "test tool"),
+                    PermissionClass.CONTROL,
+                    SideEffectClass.WORKSPACE_WRITE,
+                    PathContentArgs,
+                    PayloadResult,
+                    RecordingHandler(self.calls),
+                )
+                action = Action(
+                    "1",
+                    "write_file",
+                    {
+                        "path": "index.html",
+                        "content": "sk-secret-content-1234567890",
+                    },
+                )
+
+                self._pipeline(
+                    definition,
+                    governance=RecordingGovernance(self.calls, decision),
+                    event_sink=sink,
+                ).execute(action, context)
+
+                event = next(
+                    item
+                    for item in sink.events
+                    if item[1] == "GovernanceEvaluated"
+                )
+                self.assertEqual(
+                    set(event[2]),
+                    {"action", "path", "decision", "code", "rule_family"},
+                )
+                self.assertEqual(event[2]["path"], "index.html")
+                self.assertNotIn("content", str(event[2]))
+                self.assertNotIn("sk-secret", str(event[2]))
+
+    def test_approval_event_omits_action_payload_and_content(self):
+        sink = RecordingSink()
+        requester = RecordingApprovalRequester()
+        context = self._context_with_requester(requester)
+        definition = ToolDefinition(
+            ToolMetadata("write_file", "test tool"),
+            PermissionClass.CONTROL,
+            SideEffectClass.WORKSPACE_WRITE,
+            PathContentArgs,
+            PayloadResult,
+            RecordingHandler(self.calls),
+        )
+        action = Action(
+            "1",
+            "write_file",
+            {
+                "path": "index.html",
+                "content": "sk-secret-content-1234567890",
+            },
+        )
+        decision = GovernanceDecision(
+            GovernanceDecisionKind.REQUIRE_APPROVAL,
+            "review",
+            "review required sk-approval-secret-1234567890",
+            "risk",
+        )
+
+        self._pipeline(
+            definition,
+            governance=RecordingGovernance(self.calls, decision),
+            event_sink=sink,
+        ).execute(action, context)
+
+        event = next(item for item in sink.events if item[1] == "ApprovalRequested")
+        self.assertEqual(event[2]["approval_id"], "approval-1")
+        self.assertEqual(event[2]["action"], "write_file")
+        self.assertEqual(event[2]["path"], None)
+        self.assertNotIn("action_payload", event[2])
+        self.assertNotIn("content", str(event[2]))
+        self.assertNotIn("sk-secret", str(event[2]))
+        self.assertNotIn("sk-approval-secret", str(event[2]))
+
     def test_before_tool_block_skips_governance_and_handler(self):
         hooks = RecordingHooks(
             self.calls,
@@ -205,6 +346,7 @@ class ActionPipelineTests(unittest.TestCase):
 
     def test_before_tool_approval_skips_governance_and_handler(self):
         requester = RecordingApprovalRequester()
+        sink = RecordingSink()
         context = self._context_with_requester(requester)
         hooks = RecordingHooks(
             self.calls,
@@ -212,7 +354,11 @@ class ActionPipelineTests(unittest.TestCase):
         )
         definition = self._definition("write_file", SideEffectClass.WORKSPACE_WRITE)
 
-        outcome = self._pipeline(definition, hooks=hooks).execute(
+        outcome = self._pipeline(
+            definition,
+            hooks=hooks,
+            event_sink=sink,
+        ).execute(
             Action("1", definition.name, {}), context
         )
 
@@ -221,6 +367,11 @@ class ActionPipelineTests(unittest.TestCase):
         self.assertEqual(outcome.approval_request.id, "approval-1")
         self.assertEqual(outcome.state_delta.status, RunStatus.NEEDS_APPROVAL)
         self.assertEqual(outcome.state_delta.pending_approval_id, "approval-1")
+        approval_event = next(
+            item for item in sink.events if item[1] == "ApprovalRequested"
+        )
+        self.assertEqual(approval_event[2]["approval_id"], "approval-1")
+        self.assertNotIn("action_payload", approval_event[2])
 
     def test_governance_block_and_approval_skip_handler(self):
         cases = (

@@ -33,7 +33,7 @@ from specgate.run_state import (
     RunStatus,
     StateDelta,
 )
-from specgate.runtime_events import RunEventContext
+from specgate.runtime_events import RunEventContext, RunEventSink
 from specgate.runtime_config import RunRuntimeConfig
 from specgate.skill_registry import SkillSession
 
@@ -759,6 +759,8 @@ class AgentServiceFactory:
         approval_queue_file: Path,
         runtime_config: RunRuntimeConfig,
         cancel_token: CancellationToken,
+        id_factory: Callable[[], str] | None = None,
+        event_sink: RunEventSink | None = None,
     ) -> AgentService:
         return self._build(
             root=root,
@@ -768,6 +770,8 @@ class AgentServiceFactory:
             approval_queue_file=approval_queue_file,
             runtime_config=runtime_config,
             cancel_token=cancel_token,
+            id_factory=id_factory,
+            event_sink=event_sink,
             reset_audit=True,
         )
 
@@ -781,6 +785,8 @@ class AgentServiceFactory:
         approval_queue_file: Path,
         runtime_config: RunRuntimeConfig,
         cancel_token: CancellationToken,
+        id_factory: Callable[[], str] | None = None,
+        event_sink: RunEventSink | None = None,
     ) -> AgentService:
         return self._build(
             root=root,
@@ -790,6 +796,8 @@ class AgentServiceFactory:
             approval_queue_file=approval_queue_file,
             runtime_config=runtime_config,
             cancel_token=cancel_token,
+            id_factory=id_factory,
+            event_sink=event_sink,
             reset_audit=False,
         )
 
@@ -803,6 +811,8 @@ class AgentServiceFactory:
         approval_queue_file: Path,
         runtime_config: RunRuntimeConfig,
         cancel_token: CancellationToken,
+        id_factory: Callable[[], str] | None,
+        event_sink: RunEventSink | None,
         reset_audit: bool,
     ) -> AgentService:
         from specgate.runner import _ConfiguredRuntimeFactory
@@ -825,6 +835,7 @@ class AgentServiceFactory:
             runtime_config=runtime_config,
             cancel_token=cancel_token,
             reset_audit=reset_audit,
+            event_sink=event_sink,
         )
         workspace_fs.ensure_workspace_directory(audit_dir, "agent-state")
         definition = AgentDefinition(
@@ -842,6 +853,7 @@ class AgentServiceFactory:
             audit_root=audit_dir / "agent-state",
             workspace_capabilities=frozenset(policy.allowed_actions),
             runtime_factory=runtime_factory,
+            id_factory=id_factory,
         )
         service._specgate_runtime_factory = runtime_factory
         service._specgate_default_definition = definition
@@ -858,6 +870,8 @@ def build_agent_service(
     approval_queue_file: Path,
     runtime_config: RunRuntimeConfig,
     cancel_token: CancellationToken,
+    id_factory: Callable[[], str] | None = None,
+    event_sink: RunEventSink | None = None,
 ) -> AgentService:
     return AgentServiceFactory().build(
         root=root,
@@ -867,6 +881,8 @@ def build_agent_service(
         approval_queue_file=approval_queue_file,
         runtime_config=runtime_config,
         cancel_token=cancel_token,
+        id_factory=id_factory,
+        event_sink=event_sink,
     )
 
 
@@ -879,6 +895,8 @@ def build_resumable_agent_service(
     approval_queue_file: Path,
     runtime_config: RunRuntimeConfig,
     cancel_token: CancellationToken,
+    id_factory: Callable[[], str] | None = None,
+    event_sink: RunEventSink | None = None,
 ) -> AgentService:
     return AgentServiceFactory().build_resumable(
         root=root,
@@ -888,6 +906,8 @@ def build_resumable_agent_service(
         approval_queue_file=approval_queue_file,
         runtime_config=runtime_config,
         cancel_token=cancel_token,
+        id_factory=id_factory,
+        event_sink=event_sink,
     )
 
 

@@ -13,6 +13,8 @@ from specgate.agent_service import (
     BudgetExceeded,
     DelegationDenied,
     DelegationPolicy,
+    build_agent_service,
+    build_resumable_agent_service,
     effective_child_capabilities,
 )
 from specgate.action_pipeline import ExecutionOutcome, ExecutionStatus, RuntimeErrorInfo
@@ -74,26 +76,42 @@ class RecordingRuntimeFactory:
 
 class AgentServiceFactoryContractTests(unittest.TestCase):
     def test_build_has_one_keyword_only_composition_contract(self):
-        signature = inspect.signature(AgentServiceFactory.build)
+        for builder in (AgentServiceFactory.build, AgentServiceFactory.build_resumable):
+            with self.subTest(builder=builder.__name__):
+                signature = inspect.signature(builder)
 
-        self.assertEqual(
-            list(signature.parameters),
-            [
-                "self",
-                "root",
-                "llm",
-                "policy",
-                "audit_dir",
-                "approval_queue_file",
-                "runtime_config",
-                "cancel_token",
-            ],
-        )
-        for name in list(signature.parameters)[1:]:
-            self.assertIs(
-                signature.parameters[name].kind,
-                inspect.Parameter.KEYWORD_ONLY,
-            )
+                self.assertEqual(
+                    list(signature.parameters),
+                    [
+                        "self",
+                        "root",
+                        "llm",
+                        "policy",
+                        "audit_dir",
+                        "approval_queue_file",
+                        "runtime_config",
+                        "cancel_token",
+                        "id_factory",
+                        "event_sink",
+                    ],
+                )
+                for name in list(signature.parameters)[1:]:
+                    self.assertIs(
+                        signature.parameters[name].kind,
+                        inspect.Parameter.KEYWORD_ONLY,
+                    )
+
+    def test_public_build_helpers_accept_optional_shell_extensions(self):
+        for builder in (build_agent_service, build_resumable_agent_service):
+            with self.subTest(builder=builder.__name__):
+                parameters = inspect.signature(builder).parameters
+                for name in ("id_factory", "event_sink"):
+                    parameter = parameters[name]
+                    self.assertIsNone(parameter.default)
+                    self.assertIs(
+                        parameter.kind,
+                        inspect.Parameter.KEYWORD_ONLY,
+                    )
 
 
 class ApprovalRuntimeLoop:

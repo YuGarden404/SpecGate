@@ -34,10 +34,25 @@ VALID_CONTEXT_STRATEGIES = {
 }
 
 ISOLATED_HARNESS_STRATEGIES = {"isolated-harness", "multi-agent-isolated"}
+MAX_USER_REQUEST_CHARS = 8192
 
 
 class ContextContributor(Protocol):
     def render(self, state: RunState) -> tuple[str, str]: ...
+
+
+@dataclass(frozen=True)
+class UserRequestContextContributor:
+    request: str
+
+    def __post_init__(self) -> None:
+        normalized = self.request.strip()
+        if not normalized or len(normalized) > MAX_USER_REQUEST_CHARS:
+            raise ValueError("user request must contain 1 to 8192 characters")
+
+    def render(self, state: RunState) -> tuple[str, str]:
+        del state
+        return "User Request", str(redact(self.request.strip()))
 
 
 @dataclass(frozen=True)

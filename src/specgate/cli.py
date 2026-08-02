@@ -4,6 +4,7 @@ import argparse
 import getpass
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,12 +26,16 @@ from specgate.credential_store import CredentialStoreUnavailable
 from specgate.credentials import clear_credential, credential_status, read_credential, set_credential
 from specgate.eval_runner import run_eval_suite
 from specgate.gate import run_html_gate
+from specgate.interactive_shell import InteractiveShell
 from specgate.llm import LLMProviderError, MockLLM, OpenAICompatibleLLM
 from specgate.policy import WorkspacePolicy
 from specgate.report import generate_report
 from specgate.run_control import CallbackCancellationToken
 from specgate.runner import AgentRunner, configure_agent_service
 from specgate.runtime_config import RunRuntimeConfig
+from specgate.shell_config import ShellConfigController
+from specgate.shell_runtime import SpecGateShellRuntime
+from specgate.shell_terminal import PromptToolkitTerminal
 from specgate.trace import redact
 from specgate.user_config import (
     UserConfigError,
@@ -452,6 +457,44 @@ def _default_demo_policy(root: Path) -> WorkspacePolicy:
     )
 
 
+def _mock_demo_llm() -> MockLLM:
+    return MockLLM(
+        [
+            {
+                "schema_version": "1",
+                "action": "write_file",
+                "args": {
+                    "path": "index.html",
+                    "content": "<html><head><title>x</title></head><body></body></html>",
+                },
+            },
+            {
+                "schema_version": "1",
+                "action": "replace_file",
+                "args": {
+                    "path": "index.html",
+                    "content": _fixed_demo_html(),
+                },
+            },
+            {
+                "schema_version": "1",
+                "action": "finish",
+                "args": {"summary": "done"},
+            },
+        ]
+    )
+
+
+def run_interactive_shell() -> int:
+    terminal = PromptToolkitTerminal()
+    controller = ShellConfigController(terminal)
+    runtime = SpecGateShellRuntime(
+        lambda: controller.config,
+        mock_llm_factory=_mock_demo_llm,
+    )
+    return InteractiveShell(terminal, controller, runtime).run()
+
+
 def _load_demo_policy(root: Path) -> WorkspacePolicy:
     return _load_workspace_settings(root).policy
 
@@ -552,17 +595,7 @@ def update_approval(root: Path, approval_id: str, decision: str, reason: str | N
 
 
 def run_mock_demo(root: Path, governance_profile: str | None = None) -> int:
-    llm = MockLLM(
-        [
-            {
-                "schema_version": "1",
-                "action": "write_file",
-                "args": {"path": "index.html", "content": "<html><head><title>x</title></head><body></body></html>"},
-            },
-            {"schema_version": "1", "action": "replace_file", "args": {"path": "index.html", "content": _fixed_demo_html()}},
-            {"schema_version": "1", "action": "finish", "args": {"summary": "done"}},
-        ]
-    )
+    llm = _mock_demo_llm()
     settings = _load_workspace_settings(root)
     result = _build_cli_runner(
         root,
@@ -879,7 +912,7 @@ def _resolve_cli_run_config(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="specgate")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
     demo = sub.add_parser("run-mock-demo")
     demo.add_argument("workspace")
     demo.add_argument("--governance-profile", choices=GOVERNANCE_PROFILES, default=None)
@@ -949,6 +982,14 @@ def main(argv: list[str] | None = None) -> int:
     approvals_deny.add_argument("approval_id")
     approvals_deny.add_argument("--reason")
     args = parser.parse_args(argv)
+    if args.command is None:
+        if argv is None and not sys.stdin.isatty():
+            print(
+                "interactive input is unavailable; "
+                "use an explicit specgate subcommand"
+            )
+            return 2
+        return run_interactive_shell()
     if args.command == "configure":
         return configure_user()
     if args.command == "run-mock-demo":

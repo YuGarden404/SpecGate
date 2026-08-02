@@ -59,7 +59,7 @@ cd .\SpecGate
 
 不包含：
 
-- 不开放 shell。
+- 不向 Agent 开放任意系统 shell、bash 或 PowerShell 工具；`SpecGate >>` 只是受控的本地交互入口。
 - 不做 Playwright。
 - 不做复杂前端。
 - 不使用现成 agent framework 作为 harness core。
@@ -87,6 +87,7 @@ cd .\SpecGate
 - OS keyring、Web AES-256-GCM 和旧 HMAC `requires_reentry` 迁移。
 - 固定 worker、有界队列、取消、超时和重启恢复。
 - schema v5 的 `runtime_config_json` / `llm_config_json` 不可变配置快照与 Debug/Audit 脱敏展示。
+- 本地 `SpecGate >>` Shell、Mock/Real 模式切换、脱敏实时事件、同会话审批与按请求取消。
 - Web 默认使用 MockLLM；API key、Base URL、Model 完整后，新 run 可使用 OpenAI-compatible 真实模型，失败不会降级到 Mock。
 - Docker 本地与 GitHub Actions 构建、GitLab `unit-test`、GitHub Pages 和公开静态评审入口；NJU GitLab unit-test-only Pipeline 已通过；GHCR 公开镜像已完成匿名拉取验证；公网交互式 Web 后端未部署。
 
@@ -135,6 +136,51 @@ specgate --help
 ```
 
 导入检查打印的路径必须位于当前克隆目录。提示符已经显示 `(.venv)` 时不要再次运行 `python -m venv .venv`；如需重建环境，应先退出并删除旧环境，再重新创建。课程自动验收和 Mock Demo 不需要 API key。CLI 可选真实 provider 的安全配置见“CLI 凭据管理”，Web 主密钥见“Docker / 服务器部署”。
+
+## 交互式 Agent Shell
+
+当前源码包版本为 `0.3.0`，新增本地交互式 `SpecGate >>` Shell。`v0.3.0` GitHub Release、标签和镜像尚未创建；当前已验证的公开下载入口仍是上方的 `v0.2.0` Release。裸执行命令会进入 Shell，已有 `run`、`resume`、`eval`、`benchmark`、`configure`、`credentials`、`approvals` 和 `run-mock-demo` 子命令保持兼容：
+
+```powershell
+specgate
+```
+
+首次启动会选择 `mock` 或 `real` 模式，并要求输入包含 `TASK_SPEC.md` 与 `CHECKLIST.md` 的工作区。Mock 模式只需要模式和工作区：
+
+```text
+Mode [mock/real]: mock
+Workspace: .\examples\knowledge_nav
+SpecGate >> 请根据 spec 和 checklist 生成 html
+```
+
+MockLLM 不理解或执行任意自定义需求。收到自然语言后，Shell 会明确说明只能展示固定 Demo，并在用户确认后运行内置响应序列。要根据用户原始请求生成或修改 HTML，必须切换到 Real 模式：
+
+```text
+SpecGate >> /mode real
+SpecGate >> 请根据 spec 和 checklist 生成 html
+SpecGate >> 根据 spec 和 checklist 修改 index.html
+```
+
+Real 模式在缺少配置时依次收集 HTTPS Base URL、模型名和隐藏输入的 API key。交互式 Shell 不读取环境变量凭据；即使当前进程设置了 `OPENAI_COMPATIBLE_API_KEY`，首次进入 Real 模式且 keyring 为空时仍会要求密文输入。现有 `specgate run`、`eval`、`configure`、`credentials`、CI 和 Docker 的环境变量兼容行为不变。连接测试只在用户明确同意后发送，并可能产生少量 Provider 费用。每条自然语言请求创建独立 `AgentRun`，终端按阶段显示脱敏的 `[Context]`、`[Governance]`、`[Tool]`、`[Gate]` 和完成状态；成功后显示 `index.html`、归档报告和 Trace 的绝对路径。运行中的 `Ctrl+C` 只取消当前请求并返回提示符。
+
+Shell 支持以下命令：
+
+| 命令 | 按 Enter 后的行为 |
+| --- | --- |
+| `/help` | 以类似 man 页的格式显示每条命令的语法、可选参数和作用，不启动 AgentRun。 |
+| `/status` | 显示当前模式、工作区、URL、模型、凭据来源状态、verbose 和最近一次运行状态，不回显 API key。 |
+| `/setup` | 重新执行完整配置流程；失败时保留旧配置。 |
+| `/mode mock` / `/mode real` | 切换 Mock Demo 或真实 LLM；Real 配置不完整时补充缺失字段。 |
+| `/workspace <path>` | 校验并保存新的工作区；省略路径时交互输入。 |
+| `/model <name>` | 修改模型名，并在 Real 模式下询问是否连接测试。 |
+| `/url <url>` | 校验并修改 HTTPS Base URL，并在 Real 模式下询问是否连接测试。 |
+| `/api-key` | 使用密文输入替换 keyring 中的 API key；密钥输入不进入历史或配置文件。 |
+| `/verbose on` / `/verbose off` | 切换更多已脱敏事件元数据。 |
+| `/approvals` | 只列出尚未决定的审批，并允许批准或拒绝选定项；没有未决项时指向最新 Report 与 Trace 查看历史证据。 |
+| `/clear` | 只清空终端显示，不删除配置、文件、Trace、Memory 或报告。 |
+| `/exit` | 退出 Shell。`exit`、`quit`、`q` 及其大小写变体也可退出。 |
+
+模式、工作区、Base URL、模型和 verbose 会保存到用户配置，下一次启动默认恢复；API key 只保存到操作系统 keyring。`/help` 会显示每条命令的语法、参数和作用；`/approvals` 只列出尚未决定的审批。终端历史只跨进程保存经过白名单过滤的安全斜杠命令，例如 `/help`、`/status`、`/mode mock`、`/verbose on` 和 `/approvals`；自然语言请求、工作区路径、URL、模型名、API key 以及配置向导输入不会持久化。所有状态、错误、Trace、Memory、报告和终端事件都不得显示密钥原文。Shell 是本地 CLI 能力，本项目以 GitHub Release 提供下载，不要求部署公网交互式 Web 后端。
 
 ## Mock Demo
 
@@ -630,6 +676,7 @@ NJU GitLab Pipeline #312781 在 `main@5fd86fa` 上运行：`unit-test` 已通过
 | `httpx` | `>=0.27,<1` | 测试与 HTTP 客户端支持 | BSD-3-Clause | https://github.com/encode/httpx |
 | `keyring` | `>=25,<26` | CLI 操作系统凭据存储 | MIT | https://github.com/jaraco/keyring |
 | `pydantic` | `>=2.10,<3` | Agent Runtime 工具参数与结果模型 | MIT | https://github.com/pydantic/pydantic |
+| `prompt-toolkit` | `>=3.0,<4` | 交互式 Shell 终端输入与样式 | BSD-3-Clause | https://github.com/prompt-toolkit/python-prompt-toolkit |
 | `python-multipart` | `>=0.0.9,<1` | Web 表单与文件上传解析 | Apache-2.0 | https://github.com/Kludex/python-multipart |
 | `PyYAML` | `>=6,<7` | Skill 元数据安全解析 | MIT | https://github.com/yaml/pyyaml |
 | `uvicorn` | `>=0.30,<1` | ASGI Web 服务器 | BSD-3-Clause | https://github.com/Kludex/uvicorn |

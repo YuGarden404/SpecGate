@@ -381,7 +381,7 @@ Agent Runner
 Report Generator
 ```
 
-核心尽量使用 Python 标准库。可选依赖只用于 OS keyring、打包等外围能力。Mock 模式核心不能依赖网络。
+核心尽量使用 Python 标准库。外围依赖用于 OS keyring、交互式终端适配、Web 和打包；`prompt-toolkit` 只负责 Shell 输入与样式，不承载 Agent 决策或治理。Mock 模式核心不能依赖网络。
 
 ### 7.1 当前 Web 运行架构
 
@@ -549,3 +549,19 @@ MVP 完成时必须满足：
 - 所有组件只产生类型化 StateDelta，由 RunStateStore 唯一应用；统一 RunEvent 流覆盖 Loop、Pipeline、Gate、审批、Skill 和 Workflow。
 
 CLI、eval 和 Web 通过同一个 composition root 构造运行时。`AgentRunner` 仅保留兼容 facade，不再维护独立工具循环、角色循环或审批 continuation loop。
+
+# 2026-08-01 v0.3.0 交互式 Agent Shell 补充规格
+
+v0.3.0 在既有 Agent Runtime 外增加本地交互式 Shell。裸执行 `specgate` 且标准输入为 TTY 时进入 `SpecGate >>`；显式子命令和 `--help` 继续按 v0.2.0 行为执行，非 TTY 裸入口返回明确错误而不阻塞自动化进程。Shell 只负责配置、请求接收、取消、审批交互和脱敏呈现，不复制 AgentLoop、ActionPipeline、Governance、工具或 Gate。
+
+每条自然语言输入创建一个新的 `AgentRun`，拥有独立 run_id、状态、预算、Trace、报告与归档目录。用户请求只作为本次运行的临时上下文注入，Shell 不持久化原始对话历史；已有 Workspace Memory 仍按选择、提取、整合和最近运行上限工作。Shell 进程可以持续处理多条请求，但不能把多次请求合并成一个长生命周期模型会话。
+
+运行事件通过 `RunEventSink` 暴露，终端只渲染允许字段并统一 redaction。默认显示 Context、Governance、Tool、Gate、Approval 与最终状态；verbose 只增加 run_id、step、phase 等脱敏元数据，不显示隐藏推理、完整模型载荷、API key 或大段工具内容。完成状态必须以最终 Gate 通过为前提，失败或取消不得显示 `[Done]`。
+
+配置使用 schema v2 保存模式、工作区、Base URL、模型和 verbose。交互式 Shell 的 API key 不进入用户配置，也不读取进程环境变量，只能由用户密文输入后保存到操作系统 keyring；第一次进入 Real 模式且 keyring 为空时必须补充凭据。现有显式 CLI、CI 和 Docker 继续兼容环境变量优先于 keyring 的 v0.2.0 行为。首次设置、`/api-key` 替换、保存失败回滚和状态展示都必须保持密钥不可见。Mock 模式不检查、不显示也不使用凭据，且只能在用户确认后运行固定 Demo，不能声称理解自定义请求；Real 模式使用 OpenAI-compatible Provider，连接测试必须先询问并提示可能产生费用。
+
+核心命令为 `/help`、`/status`、`/setup`、`/mode`、`/workspace`、`/model`、`/url`、`/api-key`、`/verbose`、`/approvals`、`/clear` 和 `/exit`。`/help` 显示语法、参数和作用；`/approvals` 只处理未决审批，无未决项时指向 `reports/latest/index.html` 与 `runs/latest/trace.jsonl`。运行中 `Ctrl+C` 取消当前请求并返回提示符，空闲时 `Ctrl+C`、EOF、`exit`、`quit` 或 `q` 退出。审批可以在同一 Shell 中决定并恢复当前挂起运行；外部遗留审批由 `/approvals` 处理。
+
+跨进程终端历史只保存白名单中的非敏感斜杠命令。自然语言请求、工作区路径、Base URL、模型名、API key 和配置向导输入不写入历史文件；密钥输入继续使用无历史的隐藏输入会话。
+
+工作区写入继续经过 `WorkspacePolicy`、Governance、快照校验、文件锁和原子替换。Shell 不增加直接文件写入、任意系统命令或绕过审批的快捷路径。v0.3.0 的交付路径仍是 GitHub Release；本地交互式 Shell 不要求公网部署，且不能把静态 Pages 或公开镜像写成公网交互式 Web 后端。

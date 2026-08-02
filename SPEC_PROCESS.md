@@ -288,3 +288,25 @@ brainstorming 与人工决策形成四项明确结论：
 外部 LLM 评审指出状态 patch 所有权、挂起与终止区分、取消信号、前后验证阶段、审批恢复入口、Artifact 契约、Workflow 总预算和统一 Trace 等风险。经核对后，这些问题进入最终架构设计；角色差异只存在于 AgentDefinition 和 Workflow，AgentLoop、ContextBuilder 与 StopPolicy 不按角色名分支。
 
 用户逐段确认架构、工具链、Skill、AgentService 和 Workflow 设计，并明确不采用 `.env`、分支名使用 `v020-agent-runtime`、所有 Git 操作由用户执行。实施开始采用 Subagent-Driven；Task 11 补做后，后续任务按用户决定切换为 Inline Execution。生产修改遵循 RED -> GREEN -> focused regression，最终再运行完整离线套件、Mock Demo、静态架构搜索和编译检查。
+
+## 2026-08-01 v0.3.0 交互式 Agent Shell 过程记录
+
+本阶段源于用户对 CLI 黑盒体验的复盘：原有 `run` 与 `run-mock-demo` 能生成 HTML 和报告，但用户无法在同一终端持续输入请求，也难以感知 Context、工具、治理、Gate 和最终文件位置。brainstorming 逐项确认了裸入口、首次设置、Mock/Real 切换、命令集合、取消、审批、事件展示、配置持久化与发布边界，设计和计划分别记录在 `docs/superpowers/specs/2026-08-01-interactive-agent-shell-design.md` 与 `docs/superpowers/plans/2026-08-01-interactive-agent-shell.md`。
+
+用户选择 Inline Execution，并要求分支名使用 `v030-interactive-shell`，不使用 `codex/` 前缀。所有 Git 暂存、提交、推送、PR、合并、标签和 Release 继续由用户执行。本阶段没有调用子 Agent，没有修改 `REFLECTION.md`，也没有部署公网服务。
+
+实现按测试优先顺序拆分为：schema v2 用户配置、prompt-toolkit 终端适配器、临时请求上下文、脱敏 Runtime Event、事件渲染器、按请求隔离的 Shell Runtime、配置命令、可取消 REPL、裸 CLI 入口、端到端 Mock 与安全回归、版本和文档同步。每个自然语言输入仍通过现有 AgentService、ActionPipeline、Governance、WorkspacePolicy、审批与 Gate，不在 Shell 中建立第二套执行路径。
+
+关键人工决策包括：MockLLM 只运行固定 Demo；Real 模式才处理用户原始需求；连接测试必须获得明确同意；交互式 Shell 的 API key 只进入 keyring且不读取环境变量，现有显式 CLI/CI/Docker 继续保留环境变量优先兼容性；用户配置保存上次模式、工作区、URL、模型和 verbose，但不保存原始对话；`Ctrl+C` 只取消当前运行；现有子命令全部保留；GitHub Release 即满足交付路径，不扩展为公网部署要求。
+
+Task 10 的安全回归首次暴露 `prompt-toolkit` 已成为直接依赖但 README 许可证表未同步。失败测试精确指出缺少依赖及元数据映射，随后补充 BSD-3-Clause 与官方仓库，最终证据回归恢复通过。这一问题证明依赖声明、许可证材料和证据契约必须在同一版本中同步。
+
+Task 10 验证结果为：Shell 37 项、凭据 7 项、Workspace FS 96 项（跳过 7 项）、最终证据 36 项、LLM 8 项、LLM Transport 19 项、AgentLoop 13 项、Shell Runtime 7 项，均通过；版本契约先得到两个预期失败，再在项目元数据与运行时常量更新为 `0.3.0` 后得到 3 项通过。随后完整离线套件得到 `Ran 1219 tests in 317.224s`、`OK (skipped=29)`，退出码 0，`python -m compileall -q src tests` 退出码 0。手工 Windows TTY smoke 尚未执行，不在此提前声明结果。
+
+首次 Windows TTY smoke 发现五项 UX 偏差：Mock 状态误显示环境变量凭据、Mock 切换 Real 跳过 keyring 录入、`/help` 缺少参数说明、`/approvals` 的 pending-only 语义不清、跨进程安全命令历史缺失。系统化追踪确认前三项源于 Shell 配置与 Runtime 复用了通用环境变量优先凭据函数，后二项分别源于单行帮助/空队列提示和 `InMemoryHistory`。用户确认方案 A：只让交互式 Shell 忽略环境凭据，显式 CLI 保持兼容。
+
+Task 12 继续按 RED -> GREEN 修正：配置测试 4 项新断言、Runtime 1 项、审批说明 1 项、终端历史 1 项均先因现有行为失败；最小实现后 Shell 专项 `Ran 40 tests`、CLI `Ran 57 tests`、凭据 `Ran 7 tests`、用户配置 `Ran 13 tests` 均通过。最终证据新增四项 Shell 事实断言并先得到预期失败，材料同步后 `Ran 36 tests in 0.469s`、`OK`。移除测试辅助代码中的过期构造参数后，完整离线套件在全部人工验收事实写入后最终复跑得到 `Ran 1223 tests in 330.657s`、`OK (skipped=29)`。
+
+第二轮 Windows TTY smoke 在环境 API key 故意存在时验证：Mock 状态显示 API key 不需要且不显示凭据来源；切换 Real 仍要求密文录入并在状态中报告 keyring；`/help` 展示命令语法和作用；完成 Mock Demo 后 `/approvals` 明确只列未决审批并给出 latest report/trace；进程重启后方向键依次恢复 `/exit`、`/mode mock`、`/help`，历史文件也只包含这些安全 slash 命令。
+
+最终真实运行使用 `https://njusehub.info/v1` 与 `deepseek-v4-flash`：连接测试通过；第一条自然语言请求在活跃 LLM 调用期间 `Ctrl+C` 后输出取消状态并返回 Shell；第二条请求产生严格 Action，分别在 `write_file` 和 `replace_file` 前触发人工审批，批准后在同一 run 中恢复，经过一次 Gate 失败反馈与修复后完成最终 Gate，并输出 HTML、Report 和 Trace 路径。`/approvals` 随后正确显示没有未决项。`deepseek-v4-pro` 返回稳定错误 `llm_address_not_public`，没有完成 Action/Gate 流程，因此只记录 Flash 的本次兼容性实测，不声明 DeepSeek V4 Pro 兼容。

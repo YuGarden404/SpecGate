@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import os
 from pathlib import Path
@@ -9,8 +9,10 @@ import tempfile
 from typing import Mapping
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+LEGACY_SCHEMA_VERSION = 1
 SUPPORTED_PROVIDER = "openai-compatible"
+SHELL_MODES = frozenset({"mock", "real"})
 MAX_CONFIG_VALUE_CHARS = 2048
 
 
@@ -23,6 +25,34 @@ class UserLLMConfig:
     provider: str
     base_url: str
     model: str
+
+
+@dataclass(frozen=True)
+class UserShellConfig:
+    mode: str
+    workspace: str | None
+    verbose: bool
+    llm: UserLLMConfig | None
+
+    def __post_init__(self) -> None:
+        if self.mode not in SHELL_MODES:
+            raise UserConfigError("invalid user config: mode")
+        if self.workspace is not None:
+            _config_value("workspace", self.workspace)
+        if type(self.verbose) is not bool:
+            raise UserConfigError("invalid user config: verbose")
+        if self.llm is not None and not isinstance(self.llm, UserLLMConfig):
+            raise UserConfigError("invalid user config: llm")
+
+
+@dataclass(frozen=True)
+class UserShellConfigDraft:
+    mode: str | None
+    workspace: str | None
+    verbose: bool
+    provider: str | None
+    base_url: str | None
+    model: str | None
 
 
 def user_config_path(
@@ -62,53 +92,208 @@ def _config_value(name: str, value: object) -> str:
     return normalized
 
 
-def _from_payload(payload: object) -> UserLLMConfig:
-    if not isinstance(payload, dict):
-        raise UserConfigError("invalid user config: root")
-    expected = {"schema_version", "provider", "base_url", "model"}
-    if set(payload) != expected or payload.get("schema_version") != SCHEMA_VERSION:
-        raise UserConfigError("invalid user config: schema")
-    provider = _config_value("provider", payload["provider"])
+def _llm_from_values(
+    provider_value: object,
+    base_url_value: object,
+    model_value: object,
+) -> UserLLMConfig:
+    provider = _config_value("provider", provider_value)
     if provider != SUPPORTED_PROVIDER:
         raise UserConfigError("invalid user config: provider")
     return UserLLMConfig(
         provider=provider,
-        base_url=_config_value("base_url", payload["base_url"]),
-        model=_config_value("model", payload["model"]),
+        base_url=_config_value("base_url", base_url_value),
+        model=_config_value("model", model_value),
     )
 
 
-def load_user_llm_config(*, path: Path | None = None) -> UserLLMConfig | None:
+def _shell_from_payload(payload: object) -> UserShellConfig:
+    if not isinstance(payload, dict):
+        raise UserConfigError("invalid user config: root")
+    schema_version = payload.get("schema_version")
+    if schema_version == LEGACY_SCHEMA_VERSION:
+        expected = {"schema_version", "provider", "base_url", "model"}
+        if set(payload) != expected:
+            raise UserConfigError("invalid user config: schema")
+        return UserShellConfig(
+            mode="real",
+            workspace=None,
+            verbose=False,
+            llm=_llm_from_values(
+                payload["provider"],
+                payload["base_url"],
+                payload["model"],
+            ),
+        )
+
+    expected = {
+        "schema_version",
+        "provider",
+        "base_url",
+        "model",
+        "mode",
+        "workspace",
+        "verbose",
+    }
+    if schema_version != SCHEMA_VERSION or set(payload) != expected:
+        raise UserConfigError("invalid user config: schema")
+
+    llm_values = (
+        payload["provider"],
+        payload["base_url"],
+        payload["model"],
+    )
+    if all(value is None for value in llm_values):
+        llm = None
+    elif all(value is not None for value in llm_values):
+        llm = _llm_from_values(*llm_values)
+    else:
+        raise UserConfigError("invalid user config: incomplete llm")
+
+    workspace_value = payload["workspace"]
+    workspace = (
+        None
+        if workspace_value is None
+        else _config_value("workspace", workspace_value)
+    )
+    return UserShellConfig(
+        mode=_config_value("mode", payload["mode"]),
+        workspace=workspace,
+        verbose=payload["verbose"],
+        llm=llm,
+    )
+
+
+def _read_payload(target: Path) -> object:
+    try:
+        return json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise UserConfigError(f"invalid user config: {target}") from exc
+
+
+def load_user_shell_config(
+    *,
+    path: Path | None = None,
+) -> UserShellConfig | None:
+    target = user_config_path() if path is None else path
+    if not target.exists():
+        return None
+    return _shell_from_payload(_read_payload(target))
+
+
+def load_user_shell_config_draft(
+    *,
+    path: Path | None = None,
+) -> UserShellConfigDraft | None:
     target = user_config_path() if path is None else path
     if not target.exists():
         return None
     try:
-        payload = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise UserConfigError(f"invalid user config: {target}") from exc
-    return _from_payload(payload)
+        payload = _read_payload(target)
+    except UserConfigError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    schema_version = payload.get("schema_version")
+    if schema_version == LEGACY_SCHEMA_VERSION:
+        expected = {"schema_version", "provider", "base_url", "model"}
+        if set(payload) != expected:
+            return None
+        return UserShellConfigDraft(
+            mode="real",
+            workspace=None,
+            verbose=False,
+            provider=_recover_provider(payload.get("provider")),
+            base_url=_recover_config_value(payload.get("base_url")),
+            model=_recover_config_value(payload.get("model")),
+        )
+
+    expected = {
+        "schema_version",
+        "provider",
+        "base_url",
+        "model",
+        "mode",
+        "workspace",
+        "verbose",
+    }
+    if schema_version != SCHEMA_VERSION or set(payload) != expected:
+        return None
+    mode_value = payload.get("mode")
+    mode = mode_value if mode_value in SHELL_MODES else None
+    verbose_value = payload.get("verbose")
+    return UserShellConfigDraft(
+        mode=mode,
+        workspace=_recover_config_value(payload.get("workspace")),
+        verbose=verbose_value if type(verbose_value) is bool else False,
+        provider=_recover_provider(payload.get("provider")),
+        base_url=_recover_config_value(payload.get("base_url")),
+        model=_recover_config_value(payload.get("model")),
+    )
 
 
-def save_user_llm_config(
-    config: UserLLMConfig,
+def _recover_config_value(value: object) -> str | None:
+    if value is None:
+        return None
+    try:
+        return _config_value("field", value)
+    except UserConfigError:
+        return None
+
+
+def _recover_provider(value: object) -> str | None:
+    recovered = _recover_config_value(value)
+    return recovered if recovered == SUPPORTED_PROVIDER else None
+
+
+def load_user_llm_config(*, path: Path | None = None) -> UserLLMConfig | None:
+    shell = load_user_shell_config(path=path)
+    return None if shell is None else shell.llm
+
+
+def _normalized_shell_config(config: UserShellConfig) -> UserShellConfig:
+    if not isinstance(config, UserShellConfig):
+        raise UserConfigError("invalid user config: root")
+    llm = (
+        None
+        if config.llm is None
+        else _llm_from_values(
+            config.llm.provider,
+            config.llm.base_url,
+            config.llm.model,
+        )
+    )
+    workspace = (
+        None
+        if config.workspace is None
+        else _config_value("workspace", config.workspace)
+    )
+    return UserShellConfig(
+        mode=_config_value("mode", config.mode),
+        workspace=workspace,
+        verbose=config.verbose,
+        llm=llm,
+    )
+
+
+def save_user_shell_config(
+    config: UserShellConfig,
     *,
     path: Path | None = None,
 ) -> None:
-    normalized = _from_payload(
-        {
-            "schema_version": SCHEMA_VERSION,
-            "provider": config.provider,
-            "base_url": config.base_url,
-            "model": config.model,
-        }
-    )
+    normalized = _normalized_shell_config(config)
     target = user_config_path() if path is None else path
     target.parent.mkdir(parents=True, exist_ok=True)
+    llm = normalized.llm
     payload = {
         "schema_version": SCHEMA_VERSION,
-        "provider": normalized.provider,
-        "base_url": normalized.base_url,
-        "model": normalized.model,
+        "provider": None if llm is None else llm.provider,
+        "base_url": None if llm is None else llm.base_url,
+        "model": None if llm is None else llm.model,
+        "mode": normalized.mode,
+        "workspace": normalized.workspace,
+        "verbose": normalized.verbose,
     }
     temporary: Path | None = None
     try:
@@ -128,6 +313,22 @@ def save_user_llm_config(
         if temporary is not None:
             temporary.unlink(missing_ok=True)
         raise UserConfigError(f"could not save user config: {target}") from exc
+
+
+def save_user_llm_config(
+    config: UserLLMConfig,
+    *,
+    path: Path | None = None,
+) -> None:
+    normalized = _llm_from_values(
+        config.provider,
+        config.base_url,
+        config.model,
+    )
+    target = user_config_path() if path is None else path
+    current = load_user_shell_config(path=target)
+    shell = current or UserShellConfig("real", None, False, None)
+    save_user_shell_config(replace(shell, llm=normalized), path=target)
 
 
 def resolve_user_llm_config(
@@ -155,11 +356,8 @@ def resolve_user_llm_config(
         raise UserConfigError(
             "LLM configuration is incomplete; run: specgate configure"
         )
-    return _from_payload(
-        {
-            "schema_version": SCHEMA_VERSION,
-            "provider": provider,
-            "base_url": resolved_base_url,
-            "model": resolved_model,
-        }
+    return _llm_from_values(
+        provider,
+        resolved_base_url,
+        resolved_model,
     )

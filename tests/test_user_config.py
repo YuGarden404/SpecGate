@@ -6,14 +6,98 @@ from pathlib import Path
 from specgate.user_config import (
     UserConfigError,
     UserLLMConfig,
+    UserShellConfig,
     load_user_llm_config,
+    load_user_shell_config,
+    load_user_shell_config_draft,
     resolve_user_llm_config,
     save_user_llm_config,
+    save_user_shell_config,
     user_config_path,
 )
 
 
 class UserConfigTests(unittest.TestCase):
+    def test_schema_v1_migrates_to_real_shell_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "provider": "openai-compatible",
+                        "base_url": "https://api.test/v1",
+                        "model": "model-v1",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_user_shell_config(path=path)
+
+        self.assertIsNotNone(config)
+        assert config is not None
+        self.assertEqual(config.mode, "real")
+        self.assertIsNone(config.workspace)
+        self.assertFalse(config.verbose)
+        self.assertEqual(config.llm, UserLLMConfig(
+            "openai-compatible",
+            "https://api.test/v1",
+            "model-v1",
+        ))
+
+    def test_schema_v2_mock_round_trip_writes_no_secret(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            config = UserShellConfig(
+                mode="mock",
+                workspace="D:/work/site",
+                verbose=True,
+                llm=None,
+            )
+
+            save_user_shell_config(config, path=path)
+
+            raw = path.read_text(encoding="utf-8")
+            self.assertEqual(load_user_shell_config(path=path), config)
+            self.assertNotIn("api_key", raw.lower())
+            self.assertNotIn("secret", raw.lower())
+
+    def test_saving_llm_defaults_preserves_shell_preferences(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            save_user_shell_config(
+                UserShellConfig(
+                    mode="mock",
+                    workspace="D:/work/site",
+                    verbose=True,
+                    llm=None,
+                ),
+                path=path,
+            )
+
+            save_user_llm_config(
+                UserLLMConfig(
+                    "openai-compatible",
+                    "https://api.test/v1",
+                    "model-v2",
+                ),
+                path=path,
+            )
+
+            saved = load_user_shell_config(path=path)
+
+        self.assertIsNotNone(saved)
+        assert saved is not None
+        self.assertEqual(saved.mode, "mock")
+        self.assertEqual(saved.workspace, "D:/work/site")
+        self.assertTrue(saved.verbose)
+        self.assertEqual(saved.llm, UserLLMConfig(
+            "openai-compatible",
+            "https://api.test/v1",
+            "model-v2",
+        ))
+
     def test_config_home_override_isolated_from_real_profile(self):
         path = user_config_path(
             environ={"SPECGATE_CONFIG_HOME": "D:/isolated/specgate"},
@@ -102,6 +186,29 @@ class UserConfigTests(unittest.TestCase):
                     "model": "m",
                 }
             ),
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "provider": "openai-compatible",
+                    "base_url": "https://api.test/v1",
+                    "model": "m",
+                    "mode": "real",
+                    "workspace": None,
+                    "verbose": False,
+                    "api_key": "sk-secret",
+                }
+            ),
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "provider": "openai-compatible",
+                    "base_url": None,
+                    "model": None,
+                    "mode": "real",
+                    "workspace": None,
+                    "verbose": False,
+                }
+            ),
         )
         for payload in invalid_payloads:
             with self.subTest(payload=payload), tempfile.TemporaryDirectory() as tmp:
@@ -110,6 +217,58 @@ class UserConfigTests(unittest.TestCase):
 
                 with self.assertRaises(UserConfigError):
                     load_user_llm_config(path=path)
+
+    def test_draft_recovers_valid_fields_when_one_field_is_corrupt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "provider": "openai-compatible",
+                        "base_url": "https://api.test/v1",
+                        "model": "",
+                        "mode": "real",
+                        "workspace": "D:/work/site",
+                        "verbose": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            draft = load_user_shell_config_draft(path=path)
+
+        self.assertIsNotNone(draft)
+        assert draft is not None
+        self.assertEqual(draft.mode, "real")
+        self.assertEqual(draft.workspace, "D:/work/site")
+        self.assertTrue(draft.verbose)
+        self.assertEqual(draft.provider, "openai-compatible")
+        self.assertEqual(draft.base_url, "https://api.test/v1")
+        self.assertIsNone(draft.model)
+
+    def test_draft_rejects_payload_with_extra_sensitive_field(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "provider": "openai-compatible",
+                        "base_url": "https://api.test/v1",
+                        "model": "model-1",
+                        "mode": "real",
+                        "workspace": "D:/work/site",
+                        "verbose": False,
+                        "api_key": "sk-must-not-be-recovered",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            draft = load_user_shell_config_draft(path=path)
+
+        self.assertIsNone(draft)
 
     def test_resolution_priority_is_cli_then_environment_then_file(self):
         saved = UserLLMConfig(

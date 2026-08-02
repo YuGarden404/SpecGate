@@ -46,7 +46,9 @@ from specgate.approvals import (
 )
 from specgate.context import (
     ArtifactContextContributor,
+    ContextContributor,
     LegacyContextBuilder,
+    UserRequestContextContributor,
     build_context_pack_with_metadata,
 )
 from specgate.context_lifecycle import CompressionConfig
@@ -67,7 +69,12 @@ from specgate.run_control import (
     LoopDecisionKind,
 )
 from specgate.run_state import InMemoryRunStateStore, Observation, RunState, RunStatus, StateDelta
-from specgate.runtime_events import RunEventContext, RunEventSink, TraceRunEventSink
+from specgate.runtime_events import (
+    FanoutRunEventSink,
+    RunEventContext,
+    RunEventSink,
+    TraceRunEventSink,
+)
 from specgate.snapshot import FileSnapshot
 from specgate.skill_registry import SkillSession
 from specgate.tool_handlers import ToolExecutionContext
@@ -87,7 +94,14 @@ def _permission_rule_family(rule_family: str | None, message: str) -> str:
     return rule_family or classify_rule_family(message)
 
 
-VALID_RUN_OUTCOMES = {"completed", "needs_approval", "failed"}
+VALID_RUN_OUTCOMES = {
+    "completed",
+    "needs_approval",
+    "failed",
+    "cancelled",
+    "timed_out",
+}
+DEFAULT_AGENT_TASK = "Execute the configured workspace task."
 
 
 @dataclass(frozen=True)
@@ -102,6 +116,7 @@ class RunResult:
     profile: str = "strict"
     outcome: str = "failed"
     pending_approval_id: str | None = None
+    run_id: str | None = None
 
 
 class _LegacyRunStateStore:
@@ -164,9 +179,14 @@ class _LegacyRunStateStore:
 
 
 class _LegacyRunEventSink:
-    def __init__(self, trace: TraceStore) -> None:
+    def __init__(
+        self,
+        trace: TraceStore,
+        observer: RunEventSink | None = None,
+    ) -> None:
         self._trace = trace
-        self._sink = TraceRunEventSink(trace)
+        observers = () if observer is None else (observer,)
+        self._sink = FanoutRunEventSink(TraceRunEventSink(trace), observers)
         self._last_llm_response: str | None = None
 
     def remember_llm_response(self, response: str) -> None:
@@ -895,7 +915,10 @@ class _WorkflowRuntimeFactory:
                 "run_id": request.run_id,
             },
         )
-        event_sink = _LegacyRunEventSink(self.runner.trace)
+        event_sink = _LegacyRunEventSink(
+            self.runner.trace,
+            self.runner.event_sink,
+        )
         legacy_store = _LegacyRunStateStore(self.runner.trace, state_store)
 
         def context_built(state: RunState, built: ContextBuild) -> None:
@@ -934,6 +957,7 @@ class _WorkflowRuntimeFactory:
             context_factory=build_context_pack_with_metadata,
             on_build=context_built,
             context_contributors=(
+                *self.runner.context_contributors,
                 ArtifactContextContributor(
                     instructions=request.definition.instructions,
                     producer_run_id=request.run_id,
@@ -975,6 +999,7 @@ class _WorkflowRuntimeFactory:
             _RunnerGovernanceEngine(),
             _WorkflowValidationPolicy(),
             _RunnerGateRunner(self.runner),
+            event_sink=event_sink,
         )
         delegate = _RunnerActionExecutor(
             self.runner,
@@ -1041,7 +1066,7 @@ class _LegacyApprovalResumeRuntime:
         self.approval_store = ApprovalStore(runner.approval_queue_file)
         self.state_store = state_store
         self.event_context = RunEventContext(run_id, f"agent-{run_id}")
-        self.event_sink = _LegacyRunEventSink(runner.trace)
+        self.event_sink = _LegacyRunEventSink(runner.trace, runner.event_sink)
         self.permission_decisions: list[PermissionDecision] = []
         self.last_result: RunResult | None = None
 
@@ -1078,6 +1103,7 @@ class _LegacyApprovalResumeRuntime:
             _RunnerGovernanceEngine(),
             DefaultValidationPolicy(),
             _RunnerGateRunner(runner),
+            event_sink=self.event_sink,
         )
         self.executor = _RunnerActionExecutor(
             runner,
@@ -1227,6 +1253,8 @@ class _RunnerRuntime:
         context_budget_chars: int = 12000,
         retrieval_config: RetrievalConfig | None = None,
         compression_config: CompressionConfig | None = None,
+        context_contributors: tuple[ContextContributor, ...] = (),
+        event_sink: RunEventSink | None = None,
     ):
         self.root = root
         self.llm = llm
@@ -1249,15 +1277,17 @@ class _RunnerRuntime:
         self.context_budget_chars = context_budget_chars
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.compression_config = compression_config or CompressionConfig()
+        self.context_contributors = context_contributors
+        self.event_sink = event_sink
         self.trace = TraceStore(self.run_dir / "trace.jsonl", reset=reset_audit)
         if reset_audit:
             self._reset_run_artifacts()
 
-    def run(self) -> RunResult:
+    def run(self, run_id: str | None = None) -> RunResult:
         self._check_stop()
         if self.context_strategy == "multi-agent-isolated":
             return self._run_multi_agent_workflow()
-        return self._run_single_agent_loop()
+        return self._run_single_agent_loop(run_id=run_id)
 
     def _run_multi_agent_workflow(self) -> RunResult:
         self._reset_approval_queue()
@@ -1461,7 +1491,7 @@ class _RunnerRuntime:
             )
         if event_context is None:
             event_context = RunEventContext(run_id, f"agent-{run_id}")
-        event_sink = _LegacyRunEventSink(self.trace)
+        event_sink = _LegacyRunEventSink(self.trace, self.event_sink)
         state_store = _LegacyRunStateStore(self.trace, backing_store)
         if backing_store is None:
             state_store.create(RunState(run_id))
@@ -1510,6 +1540,7 @@ class _RunnerRuntime:
             compression_config=self.compression_config,
             context_factory=build_context_pack_with_metadata,
             on_build=context_built,
+            context_contributors=self.context_contributors,
         )
         hooks = HookBus(event_sink)
         hooks.register_after_tool(
@@ -1544,6 +1575,7 @@ class _RunnerRuntime:
             _RunnerGovernanceEngine(),
             DefaultValidationPolicy(),
             _RunnerGateRunner(self),
+            event_sink=event_sink,
         )
         executor = _RunnerActionExecutor(
             self,
@@ -1600,6 +1632,20 @@ class _RunnerRuntime:
                 metrics,
                 permission_decisions,
                 approval,
+            )
+
+        if state.status in {RunStatus.CANCELLED, RunStatus.TIMED_OUT}:
+            return RunResult(
+                passed=False,
+                steps=state.step,
+                final_gate=latest_gate,
+                context_chars_max=metrics.context_chars_max,
+                metrics=metrics,
+                permission_decisions=permission_decisions,
+                trust=TrustSummary("failed", [state.status.value]),
+                profile=self.governance_profile,
+                outcome=state.status.value,
+                run_id=state.run_id,
             )
 
         if latest_gate is None:
@@ -2031,12 +2077,14 @@ class _ConfiguredRunLoop:
         self._state_store = state_store
 
     def run(self, run_id: str) -> RunState:
-        result = self._runtime.run()
+        result = self._runtime.run(run_id=run_id)
         state = self._state_store.get(run_id)
         status = {
             "completed": RunStatus.COMPLETED,
             "needs_approval": RunStatus.NEEDS_APPROVAL,
             "failed": RunStatus.FAILED,
+            "cancelled": RunStatus.CANCELLED,
+            "timed_out": RunStatus.TIMED_OUT,
         }[result.outcome]
         payload = {
             "passed": result.passed,
@@ -2075,6 +2123,7 @@ class _ConfiguredRuntimeFactory:
         runtime_config,
         cancel_token,
         reset_audit: bool = True,
+        event_sink: RunEventSink | None = None,
     ) -> None:
         self.cancel_token = cancel_token
         self.runtime = _RunnerRuntime(
@@ -2098,6 +2147,7 @@ class _ConfiguredRuntimeFactory:
                 )
             ),
             reset_audit=reset_audit,
+            event_sink=event_sink,
         )
 
     @classmethod
@@ -2123,6 +2173,7 @@ def _service_for_configured_runtime(
     runtime: _RunnerRuntime,
     runtime_config,
     cancel_token,
+    id_factory: Callable[[], str] | None = None,
 ) -> AgentService:
     workspace_fs.ensure_workspace_directory(runtime.run_dir, "agent-state")
     runtime_factory = _ConfiguredRuntimeFactory.from_runtime(
@@ -2144,6 +2195,7 @@ def _service_for_configured_runtime(
         audit_root=runtime.run_dir / "agent-state",
         workspace_capabilities=frozenset(runtime.policy.allowed_actions),
         runtime_factory=runtime_factory,
+        id_factory=id_factory,
     )
     service._specgate_runtime_factory = runtime_factory
     service._specgate_default_definition = definition
@@ -2175,16 +2227,42 @@ def configure_agent_service(
     return service
 
 
-def _run_configured_service(service: AgentService) -> RunResult:
+def _trust_from_payload(payload: object) -> TrustSummary | None:
+    if not isinstance(payload, dict):
+        return None
+    return TrustSummary(
+        str(payload.get("status", "failed")),
+        list(payload.get("reasons", [])),
+    )
+
+
+def _request_summary(task: str) -> str:
+    single_line = " ".join(task.split())
+    return str(redact(single_line[:160]))
+
+
+def _run_configured_service(
+    service: AgentService,
+    task: str | None = None,
+) -> RunResult:
     definition = getattr(service, "_specgate_default_definition", None)
     token = getattr(service, "_specgate_cancel_token", None)
     if definition is None or token is None:
         raise TypeError("AgentService is missing its default run configuration")
-    result = service.run(
-        definition,
-        "Execute the configured workspace task.",
-        cancel_token=token,
+    resolved_task = DEFAULT_AGENT_TASK if task is None else task
+    runtime = _configured_runtime(service)
+    runtime.context_contributors = (
+        () if task is None else (UserRequestContextContributor(task),)
     )
+    if task is not None:
+        runtime.trace.append(
+            "user_request_received",
+            {
+                "summary": _request_summary(task),
+                "request_chars": len(task),
+            },
+        )
+    result = service.run(definition, resolved_task, cancel_token=token)
     payload = next(
         item.payload
         for item in reversed(result.state.observations)
@@ -2194,15 +2272,6 @@ def _run_configured_service(service: AgentService) -> RunResult:
         PermissionDecision(**item)
         for item in payload.get("permission_decisions", [])
     ]
-    trust_payload = payload.get("trust")
-    trust = (
-        None
-        if not isinstance(trust_payload, dict)
-        else TrustSummary(
-            str(trust_payload.get("status", "failed")),
-            list(trust_payload.get("reasons", [])),
-        )
-    )
     outcome = str(payload.get("outcome", result.state.status.value))
     return RunResult(
         passed=bool(payload.get("passed", False)),
@@ -2211,10 +2280,11 @@ def _run_configured_service(service: AgentService) -> RunResult:
         context_chars_max=result.state.metrics.context_chars_max,
         metrics=result.state.metrics,
         permission_decisions=decisions,
-        trust=trust,
+        trust=_trust_from_payload(payload.get("trust")),
         profile=str(payload.get("profile", "strict")),
         outcome=outcome,
         pending_approval_id=result.state.pending_approval_id,
+        run_id=result.run_id,
     )
 
 
@@ -2242,6 +2312,8 @@ class AgentRunner:
         retrieval_config: RetrievalConfig | None = None,
         compression_config: CompressionConfig | None = None,
         agent_service: AgentService | None = None,
+        id_factory: Callable[[], str] | None = None,
+        event_sink: RunEventSink | None = None,
     ) -> None:
         if agent_service is None:
             if root is None or llm is None or policy is None:
@@ -2275,6 +2347,8 @@ class AgentRunner:
                     approval_queue_file=resolved_approval,
                     runtime_config=runtime_config,
                     cancel_token=token,
+                    id_factory=id_factory,
+                    event_sink=event_sink,
                 )
                 runtime = _configured_runtime(agent_service)
                 runtime.retrieval_config = retrieval
@@ -2297,16 +2371,18 @@ class AgentRunner:
                     context_budget_chars=context_budget_chars,
                     retrieval_config=retrieval,
                     compression_config=compression,
+                    event_sink=event_sink,
                 )
                 agent_service = _service_for_configured_runtime(
                     runtime,
                     runtime_config,
                     token,
+                    id_factory,
                 )
         object.__setattr__(self, "_service", agent_service)
 
-    def run(self) -> RunResult:
-        return _run_configured_service(self._service)
+    def run(self, task: str | None = None) -> RunResult:
+        return _run_configured_service(self._service, task)
 
     def resume_from_approval(self) -> RunResult:
         return _resume_configured_service(self._service)
